@@ -429,25 +429,15 @@ fn declared_output_files_round_trip_through_http() {
 /// ComponentDto serializes `id` immediately before `name`, so the closest
 /// preceding id belongs to that object.
 fn find_component_id_by_name(list_json: &str, name: &str) -> Option<String> {
-    let needle = format!("\"name\":\"{name}\"");
-    let mut search_from = 0;
-    while let Some(rel) = list_json[search_from..].find(&needle) {
-        let name_pos = search_from + rel;
-        let id_key = list_json[..name_pos].rfind("\"id\":\"")?;
-        let raw = &list_json[id_key + "\"id\":\"".len()..];
-        // Ensure this id is not claimed by an earlier name match.
-        let prev_name = list_json[..id_key].rfind("\"name\":\"");
-        let valid = prev_name.is_none_or(|p| p < search_from || p < name_pos && false);
-        if valid
-            || prev_name
-                .map(|p| p < name_pos.saturating_sub(needle.len()))
-                .unwrap_or(true)
-        {
-            return Some(raw.chars().take_while(|c| *c != '"').collect());
-        }
-        search_from = name_pos + needle.len();
-    }
-    None
+    let value: serde_json::Value = serde_json::from_str(list_json).ok()?;
+    value
+        .get("components")?
+        .as_array()?
+        .iter()
+        .find(|component| component.get("name").and_then(serde_json::Value::as_str) == Some(name))
+        .and_then(|component| component.get("id"))
+        .and_then(serde_json::Value::as_str)
+        .map(ToOwned::to_owned)
 }
 
 #[test]
