@@ -5,9 +5,9 @@ ecosystem components, describes what they can do, orchestrates executions,
 captures output artifacts and records execution provenance — without
 absorbing anyone's code.
 
-Status: `0.1.0` foundation. One tested vertical slice (registry → discovery →
-run → process executor → artifacts → provenance → HTTP API → CLI), no durable
-storage yet.
+Status: `0.2.0`. One tested vertical slice (registry → discovery → run →
+process executor → artifacts → provenance → HTTP API → CLI) with durable
+SQLite-backed registries.
 
 ## Why it exists
 
@@ -43,8 +43,9 @@ toolchain works. No system dependencies required for build or tests.
 ## Run
 
 ```bash
-# terminal 1: start the daemon (in-memory registries; blobs on disk)
+# terminal 1: start the daemon (durable SQLite store by default)
 cargo run -p scirust-hubd -- --listen 127.0.0.1:8477 --data-dir ./hub-data
+# or explicitly: --store sqlite | --store memory
 
 # terminal 2: register a component from a manifest file
 cargo run -p scirust-hub -- component register examples/component.json
@@ -114,9 +115,6 @@ provenance walk driven through the CLI.
 
 ## Current limitations
 
-- Registries are in-memory: **daemon state resets on restart** (blobs are on
-  disk). SQLite persistence is planned behind the existing repository traits
-  (ADR-0005).
 - Only stdout/stderr capture is tracked; files written into the working
   directory are not auto-ingested as artifacts yet.
 - Multi-node workflow orchestration is not implemented; the DAG primitive

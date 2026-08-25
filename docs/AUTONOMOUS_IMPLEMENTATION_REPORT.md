@@ -22,7 +22,10 @@ A single-node control plane with one tested vertical slice:
 7. provenance-bearing run records persist (component identity/version,
    contract version, params digest, input/output artifact digests, backend,
    env var names, exit code, duration, full transition history);
-8. everything is queryable through HTTP and the CLI.
+8. everything is queryable through HTTP and the CLI;
+9. after v0.2.0: registries/run records are durable across daemon restarts
+   via `hub-store-sqlite` (embedded SQLite, WAL + FULL sync, versioned
+   migrations), proven by a kill -9/restart e2e test.
 
 ## Architecture
 
@@ -99,8 +102,7 @@ SciRust monorepo as a usable external crate.
 
 ## Known limitations
 
-- In-memory registries: daemon restart loses component/run state (blobs
-  persist on disk unused across restarts).
+- Artifact tracking limited to captured streams (no working-directory file ingestion yet).
 - Only stream outputs are tracked as artifacts; files written to the working
   directory are not auto-ingested.
 - Capability queries are exact-name matches; no predicate/constraint search.
@@ -109,7 +111,7 @@ SciRust monorepo as a usable external crate.
 
 ## Deferred work (deliberate)
 
-SQLite store implementing existing traits; artifact auto-ingestion globs;
+Artifact file-ingestion globs; shared protocol crate;
 workflow orchestration over `Dag`; remote/container/SciCapsule executors;
 metrics; event log for lifecycle history; shared ecosystem protocol crate
 extraction (would live outside this repo).
