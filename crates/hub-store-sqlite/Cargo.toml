@@ -1,0 +1,21 @@
+[package]
+name = "hub-store-sqlite"
+description = "Durable SQLite repositories for SciRust Hub, implementing the hub-core storage ports"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+publish.workspace = true
+repository.workspace = true
+
+[dependencies]
+hub-core = { workspace = true }
+serde_json = { workspace = true }
+# Bundled: compiles SQLite from source so no system library is required on
+# any CI runner or host; single-file embedded DB matches ADR-0005.
+rusqlite = { version = "0.32", features = ["bundled"] }
+
+[dev-dependencies]
+uuid = { workspace = true }
+
+[lints]
+workspace = true

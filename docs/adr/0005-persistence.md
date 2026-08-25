@@ -31,6 +31,17 @@ a repository abstraction so business logic never embeds SQL.
   in README/report rather than hidden; restart durability lands with SQLite.
 - Tests run hermetically.
 
+## Amendment — 2026-08-25 (v0.2.0)
+
+SQLite landed as `crates/hub-store-sqlite` implementing all three
+repository traits over one embedded connection (WAL, synchronous FULL,
+versioned forward-only migrations in a `schema_migrations` table, strictly
+parameterized SQL). Domain code was untouched; only the daemon wiring
+gained a `--store sqlite|memory` switch (sqlite default). The parity
+requirement above is enforced by tests covering identical semantics
+(idempotent registration, conflict digests, deterministic ordering,
+restart durability including a hard-kill end-to-end proof).
+
 ## Alternatives considered
 
 - SQLite immediately: adds `rusqlite` build surface and migration machinery

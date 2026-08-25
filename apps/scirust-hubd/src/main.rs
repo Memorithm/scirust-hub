@@ -19,8 +19,10 @@ use hub_core::limits::Limits;
 use hub_core::memory::{
     FileSystemArtifactStore, InMemoryArtifactMeta, InMemoryComponents, InMemoryRuns,
 };
+use hub_core::store::{ArtifactMetadataRepository, ComponentRepository, RunRepository};
 use hub_core::Orchestrator;
 use hub_executor::ProcessExecutor;
+use hub_store_sqlite::SqliteStore;
 
 /// Default TCP listen address.
 const DEFAULT_LISTEN: &str = "127.0.0.1:8477";
@@ -35,9 +37,25 @@ struct Args {
     /// Address to bind, e.g. 127.0.0.1:8477 or 0.0.0.0:8477.
     #[arg(long, env = "SCIRUST_HUB_LISTEN", default_value = DEFAULT_LISTEN)]
     listen: String,
-    /// Data directory for artifact blobs and per-run working directories.
+    /// Data directory for the database, artifact blobs and per-run working
+    /// directories.
     #[arg(long, env = "SCIRUST_HUB_DATA_DIR", default_value = "scirust-hub-data")]
     data_dir: PathBuf,
+    /// Registry/run persistence backend. `sqlite` survives restarts;
+    /// `memory` keeps everything in process (tests, throwaway runs).
+    #[arg(
+        long,
+        env = "SCIRUST_HUB_STORE",
+        value_enum,
+        default_value_t = StoreBackend::Sqlite
+    )]
+    store: StoreBackend,
+}
+
+#[derive(Debug, Clone, Copy, clap::ValueEnum)]
+enum StoreBackend {
+    Sqlite,
+    Memory,
 }
 
 #[derive(Debug, thiserror::Error)]
@@ -54,6 +72,14 @@ enum DaemonError {
     },
     #[error("serving: {0}")]
     Serve(std::io::Error),
+    #[error("opening persistent store: {0}")]
+    Store(String),
+}
+
+impl From<hub_core::CoreError> for DaemonError {
+    fn from(error: hub_core::CoreError) -> Self {
+        DaemonError::Store(error.to_string())
+    }
 }
 
 fn main() {
@@ -63,6 +89,26 @@ fn main() {
         eprintln!("scirust-hubd: {error}");
         std::process::exit(1);
     }
+}
+
+#[allow(clippy::too_many_arguments)]
+fn build_orchestrator(
+    components: Arc<dyn ComponentRepository>,
+    runs: Arc<dyn RunRepository>,
+    artifacts_meta: Arc<dyn ArtifactMetadataRepository>,
+    blob_store: FileSystemArtifactStore,
+    workdir_root: PathBuf,
+) -> Arc<Orchestrator> {
+    Arc::new(Orchestrator::new(
+        Arc::new(SystemClock),
+        components,
+        runs,
+        artifacts_meta,
+        blob_store,
+        Arc::new(ProcessExecutor::new()),
+        Limits::default(),
+        workdir_root,
+    ))
 }
 
 fn run(args: Args) -> Result<(), DaemonError> {
@@ -89,22 +135,38 @@ fn run(args: Args) -> Result<(), DaemonError> {
         source,
     })?;
 
-    let orchestrator = Arc::new(Orchestrator::new(
-        Arc::new(SystemClock),
-        Arc::new(InMemoryComponents::default()),
-        Arc::new(InMemoryRuns::default()),
-        Arc::new(InMemoryArtifactMeta::default()),
-        blob_store,
-        Arc::new(ProcessExecutor::new()),
-        Limits::default(),
-        workdir_root,
-    ));
+    // One store instance serves all three repository ports; `Arc` is
+    // coerced separately per port.
+    let orchestrator = match args.store {
+        StoreBackend::Sqlite => {
+            let db = args.data_dir.join("hub.db");
+            let store = Arc::new(SqliteStore::open(&db)?);
+            tracing::info!(db = %db.display(), "using durable sqlite stores");
+            build_orchestrator(
+                store.clone(),
+                store.clone(),
+                store,
+                blob_store,
+                workdir_root,
+            )
+        }
+        StoreBackend::Memory => {
+            tracing::info!("using in-memory stores (state resets on restart)");
+            build_orchestrator(
+                Arc::new(InMemoryComponents::default()),
+                Arc::new(InMemoryRuns::default()),
+                Arc::new(InMemoryArtifactMeta::default()),
+                blob_store,
+                workdir_root,
+            )
+        }
+    };
 
     tracing::info!(
         %listen,
         data_dir = %args.data_dir.display(),
         executor = orchestrator.executor_backend_id(),
-        "scirust-hubd starting (in-memory registries: state resets on restart)"
+        "scirust-hubd starting"
     );
 
     let runtime = tokio::runtime::Builder::new_multi_thread()
