@@ -151,10 +151,19 @@ mod tests {
     #[test]
     fn rejects_invalid_names() {
         for bad in [
-            "", "Tensor.execute", "1abc.x", "a..b", ".a", "a.", "a b.c",
+            "",
+            "Tensor.execute",
+            "1abc.x",
+            "a..b",
+            ".a",
+            "a.",
+            "a b.c",
             &"a".repeat(129),
         ] {
-            assert!(CapabilityName::parse(bad).is_err(), "{bad:?} should be invalid");
+            assert!(
+                CapabilityName::parse(bad).is_err(),
+                "{bad:?} should be invalid"
+            );
         }
     }
 
@@ -169,8 +178,16 @@ mod tests {
         let cap = Capability {
             name: CapabilityName::parse("t.a").expect("valid"),
             contract_version: Version::parse("1.0.0").expect("valid"),
-            inputs: vec![Port { name: "in".into(), description: String::new() },
-                         Port { name: "in".into(), description: String::new() }],
+            inputs: vec![
+                Port {
+                    name: "in".into(),
+                    description: String::new(),
+                },
+                Port {
+                    name: "in".into(),
+                    description: String::new(),
+                },
+            ],
             outputs: vec![],
             properties: BTreeMap::new(),
         };
@@ -185,8 +202,14 @@ mod tests {
         let cap = Capability {
             name: CapabilityName::parse("artifact.produce").expect("valid"),
             contract_version: Version::parse("0.1.0").expect("valid"),
-            inputs: vec![Port { name: "source".into(), description: "bytes".into() }],
-            outputs: vec![Port { name: "blob".into(), description: String::new() }],
+            inputs: vec![Port {
+                name: "source".into(),
+                description: "bytes".into(),
+            }],
+            outputs: vec![Port {
+                name: "blob".into(),
+                description: String::new(),
+            }],
             properties: BTreeMap::from([("deterministic".to_owned(), "true".to_owned())]),
         };
         let encoded = serde_json::to_string(&cap).expect("serialize");

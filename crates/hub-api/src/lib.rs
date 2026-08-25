@@ -14,9 +14,7 @@ use axum::response::{IntoResponse, Response};
 use axum::routing::{get, post};
 use axum::{Json, Router};
 use hub_core::error::CoreError;
-use hub_core::{
-    ArtifactId, ComponentId, ComponentManifest, Orchestrator, RunSpec,
-};
+use hub_core::{ArtifactId, ComponentId, ComponentManifest, Orchestrator, RunSpec};
 use hub_protocol as proto;
 
 /// Shared application state.
@@ -36,13 +34,15 @@ impl HubState {
 const INLINE_CONTENT_LIMIT: u64 = 64 * 1024;
 
 /// Builds the full router (health + versioned API).
-#[must_use]
 pub fn router(state: HubState) -> Router {
     let manifest_limit = state.orchestrator.limits().max_manifest_bytes;
     Router::new()
         .route("/health", get(health))
         .route("/ready", get(ready))
-        .route("/api/v1/components", post(register_component).get(list_components))
+        .route(
+            "/api/v1/components",
+            post(register_component).get(list_components),
+        )
         .route("/api/v1/components/{id}", get(get_component))
         .route("/api/v1/capabilities", get(list_capabilities))
         .route("/api/v1/runs", post(submit_run).get(list_runs))
@@ -93,7 +93,7 @@ async fn register_component(
         Ok(parsed) => parsed,
         Err(rejection) => {
             return bad_request(format!("malformed request body: {rejection}"));
-        },
+        }
     };
     if let Err(e) = proto::check_schema_version(request.schema_version) {
         return protocol_error(e);
@@ -102,8 +102,7 @@ async fn register_component(
     let manifest: ComponentManifest = request.manifest.into();
 
     let orch = state.orchestrator.clone();
-    let registered =
-        tokio::task::spawn_blocking(move || orch.register_component(manifest)).await;
+    let registered = tokio::task::spawn_blocking(move || orch.register_component(manifest)).await;
     match joined(registered) {
         Ok(status) => {
             let created = status == hub_core::RegistrationStatus::Created;
@@ -115,20 +114,24 @@ async fn register_component(
                 .content_digest()
                 .map(|d| d.to_string())
                 .unwrap_or_default();
-            let mut response =
-                Json(proto::RegisterComponentResponse {
-                    status: if created { "created" } else { "already_registered" }.into(),
-                    component: proto::ComponentDto::from(&stored),
-                    manifest_digest: digest,
-                })
-                .into_response();
+            let mut response = Json(proto::RegisterComponentResponse {
+                status: if created {
+                    "created"
+                } else {
+                    "already_registered"
+                }
+                .into(),
+                component: proto::ComponentDto::from(&stored),
+                manifest_digest: digest,
+            })
+            .into_response();
             *response.status_mut() = if created {
                 StatusCode::CREATED
             } else {
                 StatusCode::OK
             };
             response
-        },
+        }
         Err(response) => response,
     }
 }
@@ -144,10 +147,7 @@ async fn list_components(State(state): State<HubState>) -> Response {
     }
 }
 
-async fn get_component(
-    State(state): State<HubState>,
-    Path(id): Path<String>,
-) -> Response {
+async fn get_component(State(state): State<HubState>, Path(id): Path<String>) -> Response {
     let Some(parsed) = typed_id::<ComponentId>(&id) else {
         return not_found("component", &id);
     };
@@ -161,10 +161,11 @@ async fn get_component(
 
 async fn list_capabilities(State(state): State<HubState>) -> Response {
     let orch = state.orchestrator.clone();
-    match joined(tokio::task::spawn_blocking(move || summarize_capabilities(&orch)).await)
-    {
-        Ok(summary) =>
-            Json(proto::CapabilityListResponse { capabilities: summary }).into_response(),
+    match joined(tokio::task::spawn_blocking(move || summarize_capabilities(&orch)).await) {
+        Ok(summary) => Json(proto::CapabilityListResponse {
+            capabilities: summary,
+        })
+        .into_response(),
         Err(response) => response,
     }
 }
@@ -172,8 +173,7 @@ async fn list_capabilities(State(state): State<HubState>) -> Response {
 fn summarize_capabilities(
     orch: &Orchestrator,
 ) -> Result<Vec<proto::CapabilitySummaryDto>, CoreError> {
-    let mut counts: BTreeMap<hub_core::CapabilityName, (u64, hub_core::Version)> =
-        BTreeMap::new();
+    let mut counts: BTreeMap<hub_core::CapabilityName, (u64, hub_core::Version)> = BTreeMap::new();
     for manifest in orch.components()? {
         for capability in &manifest.capabilities {
             counts
@@ -184,11 +184,13 @@ fn summarize_capabilities(
     }
     Ok(counts
         .into_iter()
-        .map(|(name, (declared_by, contract_version))| proto::CapabilitySummaryDto {
-            name,
-            declared_by,
-            contract_version,
-        })
+        .map(
+            |(name, (declared_by, contract_version))| proto::CapabilitySummaryDto {
+                name,
+                declared_by,
+                contract_version,
+            },
+        )
         .collect())
 }
 
@@ -200,7 +202,7 @@ async fn submit_run(
         Ok(parsed) => parsed,
         Err(rejection) => {
             return bad_request(format!("malformed request body: {rejection}"));
-        },
+        }
     };
     if let Err(e) = proto::check_schema_version(request.schema_version) {
         return protocol_error(e);
@@ -215,7 +217,7 @@ async fn submit_run(
             .into_response();
             *response.status_mut() = StatusCode::CREATED;
             response
-        },
+        }
         Err(response) => response,
     }
 }
@@ -260,7 +262,10 @@ async fn cancel_run(State(state): State<HubState>, Path(id): Path<String>) -> Re
 
 /// Executes a previously submitted run synchronously; the response carries
 /// the final record including full provenance.
-async fn execute_run(State(state): State<HubState>, Json(run_id): Json<hub_core::RunId>) -> Response {
+async fn execute_run(
+    State(state): State<HubState>,
+    Json(run_id): Json<hub_core::RunId>,
+) -> Response {
     let orch = state.orchestrator.clone();
     match joined(tokio::task::spawn_blocking(move || orch.execute_run(run_id)).await) {
         Ok(record) => Json(proto::RunDto::from(&record)).into_response(),
@@ -300,7 +305,7 @@ async fn get_artifact(
                 } else {
                     Ok((meta, None))
                 }
-            },
+            }
         }
     })
     .await;
@@ -326,11 +331,11 @@ async fn get_artifact(
                             proto::ErrorCode::BadRequest,
                             "artifact content is binary; inline text view unavailable",
                         );
-                    },
+                    }
                 }
             }
             Json(dto).into_response()
-        },
+        }
         // ArtifactNotFound/BlobNotFound already map to 404 envelopes.
         Err(response) => response,
     }
@@ -340,19 +345,19 @@ async fn get_artifact(
 // Plumbing
 // ----------------------------------------------------------------------
 
-fn joined<T>(
-    joined: Result<Result<T, CoreError>, tokio::task::JoinError>,
-) -> Result<T, Response> {
+#[allow(clippy::result_large_err)] // Response carries the structured envelope
+fn joined<T>(joined: Result<Result<T, CoreError>, tokio::task::JoinError>) -> Result<T, Response> {
     match joined {
         Ok(Ok(value)) => Ok(value),
         Ok(Err(error)) => Err(core_error(error)),
         Err(join_error) => {
             tracing::error!(error = %join_error, "blocking task panicked or was cancelled");
             Err(internal("internal task failed"))
-        },
+        }
     }
 }
 
+#[allow(clippy::result_large_err)] // Response carries the structured envelope
 fn joined_or_none<T>(joined: Result<T, tokio::task::JoinError>) -> Result<T, Response>
 where
     T: Default,
@@ -362,18 +367,26 @@ where
         Err(join_error) => {
             tracing::error!(error = %join_error, "blocking task panicked or was cancelled");
             Err(internal("internal task failed"))
-        },
+        }
     }
 }
 
 fn bad_request(message: impl Into<String>) -> Response {
-    error_response(StatusCode::BAD_REQUEST, proto::ErrorCode::BadRequest, message)
+    error_response(
+        StatusCode::BAD_REQUEST,
+        proto::ErrorCode::BadRequest,
+        message,
+    )
 }
 
 fn internal(message: impl Into<String>) -> Response {
     let message = message.into();
     tracing::error!(%message, "internal handler error");
-    error_response(StatusCode::INTERNAL_SERVER_ERROR, proto::ErrorCode::Internal, message)
+    error_response(
+        StatusCode::INTERNAL_SERVER_ERROR,
+        proto::ErrorCode::Internal,
+        message,
+    )
 }
 
 fn protocol_error(e: proto::ProtocolError) -> Response {
@@ -405,11 +418,7 @@ fn error_response(
     code: proto::ErrorCode,
     message: impl Into<String>,
 ) -> Response {
-    (
-        status,
-        Json(proto::ErrorEnvelope::new(code, message)),
-    )
-        .into_response()
+    (status, Json(proto::ErrorEnvelope::new(code, message))).into_response()
 }
 
 /// Maps domain errors onto HTTP semantics with structured envelopes.
@@ -418,7 +427,7 @@ fn core_error(error: CoreError) -> Response {
     let (status, code) = match &error {
         CoreError::ComponentConflict { .. } | CoreError::ComponentAlreadyRegistered { .. } => {
             (StatusCode::CONFLICT, ErrorCode::Conflict)
-        },
+        }
         CoreError::ComponentNotFound(_)
         | CoreError::RunNotFound(_)
         | CoreError::ArtifactNotFound(_)
@@ -430,10 +439,12 @@ fn core_error(error: CoreError) -> Response {
         | CoreError::InvalidRunSpec(_)
         | CoreError::InvalidManifest(_)
         | CoreError::Validation(_) => (StatusCode::UNPROCESSABLE_ENTITY, ErrorCode::Validation),
-        CoreError::ArtifactTooLarge { .. } => (StatusCode::PAYLOAD_TOO_LARGE, ErrorCode::Validation),
+        CoreError::ArtifactTooLarge { .. } => {
+            (StatusCode::PAYLOAD_TOO_LARGE, ErrorCode::Validation)
+        }
         CoreError::ExecutionFailed { .. } | CoreError::Storage(_) => {
             (StatusCode::INTERNAL_SERVER_ERROR, ErrorCode::Internal)
-        },
+        }
     };
     tracing::warn!(error = %error, %status, "request failed");
     (
@@ -456,17 +467,12 @@ mod tests {
     use super::*;
     use axum::body::Body;
     use axum::http::{Request, StatusCode};
-    use hub_core::capability::{Capability, CapabilityName};
     use hub_core::clock::ManualClock;
-    use hub_core::component::{
-        ComponentKind, ComponentName, ExecutionBinding, ProcessBinding,
-    };
+    use hub_core::limits::Limits;
     use hub_core::memory::{
         FileSystemArtifactStore, InMemoryArtifactMeta, InMemoryComponents, InMemoryRuns,
     };
-    use hub_core::limits::Limits;
     use hub_protocol::PROTOCOL_VERSION;
-    use std::collections::BTreeMap;
     use std::sync::Arc;
     use tower::ServiceExt;
 
@@ -484,7 +490,11 @@ mod tests {
             Limits::default(),
             dir.0.join("workdirs"),
         );
-        (HubState::new(Arc::new(orch)), Arc::new(ManualClock::starting_at(0)), dir)
+        (
+            HubState::new(Arc::new(orch)),
+            Arc::new(ManualClock::starting_at(0)),
+            dir,
+        )
     }
 
     struct PathGuard(std::path::PathBuf);
@@ -596,12 +606,26 @@ mod tests {
     async fn health_and_ready_report_shape() {
         let (state, _clock, _dir) = test_state();
         let app = router(state);
-        let (status, body) = send(app.clone(), Request::builder().uri("/health").body(Body::empty()).expect("req")).await;
+        let (status, body) = send(
+            app.clone(),
+            Request::builder()
+                .uri("/health")
+                .body(Body::empty())
+                .expect("req"),
+        )
+        .await;
         assert_eq!(status, StatusCode::OK);
         assert_eq!(body["status"], "ok");
         assert_eq!(body["protocol_version"], PROTOCOL_VERSION);
 
-        let (status, body) = send(app, Request::builder().uri("/ready").body(Body::empty()).expect("req")).await;
+        let (status, body) = send(
+            app,
+            Request::builder()
+                .uri("/ready")
+                .body(Body::empty())
+                .expect("req"),
+        )
+        .await;
         assert_eq!(status, StatusCode::OK);
         assert_eq!(body["ready"], true);
         assert_eq!(body["executor_backend"], "process");
@@ -635,20 +659,32 @@ mod tests {
         assert_eq!(body["manifest_digest"].as_str(), Some(digest.as_str()));
 
         // Listed and fetchable.
-        let (status, list) = send(app.clone(), Request::builder().uri("/api/v1/components").body(Body::empty()).expect("req")).await;
+        let (status, list) = send(
+            app.clone(),
+            Request::builder()
+                .uri("/api/v1/components")
+                .body(Body::empty())
+                .expect("req"),
+        )
+        .await;
         assert_eq!(status, StatusCode::OK);
         assert_eq!(list["components"].as_array().expect("arr").len(), 1);
 
-        let component_id =
-            list["components"][0]["id"].as_str().expect("string id").to_owned();
+        let component_id = list["components"][0]["id"]
+            .as_str()
+            .expect("string id")
+            .to_owned();
         let uri = format!("/api/v1/components/{component_id}");
-        let (status, one) = send(app, Request::builder().uri(uri).body(Body::empty()).expect("req")).await;
+        let (status, one) = send(
+            app,
+            Request::builder()
+                .uri(uri)
+                .body(Body::empty())
+                .expect("req"),
+        )
+        .await;
         assert_eq!(status, StatusCode::OK);
         assert_eq!(one["name"], "demo-echo");
-    }
-
-    fn body_or<T, F: FnOnce(&serde_json::Value) -> T>(value: serde_json::Value, f: F) -> T {
-        f(&value)
     }
 
     #[tokio::test]
@@ -656,10 +692,14 @@ mod tests {
         let (state, _clock, _dir) = test_state();
         let app = router(state);
         let base_payload = sample_manifest_json();
-        for (expected_status, program) in [(StatusCode::CREATED, "/bin/true"), (StatusCode::CONFLICT, "/bin/false")] {
+        for (expected_status, program) in [
+            (StatusCode::CREATED, "/bin/true"),
+            (StatusCode::CONFLICT, "/bin/false"),
+        ] {
             let mut manifest: serde_json::Value =
                 serde_json::from_str(&base_payload).expect("payload");
-            manifest["manifest"]["execution"]["program"] = serde_json::value::Value::String(program.to_owned());
+            manifest["manifest"]["execution"]["program"] =
+                serde_json::value::Value::String(program.to_owned());
             let request = Request::builder()
                 .method("POST")
                 .uri("/api/v1/components")
@@ -703,7 +743,10 @@ mod tests {
         ] {
             let (status, body) = send(
                 app.clone(),
-                Request::builder().uri(uri).body(Body::empty()).expect("req"),
+                Request::builder()
+                    .uri(uri)
+                    .body(Body::empty())
+                    .expect("req"),
             )
             .await;
             assert_eq!(status, StatusCode::NOT_FOUND);
@@ -712,7 +755,10 @@ mod tests {
         // Malformed ids are also 404 with envelope.
         let (status, body) = send(
             app,
-            Request::builder().uri("/api/v1/runs/not-a-uuid").body(Body::empty()).expect("req"),
+            Request::builder()
+                .uri("/api/v1/runs/not-a-uuid")
+                .body(Body::empty())
+                .expect("req"),
         )
         .await;
         assert_eq!(status, StatusCode::NOT_FOUND);
@@ -733,10 +779,20 @@ mod tests {
             .expect("req");
         let (status, registered) = send(app.clone(), register).await;
         assert_eq!(status, StatusCode::CREATED);
-        let component_id = registered["component"]["id"].as_str().expect("id").to_owned();
+        let component_id = registered["component"]["id"]
+            .as_str()
+            .expect("id")
+            .to_owned();
 
         // 2. capability discovery sees it
-        let (status, caps) = send(app.clone(), Request::builder().uri("/api/v1/capabilities").body(Body::empty()).expect("req")).await;
+        let (status, caps) = send(
+            app.clone(),
+            Request::builder()
+                .uri("/api/v1/capabilities")
+                .body(Body::empty())
+                .expect("req"),
+        )
+        .await;
         assert_eq!(status, StatusCode::OK);
         assert_eq!(caps["capabilities"][0]["name"], "demo.echo");
         assert_eq!(caps["capabilities"][0]["declared_by"], 1);
@@ -779,10 +835,20 @@ mod tests {
         // 5. provenance + artifacts queryable
         let outputs = executed["outcome"]["outputs"].as_array().expect("outputs");
         assert_eq!(outputs.len(), 1);
-        let artifact_id = outputs[0]["artifact"].as_str().expect("artifact id").to_owned();
+        let artifact_id = outputs[0]["artifact"]
+            .as_str()
+            .expect("artifact id")
+            .to_owned();
 
         let uri = format!("/api/v1/artifacts/{artifact_id}?include=content");
-        let (status, artifact) = send(app.clone(), Request::builder().uri(uri).body(Body::empty()).expect("req")).await;
+        let (status, artifact) = send(
+            app.clone(),
+            Request::builder()
+                .uri(uri)
+                .body(Body::empty())
+                .expect("req"),
+        )
+        .await;
         assert_eq!(status, StatusCode::OK);
         assert_eq!(
             artifact["content_text"].as_str().expect("content text"),
@@ -791,12 +857,21 @@ mod tests {
 
         let (status, run_view) = send(
             app,
-            Request::builder().uri(format!("/api/v1/runs/{run_id}")).body(Body::empty()).expect("req"),
+            Request::builder()
+                .uri(format!("/api/v1/runs/{run_id}"))
+                .body(Body::empty())
+                .expect("req"),
         )
         .await;
         assert_eq!(status, StatusCode::OK);
         assert_eq!(run_view["state"], "succeeded");
-        assert!(run_view["transitions"].as_array().expect("transitions").len() >= 4);
+        assert!(
+            run_view["transitions"]
+                .as_array()
+                .expect("transitions")
+                .len()
+                >= 4
+        );
     }
 
     #[tokio::test]

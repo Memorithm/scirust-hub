@@ -52,7 +52,10 @@ impl RunState {
 
     #[must_use]
     pub const fn is_terminal(self) -> bool {
-        matches!(self, RunState::Succeeded | RunState::Failed | RunState::Cancelled)
+        matches!(
+            self,
+            RunState::Succeeded | RunState::Failed | RunState::Cancelled
+        )
     }
 }
 
@@ -166,8 +169,7 @@ impl RunSpec {
     /// Only if parameters contain values JSON cannot encode, which
     /// construction-time validation already excludes.
     pub fn canonical_params_bytes(&self) -> Result<Vec<u8>, CoreError> {
-        serde_json::to_vec(&self.parameters)
-            .map_err(|e| CoreError::Storage(e.to_string()))
+        serde_json::to_vec(&self.parameters).map_err(|e| CoreError::Storage(e.to_string()))
     }
 
     /// Digest over canonical parameter bytes.
@@ -287,11 +289,7 @@ impl RunRecord {
     ///
     /// # Errors
     /// [`CoreError::InvalidTransition`] for illegal moves.
-    pub fn transition(
-        &mut self,
-        to: RunState,
-        now: UnixMillis,
-    ) -> Result<(), CoreError> {
+    pub fn transition(&mut self, to: RunState, now: UnixMillis) -> Result<(), CoreError> {
         let from = self.state;
         if !from.can_transition_to(to) {
             return Err(CoreError::InvalidTransition { from, to });

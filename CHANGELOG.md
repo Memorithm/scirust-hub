@@ -1,0 +1,47 @@
+# Changelog
+
+All notable changes to SciRust Hub are documented here. Format follows
+[Keep a Changelog](https://keepachangelog.com/en/1.1.0/); versioning is
+pre-1.0 (`0.x`), so minor bumps may contain breaking changes.
+
+## [0.1.0] - 2026-08-25
+
+Foundation: first tested vertical slice.
+
+### Added
+
+- Domain model (`hub-core`): typed identifiers (`ComponentId`, `RunId`,
+  `ArtifactId`), domain-separated SHA-256 content digests with hex wire form,
+  validated semver-shaped versions, capability model with validated open
+  names, component manifests with process execution bindings, run specs with
+  centralized limits, a controlled run state machine with recorded
+  transitions, provenance-bearing run records, and a generic DAG with cycle
+  detection and deterministic topological ordering.
+- Registry and orchestration: idempotent manifest registration with content
+  digests and conflict detection, capability discovery, run submission
+  validation (declared capability, input port coverage, artifact existence,
+  placeholder resolution), input materialization into per-run working
+  directories, stdout/stderr capture as content-addressed artifacts, full
+  run records as provenance.
+- Execution (`hub-executor`): `ProcessExecutor` — structured argv, no shell,
+  constructed environment, per-stream output caps with truncation flags,
+  wall-clock timeout via kill+reap, cooperative cancellation; and a scripted
+  `MockExecutor` for deterministic tests.
+- Persistence ports plus in-memory repositories and an atomic file-backed
+  content-addressed blob store.
+- Wire protocol (`hub-protocol`): versioned DTOs, tolerant reader for
+  additive evolution, structured error envelope, explicit schema-version gate.
+- HTTP API (`hub-api`, axum): `/health`, `/ready`, `/api/v1/{components,
+  capabilities,runs,executions,artifacts}` with precise status-code mapping
+  and error envelopes.
+- Binaries: `scirust-hubd` daemon (config → tracing → stores → serve →
+  graceful shutdown) and `scirust-hub` CLI client with human/JSON output.
+- End-to-end proofs over real TCP: walking skeleton through the daemon and a
+  CLI-driven two-component pipeline with byte-exact artifact propagation.
+- CI running fmt/clippy/build/test/doc with pinned actions.
+
+### Not included (deliberately)
+
+- Durable registries (SQLite backend deferred behind repository traits).
+- Workflow/DAG execution scheduling; remote/container/capsule executors;
+  authentication on the HTTP surface. See README limitations and ADRs.

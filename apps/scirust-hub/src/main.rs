@@ -9,7 +9,11 @@ use clap::{Parser as ClapParser, Subcommand};
 use serde_json::Value;
 
 #[derive(Debug, ClapParser)]
-#[command(name = "scirust-hub", about = "SciRust Hub control plane client", version)]
+#[command(
+    name = "scirust-hub",
+    about = "SciRust Hub control plane client",
+    version
+)]
 struct Args {
     /// Base URL of the hub daemon.
     #[arg(long, env = "SCIRUST_HUB_URL", default_value = "http://127.0.0.1:8477")]
@@ -49,7 +53,9 @@ enum ComponentCommand {
         path: String,
     },
     List,
-    Inspect { id: String },
+    Inspect {
+        id: String,
+    },
 }
 
 #[derive(Debug, Subcommand)]
@@ -74,8 +80,12 @@ enum RunCommand {
         wait: bool,
     },
     List,
-    Inspect { id: String },
-    Cancel { id: String },
+    Inspect {
+        id: String,
+    },
+    Cancel {
+        id: String,
+    },
 }
 
 #[derive(Debug, Subcommand)]
@@ -89,6 +99,7 @@ enum ArtifactCommand {
 }
 
 #[derive(Debug, thiserror::Error)]
+#[allow(clippy::large_enum_variant)] // ureq::Error is only carried transiently
 enum CliError {
     #[error("cannot reach hub at {url}: {source}")]
     Connect { url: String, source: ureq::Error },
@@ -103,14 +114,15 @@ enum CliError {
 fn main() {
     let args = Args::parse();
     match dispatch(&args) {
-        Ok(()) => {},
+        Ok(()) => {}
         Err(error) => {
             eprintln!("scirust-hub: {error}");
             std::process::exit(1);
-        },
+        }
     }
 }
 
+#[allow(clippy::result_large_err)] // CliError keeps full API context for stderr
 fn dispatch(args: &Args) -> Result<(), CliError> {
     match &args.command {
         Command::Status => {
@@ -132,19 +144,15 @@ fn dispatch(args: &Args) -> Result<(), CliError> {
                     v["executor_backend"].as_str().unwrap_or("?")
                 );
             })
-        },
+        }
         Command::Component(ComponentCommand::Register { path }) => {
             let body = read_manifest(path)?;
-            let response =
-                send_json(ureq::post(&url_of(args, "/api/v1/components")), body)?;
+            let response = send_json(ureq::post(&url_of(args, "/api/v1/components")), body)?;
             emit(args, &response, |v| {
-                println!(
-                    "component {}: {}",
-                    v["component"]["id"], v["status"]
-                );
+                println!("component {}: {}", v["component"]["id"], v["status"]);
                 println!("manifest digest: {}", v["manifest_digest"]);
             })
-        },
+        }
         Command::Component(ComponentCommand::List) => {
             let response = get(url_of(args, "/api/v1/components"))?;
             emit(args, &response, |v| {
@@ -163,7 +171,7 @@ fn dispatch(args: &Args) -> Result<(), CliError> {
                     );
                 }
             })
-        },
+        }
         Command::Component(ComponentCommand::Inspect { id }) => {
             let response = get(url_of(args, &format!("/api/v1/components/{id}")))?;
             emit(args, &response, |v| {
@@ -179,7 +187,7 @@ fn dispatch(args: &Args) -> Result<(), CliError> {
                     );
                 }
             })
-        },
+        }
         Command::Capabilities => {
             let response = get(url_of(args, "/api/v1/capabilities"))?;
             emit(args, &response, |v| {
@@ -190,7 +198,7 @@ fn dispatch(args: &Args) -> Result<(), CliError> {
                     );
                 }
             })
-        },
+        }
         Command::Run(RunCommand::Submit {
             component,
             capability,
@@ -234,7 +242,9 @@ fn dispatch(args: &Args) -> Result<(), CliError> {
                 if let Some(outcome) = v["outcome"].as_object() {
                     println!(
                         "exit: {} backend: {} duration: {}ms",
-                        outcome["exit_code"].as_i64().map(|c| c.to_string())
+                        outcome["exit_code"]
+                            .as_i64()
+                            .map(|c| c.to_string())
                             .unwrap_or_else(|| "?".into()),
                         outcome["executor_backend"].as_str().unwrap_or("?"),
                         outcome["duration_ms"]
@@ -250,7 +260,7 @@ fn dispatch(args: &Args) -> Result<(), CliError> {
                     }
                 }
             })
-        },
+        }
         Command::Run(RunCommand::List) => {
             let response = get(url_of(args, "/api/v1/runs"))?;
             emit(args, &response, |v| {
@@ -261,11 +271,15 @@ fn dispatch(args: &Args) -> Result<(), CliError> {
                 for r in runs {
                     println!(
                         "{}  {}  {}@{}  created {}",
-                        r["id"], r["state"], r["spec"]["capability"], r["component_name"], r["created_at"]
+                        r["id"],
+                        r["state"],
+                        r["spec"]["capability"],
+                        r["component_name"],
+                        r["created_at"]
                     );
                 }
             })
-        },
+        }
         Command::Run(RunCommand::Inspect { id }) => {
             let response = get(url_of(args, &format!("/api/v1/runs/{id}")))?;
             emit(args, &response, |v| {
@@ -296,7 +310,7 @@ fn dispatch(args: &Args) -> Result<(), CliError> {
                     }
                 }
             })
-        },
+        }
         Command::Run(RunCommand::Cancel { id }) => {
             let response = post_empty(url_of(args, &format!("/api/v1/runs/{id}/cancel")))?;
             emit(args, &response, |v| {
@@ -305,7 +319,7 @@ fn dispatch(args: &Args) -> Result<(), CliError> {
                     v["run_id"], v["signalled_active_execution"]
                 );
             })
-        },
+        }
         Command::Artifact(ArtifactCommand::Inspect { id, content }) => {
             let suffix = if *content { "?include=content" } else { "" };
             let response = get(url_of(args, &format!("/api/v1/artifacts/{id}{suffix}")))?;
@@ -320,24 +334,24 @@ fn dispatch(args: &Args) -> Result<(), CliError> {
                     println!("{text}");
                 }
             })
-        },
+        }
     }
 }
 
+#[allow(clippy::result_large_err)] // CliError keeps full API context
 fn parse_inputs(inputs: &[String]) -> Result<Vec<serde_json::Value>, CliError> {
     inputs
         .iter()
         .map(|raw| {
             let (name, artifact) = raw.split_once('=').ok_or_else(|| {
-                CliError::Usage(format!(
-                    "--input expects name=artifact-id, got {raw:?}"
-                ))
+                CliError::Usage(format!("--input expects name=artifact-id, got {raw:?}"))
             })?;
             Ok(serde_json::json!({ "name": name, "artifact": artifact }))
         })
         .collect()
 }
 
+#[allow(clippy::result_large_err)] // CliError keeps full API context
 fn read_manifest(path: &str) -> Result<Value, CliError> {
     let text = if path == "-" {
         let mut buf = String::new();
@@ -349,7 +363,8 @@ fn read_manifest(path: &str) -> Result<Value, CliError> {
         std::fs::read_to_string(path)
             .map_err(|e| CliError::Usage(format!("reading {path:?}: {e}")))?
     };
-    serde_json::from_str(&text).map_err(|e| CliError::Usage(format!("manifest is not valid JSON: {e}")))
+    serde_json::from_str(&text)
+        .map_err(|e| CliError::Usage(format!("manifest is not valid JSON: {e}")))
 }
 
 fn url_of(args: &Args, path: &str) -> String {
@@ -367,7 +382,7 @@ fn request_error(e: ureq::Error) -> CliError {
                 .take(1_000_000)
                 .read_to_string(&mut body);
             CliError::ApiStatus { status, body }
-        },
+        }
         other => CliError::Connect {
             url: String::from("hub"),
             source: other,
@@ -375,6 +390,7 @@ fn request_error(e: ureq::Error) -> CliError {
     }
 }
 
+#[allow(clippy::result_large_err)] // CliError keeps full API context
 fn get(path_url: String) -> Result<Value, CliError> {
     ureq::get(&path_url)
         .call()
@@ -383,6 +399,7 @@ fn get(path_url: String) -> Result<Value, CliError> {
         .map_err(|e| CliError::BadResponse(format!("decoding body: {e}")))
 }
 
+#[allow(clippy::result_large_err)] // CliError keeps full API context
 fn post_empty(path_url: String) -> Result<Value, CliError> {
     ureq::post(&path_url)
         .call()
@@ -391,6 +408,7 @@ fn post_empty(path_url: String) -> Result<Value, CliError> {
         .map_err(|e| CliError::BadResponse(format!("decoding body: {e}")))
 }
 
+#[allow(clippy::result_large_err)] // CliError keeps full API context
 fn send_json(request: ureq::Request, payload: Value) -> Result<Value, CliError> {
     request
         .send_json(payload)
@@ -399,18 +417,16 @@ fn send_json(request: ureq::Request, payload: Value) -> Result<Value, CliError> 
         .map_err(|e| CliError::BadResponse(format!("decoding body: {e}")))
 }
 
-fn emit(
-    args: &Args,
-    value: &Value,
-    human: impl FnOnce(&Value),
-) -> Result<(), CliError> {
+#[allow(clippy::result_large_err)] // CliError keeps full API context
+fn emit(args: &Args, value: &Value, human: impl FnOnce(&Value)) -> Result<(), CliError> {
     match args.output {
         Output::Json => {
             println!(
                 "{}",
                 serde_json::to_string_pretty(value)
-                    .map_err(|e| CliError::BadResponse(format!("re-encoding: {e}")))?)
-        },
+                    .map_err(|e| CliError::BadResponse(format!("re-encoding: {e}")))?
+            )
+        }
         Output::Human => human(value),
     }
     Ok(())

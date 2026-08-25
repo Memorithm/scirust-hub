@@ -20,9 +20,7 @@ use crate::id::{ArtifactId, ComponentId, RunId};
 use crate::limits::Limits;
 use crate::memory::FileSystemArtifactStore;
 use crate::run::{OutputRef, RunOutcome, RunRecord, RunSpec, RunState};
-use crate::store::{
-    ArtifactMetadataRepository, ArtifactStore, ComponentRepository, RunRepository,
-};
+use crate::store::{ArtifactMetadataRepository, ArtifactStore, ComponentRepository, RunRepository};
 
 /// Outcome of an idempotent registration.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -50,6 +48,7 @@ impl Orchestrator {
     /// Assembles an orchestrator from its ports. Callers choose the backends
     /// (in-memory stores for tests/CLI, the same today for the daemon).
     #[must_use]
+    #[allow(clippy::too_many_arguments)] // one argument per injected port
     pub fn new(
         clock: Arc<dyn Clock>,
         components: Arc<dyn ComponentRepository>,
@@ -163,10 +162,8 @@ impl Orchestrator {
 
         // Every declared input port must be bound, and no unbound extras may
         // be smuggled in.
-        let port_names: Vec<&str> =
-            capability.inputs.iter().map(|p| p.name.as_str()).collect();
-        let binding_names: Vec<&str> =
-            spec.inputs.iter().map(|i| i.name.as_str()).collect();
+        let port_names: Vec<&str> = capability.inputs.iter().map(|p| p.name.as_str()).collect();
+        let binding_names: Vec<&str> = spec.inputs.iter().map(|i| i.name.as_str()).collect();
         for name in &port_names {
             if !binding_names.contains(name) {
                 return Err(CoreError::MissingInputBinding {
@@ -225,9 +222,10 @@ impl Orchestrator {
         // rejected rather than raced.
         let token = CancelToken::new();
         {
-            let mut active = self.active_cancels.lock().map_err(|_| {
-                CoreError::Storage("cancellation map lock poisoned".into())
-            })?;
+            let mut active = self
+                .active_cancels
+                .lock()
+                .map_err(|_| CoreError::Storage("cancellation map lock poisoned".into()))?;
             use std::collections::btree_map::Entry;
             match active.entry(run_id) {
                 Entry::Occupied(_) => {
@@ -235,10 +233,10 @@ impl Orchestrator {
                         run: run_id,
                         current: RunState::Running,
                     });
-                },
+                }
                 Entry::Vacant(slot) => {
                     slot.insert(token.clone());
-                },
+                }
             }
         }
         let result = self.execute_run_inner(run_id, &token);
@@ -370,7 +368,7 @@ impl Orchestrator {
                 record.transition(RunState::Failed, now)?;
                 self.runs.put(record)?;
                 return Err(e);
-            },
+            }
         };
         match self.executor.execute(&request, token) {
             Ok(outcome) => Ok(outcome),
@@ -389,7 +387,7 @@ impl Orchestrator {
                     stderr: Vec::new(),
                     stderr_truncated: false,
                 })
-            },
+            }
             Err(crate::error::ExecutorFailure::Cancelled) => Ok(ExecutionOutcome {
                 exit_code: None,
                 signal: None,
@@ -407,7 +405,7 @@ impl Orchestrator {
                     run: record.id,
                     source: crate::error::ExecutorFailure::Backend { reason },
                 })
-            },
+            }
         }
     }
 
@@ -426,7 +424,7 @@ impl Orchestrator {
                     "component {} declares no executable binding",
                     spec.component
                 )));
-            },
+            }
         };
         let params_json = String::from_utf8(spec.canonical_params_bytes()?)
             .map_err(|e| CoreError::Validation(format!("parameters are not UTF-8: {e}")))?;
@@ -479,10 +477,16 @@ impl Orchestrator {
             if bytes.is_empty() {
                 continue;
             }
-            let label = if truncated { format!("{name}-truncated") } else { name.to_owned() };
-            let digest =
-                self.blobs
-                    .put(bytes, u64::try_from(self.limits.max_artifact_bytes).unwrap_or(u64::MAX), crate::digest::DOMAIN_CAPTURE)?;
+            let label = if truncated {
+                format!("{name}-truncated")
+            } else {
+                name.to_owned()
+            };
+            let digest = self.blobs.put(
+                bytes,
+                self.limits.max_artifact_bytes,
+                crate::digest::DOMAIN_CAPTURE,
+            )?;
             let meta = crate::artifact::ArtifactMeta {
                 id: ArtifactId::generate(),
                 name: format!("{}-{}", record.id, label),
@@ -596,23 +600,25 @@ impl Orchestrator {
 
 /// Submission-time placeholder validation: every placeholder must be
 /// resolvable from the spec being submitted.
-fn check_placeholders(
-    binding: &ExecutionBinding,
-    spec: &RunSpec,
-) -> Result<(), CoreError> {
-    let process = match binding {
-        ExecutionBinding::Process(p) => p,
-    };
+fn check_placeholders(binding: &ExecutionBinding, spec: &RunSpec) -> Result<(), CoreError> {
+    // Single-variant execution enum today; new variants extend this check.
+    let ExecutionBinding::Process(process) = binding;
     for raw in &process.args {
         if raw == "{params}" {
             continue;
         }
-        if let Some(name) = raw.strip_prefix("{input:").and_then(|r| r.strip_suffix('}')) {
+        if let Some(name) = raw
+            .strip_prefix("{input:")
+            .and_then(|r| r.strip_suffix('}'))
+        {
             let bound = spec.inputs.iter().any(|i| i.name == name);
             if !bound {
                 return Err(CoreError::Validation(format!(
                     "binding references unknown input {name:?}; declared inputs: {:?}",
-                    spec.inputs.iter().map(|i| i.name.as_str()).collect::<Vec<_>>()
+                    spec.inputs
+                        .iter()
+                        .map(|i| i.name.as_str())
+                        .collect::<Vec<_>>()
                 )));
             }
             continue;
@@ -635,12 +641,18 @@ fn substitute_placeholders(
     if raw == "{params}" {
         return Ok(params_json.to_owned());
     }
-    if let Some(name) = raw.strip_prefix("{input:").and_then(|r| r.strip_suffix('}')) {
+    if let Some(name) = raw
+        .strip_prefix("{input:")
+        .and_then(|r| r.strip_suffix('}'))
+    {
         return input_paths.get(name).map_or_else(
             || {
                 Err(CoreError::Validation(format!(
                     "binding references unknown input {name:?}; declared inputs: {:?}",
-                    spec.inputs.iter().map(|i| i.name.as_str()).collect::<Vec<_>>()
+                    spec.inputs
+                        .iter()
+                        .map(|i| i.name.as_str())
+                        .collect::<Vec<_>>()
                 )))
             },
             |p| Ok(p.display().to_string()),
@@ -665,9 +677,7 @@ mod tests {
     use super::*;
     use crate::capability::{Capability, Port};
     use crate::clock::ManualClock;
-    use crate::component::{
-        ComponentKind, ComponentName, ExecutionBinding, ProcessBinding,
-    };
+    use crate::component::{ComponentKind, ComponentName, ExecutionBinding, ProcessBinding};
     use crate::memory::{
         FileSystemArtifactStore, InMemoryArtifactMeta, InMemoryComponents, InMemoryRuns,
     };
@@ -748,7 +758,14 @@ mod tests {
             Limits::default(),
             dir.join("workdirs"),
         );
-        (TestHub { orch, artifacts, dir }, clock)
+        (
+            TestHub {
+                orch,
+                artifacts,
+                dir,
+            },
+            clock,
+        )
     }
 
     fn echo_manifest(id: ComponentId) -> ComponentManifest {
@@ -761,7 +778,10 @@ mod tests {
                 name: CapabilityName::parse("demo.echo").expect("c"),
                 contract_version: Version::parse("1.0.0").expect("cv"),
                 inputs: vec![],
-                outputs: vec![Port { name: "stdout".into(), description: String::new() }],
+                outputs: vec![Port {
+                    name: "stdout".into(),
+                    description: String::new(),
+                }],
                 properties: BTreeMap::new(),
             }],
             Some(ExecutionBinding::Process(ProcessBinding {
@@ -780,11 +800,15 @@ mod tests {
         let (hub, _clock) = hub(None);
         let manifest = echo_manifest(ComponentId::generate());
         assert_eq!(
-            hub.orch.register_component(manifest.clone()).expect("register"),
+            hub.orch
+                .register_component(manifest.clone())
+                .expect("register"),
             RegistrationStatus::Created
         );
         assert_eq!(
-            hub.orch.register_component(echo_manifest(manifest.id)).expect("replay"),
+            hub.orch
+                .register_component(echo_manifest(manifest.id))
+                .expect("replay"),
             RegistrationStatus::AlreadyRegistered
         );
     }
@@ -822,7 +846,9 @@ mod tests {
     fn full_run_records_provenance_and_persists_outputs() {
         let (hub, clock) = hub(None);
         let manifest = echo_manifest(ComponentId::generate());
-        hub.orch.register_component(manifest.clone()).expect("register");
+        hub.orch
+            .register_component(manifest.clone())
+            .expect("register");
 
         let spec = RunSpec {
             component: manifest.id,
@@ -839,14 +865,19 @@ mod tests {
         let outcome = finished.outcome.as_ref().expect("outcome");
         assert_eq!(outcome.exit_code, Some(0));
         assert_eq!(outcome.executor_backend, "mock");
-        assert_eq!(outcome.env_keys, vec!["PATH".to_owned(), "TMPDIR".to_owned()]);
+        assert_eq!(
+            outcome.env_keys,
+            vec!["PATH".to_owned(), "TMPDIR".to_owned()]
+        );
         assert_eq!(finished.started_at, Some(1_000));
 
         // {params} was substituted with canonical JSON and captured.
         let outputs = &outcome.outputs;
         assert_eq!(outputs.len(), 1);
-        let (_meta, bytes) =
-            hub.orch.artifact_bytes(&outputs[0].artifact).expect("artifact bytes");
+        let (_meta, bytes) = hub
+            .orch
+            .artifact_bytes(&outputs[0].artifact)
+            .expect("artifact bytes");
         assert_eq!(bytes, br#"{"msg":"ping"}"#.to_vec());
         assert_eq!(outputs[0].digest.to_string(), hex_of(&bytes));
 
@@ -881,7 +912,9 @@ mod tests {
     fn submit_rejects_undeclared_capability() {
         let (hub, _clock) = hub(None);
         let manifest = echo_manifest(ComponentId::generate());
-        hub.orch.register_component(manifest.clone()).expect("register");
+        hub.orch
+            .register_component(manifest.clone())
+            .expect("register");
         let spec = RunSpec {
             component: manifest.id,
             capability: CapabilityName::parse("demo.missing").expect("cap"),
@@ -911,7 +944,9 @@ mod tests {
         ));
 
         let manifest = echo_manifest(ComponentId::generate());
-        hub.orch.register_component(manifest.clone()).expect("registered");
+        hub.orch
+            .register_component(manifest.clone())
+            .expect("registered");
         let spec = RunSpec {
             component: manifest.id,
             capability: CapabilityName::parse("demo.echo").expect("cap"),
@@ -954,8 +989,14 @@ mod tests {
         let cat_cap = || Capability {
             name: CapabilityName::parse("demo.cat").expect("cap"),
             contract_version: Version::parse("1.0.0").expect("cv"),
-            inputs: vec![Port { name: "source".into(), description: String::new() }],
-            outputs: vec![Port { name: "stdout".into(), description: String::new() }],
+            inputs: vec![Port {
+                name: "source".into(),
+                description: String::new(),
+            }],
+            outputs: vec![Port {
+                name: "stdout".into(),
+                description: String::new(),
+            }],
             properties: BTreeMap::new(),
         };
         let cat_manifest = |args: Vec<String>| {
@@ -978,7 +1019,9 @@ mod tests {
 
         // Unknown placeholder reference is rejected at submission time.
         let bad_manifest = cat_manifest(vec!["{input:nope}".into()]);
-        hub.orch.register_component(bad_manifest.clone()).expect("register");
+        hub.orch
+            .register_component(bad_manifest.clone())
+            .expect("register");
         let spec = RunSpec {
             component: bad_manifest.id,
             capability: CapabilityName::parse("demo.cat").expect("cap"),
@@ -996,7 +1039,9 @@ mod tests {
 
         // Correct placeholder resolves at execution time.
         let good_manifest = cat_manifest(vec!["{input:source}".into()]);
-        hub.orch.register_component(good_manifest.clone()).expect("register good");
+        hub.orch
+            .register_component(good_manifest.clone())
+            .expect("register good");
         let spec = RunSpec {
             component: good_manifest.id,
             capability: CapabilityName::parse("demo.cat").expect("cap"),
@@ -1016,7 +1061,9 @@ mod tests {
     fn start_failure_becomes_failed_record_with_reason() {
         let (hub, _clock) = hub(Some("no such program".into()));
         let manifest = echo_manifest(ComponentId::generate());
-        hub.orch.register_component(manifest.clone()).expect("register");
+        hub.orch
+            .register_component(manifest.clone())
+            .expect("register");
         let run = hub
             .orch
             .submit_run(RunSpec {
@@ -1040,7 +1087,9 @@ mod tests {
     fn queued_run_can_be_cancelled_without_executing() {
         let (hub, _clock) = hub(None);
         let manifest = echo_manifest(ComponentId::generate());
-        hub.orch.register_component(manifest.clone()).expect("register");
+        hub.orch
+            .register_component(manifest.clone())
+            .expect("register");
         let run = hub
             .orch
             .submit_run(RunSpec {
@@ -1051,7 +1100,7 @@ mod tests {
                 timeout_ms: 1_000,
             })
             .expect("submit");
-        assert!(hub.orch.cancel_run(run.id).expect("cancel") == false);
+        assert!(!hub.orch.cancel_run(run.id).expect("cancel"));
         let record = hub.orch.run(&run.id).expect("record");
         assert_eq!(record.state, RunState::Cancelled);
     }
@@ -1060,7 +1109,9 @@ mod tests {
     fn duplicate_concurrent_execution_is_rejected() {
         let (hub, _clock) = hub(None);
         let manifest = echo_manifest(ComponentId::generate());
-        hub.orch.register_component(manifest.clone()).expect("register");
+        hub.orch
+            .register_component(manifest.clone())
+            .expect("register");
         let run = hub
             .orch
             .submit_run(RunSpec {

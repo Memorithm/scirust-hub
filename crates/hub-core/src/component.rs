@@ -189,6 +189,7 @@ impl ComponentManifest {
     ///
     /// # Errors
     /// [`CoreError::InvalidManifest`] describing the first violated rule.
+    #[allow(clippy::too_many_arguments)] // manifest fields are independent by design
     pub fn new_v1(
         id: ComponentId,
         name: ComponentName,
@@ -264,15 +265,15 @@ impl ComponentManifest {
     /// # Errors
     /// See [`Self::canonical_bytes`].
     pub fn content_digest(&self) -> Result<ContentDigest, CoreError> {
-        Ok(hash_bytes(DOMAIN_COMPONENT_MANIFEST, &self.canonical_bytes()?))
+        Ok(hash_bytes(
+            DOMAIN_COMPONENT_MANIFEST,
+            &self.canonical_bytes()?,
+        ))
     }
 
     /// Looks up a declared capability by exact name.
     #[must_use]
-    pub fn capability(
-        &self,
-        name: &crate::capability::CapabilityName,
-    ) -> Option<&Capability> {
+    pub fn capability(&self, name: &crate::capability::CapabilityName) -> Option<&Capability> {
         self.capabilities.iter().find(|c| &c.name == name)
     }
 }
@@ -288,7 +289,10 @@ mod tests {
             name: CapabilityName::parse("demo.echo").expect("valid"),
             contract_version: Version::parse("1.0.0").expect("valid"),
             inputs: vec![],
-            outputs: vec![Port { name: "stdout".into(), description: String::new() }],
+            outputs: vec![Port {
+                name: "stdout".into(),
+                description: String::new(),
+            }],
             properties: BTreeMap::new(),
         };
         ComponentManifest::new_v1(
@@ -312,8 +316,7 @@ mod tests {
     fn manifest_round_trip_is_stable() {
         let m = sample_manifest();
         let bytes = m.canonical_bytes().expect("serialize");
-        let decoded: ComponentManifest =
-            serde_json::from_slice(&bytes).expect("deserialize");
+        let decoded: ComponentManifest = serde_json::from_slice(&bytes).expect("deserialize");
         assert_eq!(decoded, m);
         assert_eq!(
             decoded.content_digest().expect("digest"),

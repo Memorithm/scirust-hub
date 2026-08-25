@@ -73,12 +73,7 @@ impl<T> Dag<T> {
     /// # Errors
     /// [`CoreError::Validation`] when a node is missing, the edge limit is
     /// hit, or the edge would create a cycle (checked before insertion).
-    pub fn add_edge(
-        &mut self,
-        from: &str,
-        to: &str,
-        limits: &DagLimits,
-    ) -> Result<(), CoreError> {
+    pub fn add_edge(&mut self, from: &str, to: &str, limits: &DagLimits) -> Result<(), CoreError> {
         if !self.nodes.contains_key(from) || !self.nodes.contains_key(to) {
             return Err(CoreError::Validation(format!(
                 "cannot connect unknown nodes {from:?} -> {to:?}"
@@ -104,7 +99,10 @@ impl<T> Dag<T> {
                 "edge {from:?} -> {to:?} would create a cycle"
             )));
         }
-        self.edges.entry(from.to_owned()).or_default().insert(to.to_owned());
+        self.edges
+            .entry(from.to_owned())
+            .or_default()
+            .insert(to.to_owned());
         Ok(())
     }
 
@@ -125,14 +123,13 @@ impl<T> Dag<T> {
     /// [`CoreError::Validation`] if a cycle exists — impossible through the
     /// checked API, kept as a guard for direct construction paths.
     pub fn topological_order(&self) -> Result<Vec<(String, &T)>, CoreError> {
-        let mut indegree: BTreeMap<&str, usize> = self
-            .nodes
-            .keys()
-            .map(|k| (k.as_str(), 0))
-            .collect();
+        let mut indegree: BTreeMap<&str, usize> =
+            self.nodes.keys().map(|k| (k.as_str(), 0)).collect();
         for targets in self.edges.values() {
             for t in targets {
-                *indegree.get_mut(t.as_str()).expect("edge endpoints validated") += 1;
+                *indegree
+                    .get_mut(t.as_str())
+                    .expect("edge endpoints validated") += 1;
             }
         }
         let mut ready: BTreeSet<&str> = indegree
@@ -145,8 +142,9 @@ impl<T> Dag<T> {
             order.push(k);
             if let Some(targets) = self.edges.get(k) {
                 for t in targets {
-                    let deg =
-                        indegree.get_mut(t.as_str()).expect("edge endpoints validated");
+                    let deg = indegree
+                        .get_mut(t.as_str())
+                        .expect("edge endpoints validated");
                     *deg -= 1;
                     if *deg == 0 {
                         ready.insert(t.as_str());
@@ -170,11 +168,7 @@ impl<T> Dag<T> {
             .collect())
     }
 
-    fn reachable(
-        edges: &BTreeMap<String, BTreeSet<String>>,
-        start: &str,
-        target: &str,
-    ) -> bool {
+    fn reachable(edges: &BTreeMap<String, BTreeSet<String>>, start: &str, target: &str) -> bool {
         let mut stack = vec![start];
         let mut seen = BTreeSet::new();
         while let Some(current) = stack.pop() {
@@ -215,8 +209,12 @@ mod tests {
     #[test]
     fn topological_order_respects_dependencies() {
         let g = sample();
-        let order: Vec<String> =
-            g.topological_order().expect("acyclic").into_iter().map(|(k, _)| k).collect();
+        let order: Vec<String> = g
+            .topological_order()
+            .expect("acyclic")
+            .into_iter()
+            .map(|(k, _)| k)
+            .collect();
         assert_eq!(order.len(), 4);
         let pos = |n: &str| order.iter().position(|x| x == n).expect("present");
         assert!(pos("a") < pos("b"));
@@ -240,8 +238,18 @@ mod tests {
             g.add_edge("a", "b", &lim()).expect("edge");
             g.add_edge("b", "c", &lim()).expect("edge");
         }
-        let o1: Vec<String> = g1.topological_order().expect("ok").into_iter().map(|(k, _)| k).collect();
-        let o2: Vec<String> = g2.topological_order().expect("ok").into_iter().map(|(k, _)| k).collect();
+        let o1: Vec<String> = g1
+            .topological_order()
+            .expect("ok")
+            .into_iter()
+            .map(|(k, _)| k)
+            .collect();
+        let o2: Vec<String> = g2
+            .topological_order()
+            .expect("ok")
+            .into_iter()
+            .map(|(k, _)| k)
+            .collect();
         assert_eq!(o1, o2);
     }
 
@@ -282,7 +290,10 @@ mod tests {
 
     #[test]
     fn node_limit_enforced() {
-        let tight = DagLimits { max_nodes: 2, ..DagLimits::default() };
+        let tight = DagLimits {
+            max_nodes: 2,
+            ..DagLimits::default()
+        };
         let mut g = Dag::new();
         g.add_node("a", (), &tight).expect("first");
         g.add_node("b", (), &tight).expect("second");

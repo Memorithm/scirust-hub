@@ -7,16 +7,14 @@
 use std::collections::BTreeMap;
 use std::sync::Mutex;
 
+use crate::artifact::ArtifactMeta;
 use crate::component::ComponentManifest;
 use crate::digest::ContentDigest;
 use crate::error::CoreError;
 use crate::id::{ArtifactId, ComponentId, RunId};
 use crate::run::RunRecord;
-use crate::store::{
-    ArtifactMetadataRepository, ArtifactStore, ComponentRepository, RunRepository,
-};
+use crate::store::{ArtifactMetadataRepository, ArtifactStore, ComponentRepository, RunRepository};
 use crate::version::Version;
-use crate::artifact::ArtifactMeta;
 
 #[derive(Debug, Default)]
 struct Inner {
@@ -28,10 +26,7 @@ struct Inner {
 pub struct InMemoryComponents(Mutex<Inner>);
 
 impl ComponentRepository for InMemoryComponents {
-    fn put(
-        &self,
-        manifest: &ComponentManifest,
-    ) -> Result<bool, CoreError> {
+    fn put(&self, manifest: &ComponentManifest) -> Result<bool, CoreError> {
         let mut inner = self.0.lock().map_err(poison)?;
         let key = (manifest.id, manifest.version.clone());
         if let Some(existing) = inner.manifests.get(&key) {
@@ -155,12 +150,7 @@ impl FileSystemArtifactStore {
 }
 
 impl ArtifactStore for FileSystemArtifactStore {
-    fn put(
-        &self,
-        bytes: &[u8],
-        max_bytes: u64,
-        domain: &[u8],
-    ) -> Result<ContentDigest, CoreError> {
+    fn put(&self, bytes: &[u8], max_bytes: u64, domain: &[u8]) -> Result<ContentDigest, CoreError> {
         if bytes.len() as u64 > max_bytes {
             return Err(CoreError::ArtifactTooLarge {
                 artifact: ArtifactId::generate(),
@@ -188,7 +178,9 @@ impl ArtifactStore for FileSystemArtifactStore {
     fn read(&self, digest: &ContentDigest) -> Result<Vec<u8>, CoreError> {
         let path = self.blob_path(digest);
         if !path.exists() {
-            return Err(CoreError::BlobNotFound { hex: digest.to_string() });
+            return Err(CoreError::BlobNotFound {
+                hex: digest.to_string(),
+            });
         }
         std::fs::read(&path).map_err(|e| CoreError::Storage(format!("reading blob: {e}")))
     }
@@ -200,7 +192,9 @@ impl ArtifactStore for FileSystemArtifactStore {
     ) -> Result<(), CoreError> {
         let src = self.blob_path(digest);
         if !src.exists() {
-            return Err(CoreError::BlobNotFound { hex: digest.to_string() });
+            return Err(CoreError::BlobNotFound {
+                hex: digest.to_string(),
+            });
         }
         std::fs::copy(src, dest)
             .map_err(|e| CoreError::Storage(format!("copying artifact to {:?}: {e}", dest)))?;
@@ -220,9 +214,7 @@ fn poison<T>(_e: T) -> CoreError {
 mod tests {
     use super::*;
     use crate::capability::{Capability, CapabilityName, Port};
-    use crate::component::{
-        ComponentKind, ComponentName, ExecutionBinding, ProcessBinding,
-    };
+    use crate::component::{ComponentKind, ComponentName, ExecutionBinding, ProcessBinding};
     use std::collections::BTreeMap;
 
     fn manifest(id: ComponentId, version: &str, program: &str) -> ComponentManifest {
@@ -234,7 +226,10 @@ mod tests {
             vec![Capability {
                 name: CapabilityName::parse("x.y").expect("cap"),
                 contract_version: Version::parse("1.0.0").expect("cv"),
-                inputs: vec![Port { name: "in".into(), description: String::new() }],
+                inputs: vec![Port {
+                    name: "in".into(),
+                    description: String::new(),
+                }],
                 outputs: vec![],
                 properties: BTreeMap::new(),
             }],
@@ -253,23 +248,30 @@ mod tests {
     fn registration_is_idempotent_and_conflict_aware() {
         let store = InMemoryComponents::default();
         let id = ComponentId::generate();
-        assert!(store.put(&manifest(id, "1.0.0", "/bin/true")).expect("insert"));
-        // Identical content: no-op.
-        assert!(!store
+        assert!(store
             .put(&manifest(id, "1.0.0", "/bin/true"))
-            .expect("dup"));
+            .expect("insert"));
+        // Identical content: no-op.
+        assert!(!store.put(&manifest(id, "1.0.0", "/bin/true")).expect("dup"));
         // Same key, different binding: conflict with digests in the message.
         match store.put(&manifest(id, "1.0.0", "/bin/false")) {
-            Err(CoreError::ComponentConflict { registered, new, .. }) => {
+            Err(CoreError::ComponentConflict {
+                registered, new, ..
+            }) => {
                 assert_ne!(registered, new);
-            },
+            }
             other => panic!("expected conflict, got {other:?}"),
         }
         // New version of same component: allowed.
         assert!(store.put(&manifest(id, "2.0.0", "/bin/true")).expect("v2"));
         assert_eq!(store.list().expect("list").len(), 2);
         assert_eq!(
-            store.latest(&id).expect("latest").expect("present").version.as_str(),
+            store
+                .latest(&id)
+                .expect("latest")
+                .expect("present")
+                .version
+                .as_str(),
             "2.0.0"
         );
     }
@@ -308,16 +310,23 @@ mod tests {
         let store = FileSystemArtifactStore::open(&dir).expect("open");
         let data = b"artifact payload";
         let d1 = store
-            .put(data, u64::from(u32::MAX), crate::digest::DOMAIN_ARTIFACT_BLOB)
+            .put(
+                data,
+                u64::from(u32::MAX),
+                crate::digest::DOMAIN_ARTIFACT_BLOB,
+            )
             .expect("put");
         let d2 = store
-            .put(data, u64::from(u32::MAX), crate::digest::DOMAIN_ARTIFACT_BLOB)
+            .put(
+                data,
+                u64::from(u32::MAX),
+                crate::digest::DOMAIN_ARTIFACT_BLOB,
+            )
             .expect("dedup put");
         assert_eq!(d1, d2);
         assert_eq!(store.read(&d1).expect("read"), data);
         assert!(store.contains(&d1));
-        let missing =
-            crate::digest::hash_bytes(b"nope", b"missing");
+        let missing = crate::digest::hash_bytes(b"nope", b"missing");
         assert!(store.read(&missing).is_err());
         let dest = dir.join("out.bin");
         store.copy_to_path(&d1, &dest).expect("copy");
@@ -333,7 +342,11 @@ mod tests {
         let big = vec![0u8; 128];
         assert!(matches!(
             store.put(&big, 64, crate::digest::DOMAIN_ARTIFACT_BLOB),
-            Err(CoreError::ArtifactTooLarge { size: 128, limit: 64, .. })
+            Err(CoreError::ArtifactTooLarge {
+                size: 128,
+                limit: 64,
+                ..
+            })
         ));
         drop(store);
         std::fs::remove_dir_all(&dir).expect("cleanup");

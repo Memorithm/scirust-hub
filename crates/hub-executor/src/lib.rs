@@ -1,4 +1,4 @@
-//! Executor backends implementing the [`Executor`](hub_core::Executor) port.
+//! Executor backends implementing the [`Executor`] port from `hub-core`.
 //!
 //! - [`ProcessExecutor`]: supervised local subprocess execution with hard
 //!   output caps, wall-clock timeouts, cooperative cancellation and an
@@ -14,9 +14,7 @@ use std::thread;
 use std::time::{Duration, Instant};
 
 use hub_core::error::ExecutorFailure;
-use hub_core::exec::{
-    CancelToken, ExecutionOutcome, ExecutionRequest, Executor,
-};
+use hub_core::exec::{CancelToken, ExecutionOutcome, ExecutionRequest, Executor};
 
 /// Poll interval while waiting on the child.
 const POLL_INTERVAL_MS: u64 = 10;
@@ -84,14 +82,16 @@ impl Executor for ProcessExecutor {
 
         let stdout_pipe = child.stdout.take();
         let stderr_pipe = child.stderr.take();
-        let stdout_handle =
-            spawn_capped_reader(stdout_pipe, request.max_capture_bytes_per_stream);
-        let stderr_handle =
-            spawn_capped_reader(stderr_pipe, request.max_capture_bytes_per_stream);
+        let stdout_handle = spawn_capped_reader(stdout_pipe, request.max_capture_bytes_per_stream);
+        let stderr_handle = spawn_capped_reader(stderr_pipe, request.max_capture_bytes_per_stream);
 
         let deadline = started
             .checked_add(Duration::from_millis(request.timeout_ms))
-            .unwrap_or_else(|| started.checked_add(Duration::from_secs(u64::MAX >> 2)).expect("sane"));
+            .unwrap_or_else(|| {
+                started
+                    .checked_add(Duration::from_secs(u64::MAX >> 2))
+                    .expect("sane")
+            });
 
         let mut timed_out = false;
         let mut cancelled = false;
@@ -101,9 +101,9 @@ impl Executor for ProcessExecutor {
                     return Err(ExecutorFailure::Backend {
                         reason: format!("wait failed: {io_error}"),
                     });
-                },
+                }
                 Ok(Some(status)) => break Some(status),
-                Ok(None) => {},
+                Ok(None) => {}
             }
             if cancel.is_cancelled() {
                 cancelled = true;
@@ -118,12 +118,14 @@ impl Executor for ProcessExecutor {
             thread::sleep(Duration::from_millis(POLL_INTERVAL_MS));
         };
 
-        let stdout = stdout_handle
-            .join()
-            .unwrap_or_else(|_| CapturedStream { bytes: Vec::new(), truncated: false });
-        let stderr = stderr_handle
-            .join()
-            .unwrap_or_else(|_| CapturedStream { bytes: Vec::new(), truncated: false });
+        let stdout = stdout_handle.join().unwrap_or_else(|_| CapturedStream {
+            bytes: Vec::new(),
+            truncated: false,
+        });
+        let stderr = stderr_handle.join().unwrap_or_else(|_| CapturedStream {
+            bytes: Vec::new(),
+            truncated: false,
+        });
 
         Ok(ExecutionOutcome {
             exit_code: status.as_ref().and_then(|s| s.code()),
@@ -185,7 +187,7 @@ where
                         captured.truncated = true;
                     }
                     // Continue draining regardless of truncation state.
-                },
+                }
                 Err(e) if e.kind() == std::io::ErrorKind::Interrupted => continue,
                 // Reader-side errors (broken pipe during kill) end capture.
                 Err(_) => break,
@@ -346,7 +348,10 @@ mod tests {
     fn captures_stdout_and_exit_code() {
         let exec = ProcessExecutor::new();
         let outcome = exec
-            .execute(&base_request("echo", &["hello", "hub"]), &CancelToken::new())
+            .execute(
+                &base_request("echo", &["hello", "hub"]),
+                &CancelToken::new(),
+            )
             .expect("execute");
         assert!(outcome.exited_cleanly());
         assert_eq!(String::from_utf8_lossy(&outcome.stdout), "hello hub\n");
@@ -358,7 +363,10 @@ mod tests {
         let exec = ProcessExecutor::new();
         // If this ever goes through a shell, `$HOME` would expand.
         let outcome = exec
-            .execute(&base_request("echo", &["$HOME ; rm -rf /"]), &CancelToken::new())
+            .execute(
+                &base_request("echo", &["$HOME ; rm -rf /"]),
+                &CancelToken::new(),
+            )
             .expect("execute");
         assert!(outcome.exited_cleanly());
         assert_eq!(
@@ -406,11 +414,14 @@ mod tests {
     #[test]
     fn oversized_output_is_truncated_but_drained() {
         let exec = ProcessExecutor::new();
-        let mut request = base_request("dd", &[
-            "if=/dev/zero",
-            "bs=1024",
-            "count=64", // 64 KiB total
-        ]);
+        let mut request = base_request(
+            "dd",
+            &[
+                "if=/dev/zero",
+                "bs=1024",
+                "count=64", // 64 KiB total
+            ],
+        );
         request.max_capture_bytes_per_stream = 4 * 1024;
         let outcome = exec.execute(&request, &CancelToken::new()).expect("run");
         assert!(outcome.exited_cleanly());
@@ -476,11 +487,17 @@ mod tests {
             MockExecutor::success(b"second"),
         ]);
         let cancel = CancelToken::new();
-        let first = exec.execute(&base_request("x", &[]), &cancel).expect("first");
+        let first = exec
+            .execute(&base_request("x", &[]), &cancel)
+            .expect("first");
         assert_eq!(first.exit_code, Some(3));
-        let second = exec.execute(&base_request("x", &[]), &cancel).expect("second");
+        let second = exec
+            .execute(&base_request("x", &[]), &cancel)
+            .expect("second");
         assert_eq!(second.stdout, b"second");
-        let third = exec.execute(&base_request("x", &[]), &cancel).expect("third");
+        let third = exec
+            .execute(&base_request("x", &[]), &cancel)
+            .expect("third");
         assert!(third.exited_cleanly());
     }
 

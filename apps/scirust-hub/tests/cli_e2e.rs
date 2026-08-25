@@ -5,7 +5,6 @@
 //! Requires both workspace binaries to be built (`cargo test --workspace`
 //! does this); the sibling binary is located in the shared target directory.
 
-use std::io::Write as _;
 use std::net::{TcpListener, TcpStream};
 use std::path::PathBuf;
 use std::process::{Child, Command, Output, Stdio};
@@ -52,8 +51,7 @@ fn free_port() -> u16 {
 
 fn start_daemon() -> (DaemonGuard, u16) {
     let port = free_port();
-    let data_dir =
-        std::env::temp_dir().join(format!("hub-cli-e2e-{}-{port}", std::process::id()));
+    let data_dir = std::env::temp_dir().join(format!("hub-cli-e2e-{}-{port}", std::process::id()));
     let child = Command::new(sibling_bin("scirust-hubd"))
         .args([
             "--listen",
@@ -82,7 +80,7 @@ fn start_daemon() -> (DaemonGuard, u16) {
 fn run_cli(port: u16, args: &[&str]) -> Output {
     Command::new(sibling_bin("scirust-hub"))
         .arg("--url")
-        .arg(format!("http://127.0.0.1:{port}"))
+        .arg(format!("http://127.0.0.1:{port}").as_str())
         .args(args)
         .output()
         .expect("run scirust-hub")
@@ -110,33 +108,34 @@ fn cli_drives_the_full_component_to_provenance_flow() {
     let manifest_path = std::env::temp_dir().join(format!("hub-cli-manifest-{port}.json"));
     std::fs::write(
         &manifest_path,
-        format!(
-            r#"{{
+        r#"{
                 "schema_version": 1,
-                "manifest": {{
+                "manifest": {
                     "id": "11111111-2222-3333-4444-555555555555",
                     "name": "demo-cat",
                     "version": "1.0.0",
                     "kind": "tool",
                     "capabilities": [
-                        {{
+                        {
                             "name": "demo.cat",
                             "contract_version": "1.0.0",
-                            "inputs": [{{"name": "source"}}],
-                            "outputs": [{{"name": "stdout"}}]
-                        }}
+                            "inputs": [{"name": "source"}],
+                            "outputs": [{"name": "stdout"}]
+                        }
                     ],
-                    "execution": {{
+                    "execution": {
                         "type": "process",
                         "program": "/bin/cat",
-                        "args": ["{{input:source}}"]
-                    }}
-                }}
-            }}"#
-        ),
+                        "args": ["{input:source}"]
+                    }
+                }
+            }"#,
     )
     .expect("write manifest");
-    let out = run_cli(port, &["component", "register", manifest_path.to_str().unwrap()]);
+    let out = run_cli(
+        port,
+        &["component", "register", manifest_path.to_str().unwrap()],
+    );
     let stdout = expect_success(&out);
     assert!(stdout.contains("created"), "stdout: {stdout}");
     let _ = std::fs::remove_file(manifest_path);
@@ -194,8 +193,8 @@ fn cli_drives_the_full_component_to_provenance_flow() {
             "--wait",
         ],
     ));
-    let submitted: serde_json::Value = serde_json::from_str(&json_out)
-        .expect("--output json must emit valid JSON");
+    let submitted: serde_json::Value =
+        serde_json::from_str(&json_out).expect("--output json must emit valid JSON");
     assert_eq!(submitted["state"], "succeeded");
     let seed_artifact = submitted["outcome"]["outputs"][0]["artifact"]
         .as_str()
@@ -237,9 +236,15 @@ fn cli_drives_the_full_component_to_provenance_flow() {
 
     // run list / inspect show provenance
     let listing = expect_success(&run_cli(port, &["run", "list"]));
-    assert!(listing.matches("succeeded").count() >= 2, "listing: {listing}");
+    assert!(
+        listing.matches("succeeded").count() >= 2,
+        "listing: {listing}"
+    );
     let run_id = cat_run["id"].as_str().expect("run id").to_owned();
-    let inspect = expect_success(&run_cli(port, &["--output", "json", "run", "inspect", &run_id]));
+    let inspect = expect_success(&run_cli(
+        port,
+        &["--output", "json", "run", "inspect", &run_id],
+    ));
     let inspected: serde_json::Value = serde_json::from_str(&inspect).expect("json");
     let transitions = inspected["transitions"].as_array().expect("transitions");
     let states: Vec<&str> = transitions

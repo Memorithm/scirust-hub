@@ -100,7 +100,10 @@ mod tests {
         let c = ComponentId::generate();
         let r = RunId::from_uuid(c.as_uuid());
         // Same inner UUID but different types means no accidental equality.
-        assert_ne!(std::any::TypeId::of::<ComponentId>(), std::any::TypeId::of::<RunId>());
+        assert_ne!(
+            std::any::TypeId::of::<ComponentId>(),
+            std::any::TypeId::of::<RunId>()
+        );
         let _ = r;
     }
 }

@@ -19,15 +19,16 @@ pub trait ComponentRepository: Send + Sync {
     ///
     /// # Errors
     /// [`CoreError::ComponentConflict`] on divergent content for the same key.
-    fn put(&self, manifest: &crate::component::ComponentManifest)
-        -> Result<bool, CoreError>;
+    fn put(&self, manifest: &crate::component::ComponentManifest) -> Result<bool, CoreError>;
 
     /// Latest-registered manifest for `id` across versions, if any.
     ///
     /// # Errors
     /// Backend failures only.
-    fn latest(&self, id: &ComponentId)
-        -> Result<Option<crate::component::ComponentManifest>, CoreError>;
+    fn latest(
+        &self,
+        id: &ComponentId,
+    ) -> Result<Option<crate::component::ComponentManifest>, CoreError>;
 
     /// All manifests, deterministically ordered by `(id, version)`.
     ///
@@ -78,12 +79,7 @@ pub trait ArtifactStore: Send + Sync {
     /// # Errors
     /// [`CoreError::ArtifactTooLarge`] beyond `max_bytes`; backend IO errors
     /// otherwise.
-    fn put(
-        &self,
-        bytes: &[u8],
-        max_bytes: u64,
-        domain: &[u8],
-    ) -> Result<ContentDigest, CoreError>;
+    fn put(&self, bytes: &[u8], max_bytes: u64, domain: &[u8]) -> Result<ContentDigest, CoreError>;
 
     /// Reads a whole blob back. Blob sizes are capped upstream, so buffering
     /// is bounded.
@@ -99,11 +95,8 @@ pub trait ArtifactStore: Send + Sync {
     /// # Errors
     /// [`CoreError::ArtifactNotFound`] when the digest is unknown; backend IO
     /// errors otherwise.
-    fn copy_to_path(
-        &self,
-        digest: &ContentDigest,
-        dest: &std::path::Path,
-    ) -> Result<(), CoreError>;
+    fn copy_to_path(&self, digest: &ContentDigest, dest: &std::path::Path)
+        -> Result<(), CoreError>;
 
     #[must_use]
     fn contains(&self, digest: &ContentDigest) -> bool;

@@ -32,8 +32,7 @@ fn free_port() -> u16 {
 
 fn start_daemon() -> (DaemonGuard, u16) {
     let port = free_port();
-    let data_dir =
-        std::env::temp_dir().join(format!("hub-e2e-{}-{}", std::process::id(), port));
+    let data_dir = std::env::temp_dir().join(format!("hub-e2e-{}-{}", std::process::id(), port));
     let child = Command::new(env!("CARGO_BIN_EXE_scirust-hubd"))
         .args([
             "--listen",
@@ -122,9 +121,13 @@ fn walking_skeleton_through_the_real_daemon() {
 
     // 1. Register a component (idempotent replay included).
     let id = uuid_v4();
-    let (status, body) =
-        http(port, "POST", "/api/v1/components", Some(&echo_manifest(&id)))
-            .expect("register");
+    let (status, body) = http(
+        port,
+        "POST",
+        "/api/v1/components",
+        Some(&echo_manifest(&id)),
+    )
+    .expect("register");
     assert_eq!(status, 201, "body: {body}");
     assert!(body.contains("\"created\""), "body: {body}");
     let digest_start = body.find("\"manifest_digest\":\"").expect("digest field");
@@ -134,9 +137,13 @@ fn walking_skeleton_through_the_real_daemon() {
         .collect();
     assert_eq!(digest.len(), 64, "sha-256 hex digest");
 
-    let (status, body) =
-        http(port, "POST", "/api/v1/components", Some(&echo_manifest(&id)))
-            .expect("replay");
+    let (status, body) = http(
+        port,
+        "POST",
+        "/api/v1/components",
+        Some(&echo_manifest(&id)),
+    )
+    .expect("replay");
     assert_eq!(status, 200, "replay must be 200, got {status}: {body}");
     assert!(body.contains("\"already_registered\""), "body: {body}");
 
@@ -157,8 +164,7 @@ fn walking_skeleton_through_the_real_daemon() {
         }
     })
     .to_string();
-    let (status, body) =
-        http(port, "POST", "/api/v1/runs", Some(&submit)).expect("submit");
+    let (status, body) = http(port, "POST", "/api/v1/runs", Some(&submit)).expect("submit");
     assert_eq!(status, 201, "body: {body}");
     assert!(body.contains("\"queued\""), "body: {body}");
     let run_id: String = json_field(&body, "\"id\":\"").expect("run id");
@@ -170,11 +176,14 @@ fn walking_skeleton_through_the_real_daemon() {
     assert_eq!(status, 200, "body: {body}");
     assert!(body.contains("\"succeeded\""), "body: {body}");
     assert!(body.contains("\"exit_code\":0"), "body: {body}");
-    assert!(body.contains("\"executor_backend\":\"process\""), "body: {body}");
+    assert!(
+        body.contains("\"executor_backend\":\"process\""),
+        "body: {body}"
+    );
 
     // 5. Provenance: lifecycle transitions recorded.
-    let (status, body) = http(port, "GET", &format!("/api/v1/runs/{run_id}"), None)
-        .expect("run record");
+    let (status, body) =
+        http(port, "GET", &format!("/api/v1/runs/{run_id}"), None).expect("run record");
     assert_eq!(status, 200);
     for state in ["created", "validated", "queued", "running", "succeeded"] {
         assert!(body.contains(state), "transition {state} missing: {body}");
@@ -195,18 +204,15 @@ fn walking_skeleton_through_the_real_daemon() {
         body.contains(r#"content_text":"{\"msg\":\"e2e\"}\n""#),
         "captured stdout mismatch: {body}"
     );
-    // Digest recorded matches the sha-256 framing length.
-    assert!(body.contains(&format!("\"digest\":\"{digest}\"")) == false); // digests differ by domain
-    assert!(json_field(&body, "\"digest\":\"").is_some());
+    // Artifact digest present and distinct from the manifest digest
+    // (different hash domains).
+    let artifact_digest: String = json_field(&body, "\"digest\":\"").expect("artifact digest");
+    assert_eq!(artifact_digest.len(), 64);
+    assert_ne!(artifact_digest, digest);
 
     // 7. Unknown resources produce structured 404s.
-    let (status, body) = http(
-        port,
-        "GET",
-        &format!("/api/v1/runs/{}", uuid_v4()),
-        None,
-    )
-    .expect("missing run");
+    let (status, body) =
+        http(port, "GET", &format!("/api/v1/runs/{}", uuid_v4()), None).expect("missing run");
     assert_eq!(status, 404);
     assert!(body.contains("\"not_found\""), "body: {body}");
 }
@@ -245,15 +251,16 @@ fn malformed_requests_get_structured_errors_not_panics() {
     let (_guard, port) = start_daemon();
 
     // Invalid JSON body.
-    let (status, body) = http(port, "POST", "/api/v1/components", Some("{not json"))
-        .expect("bad json");
+    let (status, body) =
+        http(port, "POST", "/api/v1/components", Some("{not json")).expect("bad json");
     assert_eq!(status, 400);
     assert!(body.contains("bad_request"), "body: {body}");
 
     // Wrong schema version.
-    let bad_version = echo_manifest(&uuid_v4()).replace("\"schema_version\": 1", "\"schema_version\": 7");
-    let (status, body) = http(port, "POST", "/api/v1/components", Some(&bad_version))
-        .expect("wrong version");
+    let bad_version =
+        echo_manifest(&uuid_v4()).replace("\"schema_version\": 1", "\"schema_version\": 7");
+    let (status, body) =
+        http(port, "POST", "/api/v1/components", Some(&bad_version)).expect("wrong version");
     assert_eq!(status, 400);
     assert!(body.contains("unsupported_schema_version"), "body: {body}");
 
@@ -267,8 +274,8 @@ fn malformed_requests_get_structured_errors_not_panics() {
                     {"name": "demo.echo", "contract_version": "1.0.0"}
                 ]"#,
     );
-    let (status, body) = http(port, "POST", "/api/v1/components", Some(&invalid))
-        .expect("invalid manifest");
+    let (status, body) =
+        http(port, "POST", "/api/v1/components", Some(&invalid)).expect("invalid manifest");
     assert_eq!(status, 422);
     assert!(body.contains("validation_failed"), "body: {body}");
 }

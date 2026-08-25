@@ -9,7 +9,7 @@
 use std::fmt;
 use std::io::Read;
 
-use serde::{Deserialize, Deserializer, Serialize, Serializer};
+use serde::{Deserialize, Serialize};
 use sha2::{Digest as _, Sha256};
 
 const PREFIX: &[u8] = b"scirust-hub-digest:v1\0";
@@ -194,7 +194,9 @@ mod tests {
         let digest = hash_bytes(DOMAIN_CAPTURE, b"payload");
         let hex = digest.to_hex();
         assert_eq!(hex.len(), 64);
-        assert!(hex.bytes().all(|b| b.is_ascii_lowercase() || b.is_ascii_digit()));
+        assert!(hex
+            .bytes()
+            .all(|b| b.is_ascii_lowercase() || b.is_ascii_digit()));
         assert_eq!(ContentDigest::from_hex(&hex).expect("hex"), digest);
         assert_eq!(
             ContentDigest::from_hex(&hex.to_uppercase()).expect("hex"),

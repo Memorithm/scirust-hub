@@ -34,8 +34,8 @@ pub use artifact::ArtifactMeta;
 pub use capability::{Capability, CapabilityName, Port};
 pub use clock::{Clock, ManualClock, SystemClock};
 pub use component::{
-    ComponentKind, ComponentManifest, ComponentName, ExecutionBinding, ProcessBinding,
-    SourceInfo, MANIFEST_SCHEMA_VERSION,
+    ComponentKind, ComponentManifest, ComponentName, ExecutionBinding, ProcessBinding, SourceInfo,
+    MANIFEST_SCHEMA_VERSION,
 };
 pub use dag::{Dag, DagLimits};
 pub use digest::ContentDigest;
@@ -46,7 +46,6 @@ pub use limits::Limits;
 pub use memory::{FileSystemArtifactStore, InMemoryArtifactMeta, InMemoryComponents, InMemoryRuns};
 pub use orchestrator::{Orchestrator, RegistrationStatus};
 pub use run::{
-    InputBinding, InputProvenance, OutputRef, RunOutcome, RunRecord, RunSpec,
-    RunState, Transition,
+    InputBinding, InputProvenance, OutputRef, RunOutcome, RunRecord, RunSpec, RunState, Transition,
 };
 pub use version::Version;

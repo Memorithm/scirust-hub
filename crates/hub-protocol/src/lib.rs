@@ -18,9 +18,9 @@ use std::collections::BTreeMap;
 use serde::{Deserialize, Serialize};
 
 use hub_core::{
-    ArtifactId, CapabilityName, ComponentId, ComponentKind, ComponentManifest,
-    ComponentName, ContentDigest, ExecutionBinding, InputBinding, RunId, RunRecord,
-    RunSpec, RunState, SourceInfo, Version,
+    ArtifactId, CapabilityName, ComponentId, ComponentKind, ComponentManifest, ComponentName,
+    ContentDigest, ExecutionBinding, InputBinding, RunId, RunRecord, RunSpec, RunState, SourceInfo,
+    Version,
 };
 
 /// Protocol version understood by this build.
@@ -33,7 +33,7 @@ pub enum ProtocolError {
     UnsupportedSchemaVersion { found: u16, expected: u16 },
 }
 
- /// Validates the `schema_version` of an incoming request body.
+/// Validates the `schema_version` of an incoming request body.
 ///
 /// # Errors
 /// [`ProtocolError::UnsupportedSchemaVersion`] for anything but
@@ -105,7 +105,11 @@ impl ErrorEnvelope {
         details: BTreeMap<String, String>,
     ) -> Self {
         Self {
-            error: ErrorBody { code, message: message.into(), details },
+            error: ErrorBody {
+                code,
+                message: message.into(),
+                details,
+            },
         }
     }
 }
@@ -186,8 +190,8 @@ pub struct RegisterComponentResponse {
     pub manifest_digest: String,
 }
 
-/// Wire form of a component manifest. Mirrors
-/// [`ComponentManifest`](hub_core::ComponentManifest) field-for-field;
+/// Wire form of a component manifest. Mirrors `hub_core::ComponentManifest`
+/// field-for-field;
 /// conversion validates through the domain constructor.
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub struct ComponentManifestDto {
@@ -404,12 +408,18 @@ mod convert {
                 inputs: c
                     .inputs
                     .into_iter()
-                    .map(|p| PortDto { name: p.name, description: p.description })
+                    .map(|p| PortDto {
+                        name: p.name,
+                        description: p.description,
+                    })
                     .collect(),
                 outputs: c
                     .outputs
                     .into_iter()
-                    .map(|p| PortDto { name: p.name, description: p.description })
+                    .map(|p| PortDto {
+                        name: p.name,
+                        description: p.description,
+                    })
                     .collect(),
                 properties: c.properties,
             }
@@ -424,12 +434,18 @@ mod convert {
                 inputs: d
                     .inputs
                     .into_iter()
-                    .map(|p| hub_core::Port { name: p.name, description: p.description })
+                    .map(|p| hub_core::Port {
+                        name: p.name,
+                        description: p.description,
+                    })
                     .collect(),
                 outputs: d
                     .outputs
                     .into_iter()
-                    .map(|p| hub_core::Port { name: p.name, description: p.description })
+                    .map(|p| hub_core::Port {
+                        name: p.name,
+                        description: p.description,
+                    })
                     .collect(),
                 properties: d.properties,
             }
@@ -527,7 +543,11 @@ mod convert {
                 transitions: r
                     .transitions
                     .iter()
-                    .map(|t| TransitionDto { from: t.from, to: t.to, at: t.at })
+                    .map(|t| TransitionDto {
+                        from: t.from,
+                        to: t.to,
+                        at: t.at,
+                    })
                     .collect(),
                 outcome: r.outcome.as_ref().map(|o| RunOutcomeDto {
                     exit_code: o.exit_code,
@@ -626,10 +646,7 @@ mod tests {
         let mut dto = ComponentManifestDto::from(manifest);
         dto.metadata.insert("future_hint".into(), "ignored".into());
         let json = serde_json::to_string(&dto).expect("encode");
-        let with_unknown = json.replace(
-            "{\"id\":",
-            "{\"a_future_field\": 42, \"id\":",
-        );
+        let with_unknown = json.replace("{\"id\":", "{\"a_future_field\": 42, \"id\":");
         let decoded: ComponentManifestDto =
             serde_json::from_str(&with_unknown).expect("tolerant decode");
         let back: ComponentManifest = decoded.into();
@@ -648,8 +665,7 @@ mod tests {
             json["error"]["code"],
             serde_json::Value::String("conflict".into())
         );
-        let decoded: ErrorEnvelope =
-            serde_json::from_value(json).expect("decode");
+        let decoded: ErrorEnvelope = serde_json::from_value(json).expect("decode");
         assert_eq!(decoded, envelope);
     }
 
@@ -660,7 +676,7 @@ mod tests {
             Err(ProtocolError::UnsupportedSchemaVersion { found, expected }) => {
                 assert_eq!(found, 99);
                 assert_eq!(expected, PROTOCOL_VERSION);
-            },
+            }
             Ok(()) => panic!("should reject unknown versions"),
         }
     }
