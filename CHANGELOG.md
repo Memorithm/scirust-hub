@@ -8,6 +8,16 @@ pre-1.0 (`0.x`), so minor bumps may contain breaking changes.
 
 ### Added
 
+- Read-only MCP adapter (`hub-mcp`, binary `scirust-hub-mcp`, ADR-0007):
+  JSON-RPC 2.0 over NDJSON stdio mirroring scirust-mcp's protocol shape
+  (version `2025-06-18`). Tools: hub.status, hub.list_components (with
+  capability filter), hub.get_component, hub.list_runs/get_run,
+  hub.list_workflows/get_workflow, hub.list_artifacts/get_artifact.
+  Introspection only — no execution entry points; the adapter reaches a
+  running daemon over HTTP.
+
+### Added
+
 - Run reproduction closing the provenance loop:
   `POST /api/v1/runs/{id}/reproduce` and `scirust-hub run reproduce <id>
   [--wait]` re-submit a recorded run's exact stored spec as a new queued run

@@ -1,0 +1,21 @@
+[package]
+name = "hub-mcp"
+description = "Read-only MCP adapter exposing SciRust Hub introspection as MCP tools"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+publish.workspace = true
+repository.workspace = true
+
+[dependencies]
+serde_json = { workspace = true }
+ureq = { workspace = true }
+thiserror = { workspace = true }
+clap = { workspace = true }
+
+[lints]
+workspace = true
+
+[[bin]]
+name = "scirust-hub-mcp"
+path = "src/main.rs"
