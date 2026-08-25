@@ -1,0 +1,41 @@
+[workspace]
+resolver = "2"
+members = [
+    "crates/hub-core",
+    "crates/hub-protocol",
+    "crates/hub-executor",
+    "crates/hub-api",
+    "apps/scirust-hub",
+    "apps/scirust-hubd",
+]
+
+[workspace.package]
+version = "0.1.0"
+edition = "2021"
+rust-version = "1.89"
+publish = false
+repository = "https://github.com/Memorithm/scirust-hub"
+
+[workspace.dependencies]
+hub-core = { path = "crates/hub-core" }
+hub-protocol = { path = "crates/hub-protocol" }
+hub-executor = { path = "crates/hub-executor" }
+hub-api = { path = "crates/hub-api" }
+
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+thiserror = "2"
+uuid = { version = "1", features = ["v4", "serde"] }
+sha2 = "0.10"
+clap = { version = "4", features = ["derive", "env"] }
+axum = { version = "0.8", default-features = false, features = ["http1", "json", "tokio"] }
+tokio = { version = "1", features = ["rt-multi-thread", "net", "macros", "signal", "time"] }
+tower = { version = "0.5", features = ["util"] }
+tracing = "0.1"
+tracing-subscriber = { version = "0.3", features = ["env-filter", "fmt"] }
+
+[workspace.lints.rust]
+unsafe_code = "forbid"
+
+[profile.release]
+lto = "thin"
