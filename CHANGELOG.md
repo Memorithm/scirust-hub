@@ -4,6 +4,23 @@ All notable changes to SciRust Hub are documented here. Format follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/); versioning is
 pre-1.0 (`0.x`), so minor bumps may contain breaking changes.
 
+## [0.2.0] - 2026-08-25
+
+### Added
+
+- Durable persistence (`hub-store-sqlite`): all three repository ports over
+  one embedded SQLite database — WAL journaling with `synchronous=FULL`,
+  forward-only migrations recorded in `schema_migrations`, canonical JSON
+  storage with projected columns for ordering/lookup, parameterized SQL only.
+- Daemon `--store sqlite|memory` switch; `sqlite` is the default so daemon
+  state survives restarts (proven by a kill -9 restart e2e test).
+
+### Fixed
+
+- Store-level semantics pinned by tests to match the in-memory backend
+  exactly (lexicographic component-version ordering, idempotent replay,
+  digest-carrying conflicts, immutable artifact metadata rows).
+
 ## [0.1.0] - 2026-08-25
 
 Foundation: first tested vertical slice.

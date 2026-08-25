@@ -10,6 +10,7 @@ repository.workspace = true
 [dependencies]
 hub-core = { workspace = true }
 hub-executor = { workspace = true }
+hub-store-sqlite = { workspace = true }
 hub-api = { workspace = true }
 axum = { workspace = true }
 tokio = { workspace = true }
