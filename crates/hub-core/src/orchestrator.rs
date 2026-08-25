@@ -972,6 +972,59 @@ impl Orchestrator {
         Ok(record.clone())
     }
 
+    /// Reproduces a recorded run: re-submits its exact stored spec (same
+    /// component id + version, capability, canonical parameters and input
+    /// bindings) as a NEW queued run linked back via `reproduced_from`.
+    ///
+    /// Preconditions checked here: the original record exists, the component
+    /// is still registered at the same version, and every input artifact is
+    /// still present. Execution still goes through the normal
+    /// [`Self::execute_run`] path.
+    ///
+    /// # Errors
+    /// [`CoreError::RunNotFound`] for unknown originals,
+    /// [`CoreError::ComponentNotFound`] when the component vanished,
+    /// [`CoreError::Validation`] when its version drifted or inputs are
+    /// missing, storage failures otherwise.
+    #[instrument(skip_all, fields(run = %run_id))]
+    pub fn reproduce_run(&self, run_id: RunId) -> Result<RunRecord, CoreError> {
+        let original = self
+            .runs
+            .get(&run_id)?
+            .ok_or(CoreError::RunNotFound(run_id))?;
+
+        // The component must still exist at the same version so the spec's
+        // meaning cannot silently drift between the two executions.
+        let manifest = self
+            .components
+            .latest(&original.spec.component)?
+            .ok_or(CoreError::ComponentNotFound(original.spec.component))?;
+        if manifest.version != original.component_version {
+            return Err(CoreError::Validation(format!(
+                "component {} evolved to {} since the original run (recorded {}); \
+                 reproduction requires the same version",
+                manifest.id, manifest.version, original.component_version
+            )));
+        }
+
+        // Input artifacts must still be resolvable.
+        for input in &original.spec.inputs {
+            if self.artifacts_meta.get(&input.artifact)?.is_none() {
+                return Err(CoreError::ArtifactNotFound(input.artifact));
+            }
+        }
+
+        let mut reproduction = self.submit_run(original.spec.clone())?;
+        reproduction.reproduced_from = Some(run_id);
+        self.runs.put(&reproduction)?;
+        info!(
+            run = %reproduction.id,
+            reproduced_from = %run_id,
+            "run queued for reproduction"
+        );
+        Ok(reproduction)
+    }
+
     #[must_use]
     pub fn workflow(&self, id: &crate::id::WorkflowId) -> Option<crate::workflow::WorkflowRecord> {
         self.workflows.get(id).ok().flatten()
@@ -1858,6 +1911,72 @@ mod tests {
         assert!(outcome.inputs.iter().any(|i| &i.artifact == expected_input));
 
         let _ = std::fs::remove_dir_all(dir);
+    }
+
+    #[test]
+    fn reproduction_relinks_specs_and_guards_against_drift() {
+        let (hub, _clock) = hub(None);
+        let manifest = echo_manifest(ComponentId::generate());
+        hub.orch
+            .register_component(manifest.clone())
+            .expect("register");
+
+        let original = hub
+            .orch
+            .submit_run(RunSpec {
+                component: manifest.id,
+                capability: CapabilityName::parse("demo.echo").expect("cap"),
+                parameters: BTreeMap::from([("msg".to_owned(), serde_json::json!("reproduce-me"))]),
+                inputs: vec![],
+                timeout_ms: 1_000,
+            })
+            .expect("submit");
+
+        // Unknown originals are 404-style errors.
+        assert!(matches!(
+            hub.orch.reproduce_run(RunId::generate()),
+            Err(CoreError::RunNotFound(_))
+        ));
+
+        // Reproduction creates a queued run linked to the original.
+        let reproduction = hub.orch.reproduce_run(original.id).expect("reproduce");
+        assert_eq!(reproduction.state, RunState::Queued);
+        assert_eq!(reproduction.reproduced_from, Some(original.id));
+        assert_eq!(reproduction.spec.parameters, original.spec.parameters);
+        let _ = hub.orch.execute_run(reproduction.id).expect("execute copy");
+
+        // Component version drift blocks reproduction of the old run.
+        let drifted = echo_manifest(manifest.id);
+        let drifted = ComponentManifest {
+            version: Version::parse("9.9.9").expect("v"),
+            ..drifted
+        };
+        hub.orch.register_component(drifted).expect("register v9");
+        match hub.orch.reproduce_run(original.id) {
+            Err(CoreError::Validation(msg)) => {
+                assert!(msg.contains("evolved"), "message: {msg}");
+            }
+            other => panic!("expected drift rejection, got {other:?}"),
+        }
+
+        // A run recorded under the CURRENT version reproduces fine.
+        let current = hub
+            .orch
+            .submit_run(RunSpec {
+                component: manifest.id,
+                capability: CapabilityName::parse("demo.echo").expect("cap"),
+                parameters: BTreeMap::new(),
+                inputs: vec![],
+                timeout_ms: 1_000,
+            })
+            .expect("submit under v9");
+        assert_eq!(current.component_version.as_str(), "9.9.9");
+        let again = hub
+            .orch
+            .reproduce_run(current.id)
+            .expect("reproduce current");
+        assert_eq!(again.reproduced_from, Some(current.id));
+        assert_eq!(again.spec.parameters, current.spec.parameters);
     }
 
     #[test]

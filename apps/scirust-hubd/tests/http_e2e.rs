@@ -585,3 +585,90 @@ fn two_step_workflow_chains_artifacts_over_http() {
     assert_eq!(status, 422, "body: {body}");
     assert!(body.contains("not executable"), "body: {body}");
 }
+
+#[test]
+fn reproduction_round_trip_through_the_daemon() {
+    let (_guard, port) = start_daemon();
+
+    let id = uuid_v4();
+    let (status, _) = http(
+        port,
+        "POST",
+        "/api/v1/components",
+        Some(&echo_manifest(&id)),
+    )
+    .expect("register");
+    assert_eq!(status, 201);
+
+    // Original run, executed.
+    let submit = serde_json::json!({
+        "schema_version": 1,
+        "run_spec": {
+            "component": id,
+            "capability": "demo.echo",
+            "parameters": {"msg": "to-reproduce"},
+            "inputs": [],
+            "timeout_ms": 5000
+        }
+    })
+    .to_string();
+    let (status, body) = http(port, "POST", "/api/v1/runs", Some(&submit)).expect("submit");
+    assert_eq!(status, 201);
+    let original_id: String = json_field(&body, "\"id\":\"").expect("original id");
+    let (_, executed) = http(
+        port,
+        "POST",
+        "/api/v1/executions",
+        Some(&serde_json::json!(original_id).to_string()),
+    )
+    .expect("execute");
+    assert!(executed.contains("\"succeeded\""), "{executed}");
+
+    // Reproduce: new queued run carrying reproduced_from.
+    let (status, body) = http(
+        port,
+        "POST",
+        &format!("/api/v1/runs/{original_id}/reproduce"),
+        None,
+    )
+    .expect("reproduce");
+    assert_eq!(status, 201, "body: {body}");
+    assert!(
+        body.contains(&format!("\"reproduced_from\":\"{original_id}\"")),
+        "link missing: {body}"
+    );
+    let repro_id: String = json_field(&body, "\"id\":\"").expect("repro id");
+
+    // Execute the reproduction; identical params digest proves spec parity.
+    let (_, repro_executed) = http(
+        port,
+        "POST",
+        "/api/v1/executions",
+        Some(&serde_json::json!(repro_id).to_string()),
+    )
+    .expect("execute repro");
+    assert!(repro_executed.contains("\"succeeded\""), "{repro_executed}");
+    let original_digest: String =
+        json_field(&executed, "\"params_digest\":\"").expect("original params digest");
+    let repro_digest: String =
+        json_field(&repro_executed, "\"params_digest\":\"").expect("repro params digest");
+    assert_eq!(
+        original_digest, repro_digest,
+        "same spec must hash identically"
+    );
+
+    // Version drift blocks reproduction of runs recorded under old versions.
+    let drifted = echo_manifest(&id).replace("\"version\": \"1.0.0\"", "\"version\": \"2.0.0\"");
+    let (status, _) =
+        http(port, "POST", "/api/v1/components", Some(&drifted)).expect("register v2");
+    assert_eq!(status, 201);
+    let (status, body) = http(
+        port,
+        "POST",
+        &format!("/api/v1/runs/{original_id}/reproduce"),
+        None,
+    )
+    .expect("reproduce after drift");
+    assert_eq!(status, 422, "body: {body}");
+    assert!(body.contains("evolved"), "body: {body}");
+}

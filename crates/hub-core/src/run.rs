@@ -254,6 +254,10 @@ pub struct RunRecord {
     pub transitions: Vec<Transition>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub outcome: Option<RunOutcome>,
+    /// Set when this run re-executes a previous one from its recorded spec
+    /// (the reproduction loop of the provenance story).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub reproduced_from: Option<RunId>,
 }
 
 impl RunRecord {
@@ -282,6 +286,7 @@ impl RunRecord {
             finished_at: None,
             transitions: Vec::new(),
             outcome: None,
+            reproduced_from: None,
         })
     }
 
@@ -438,6 +443,31 @@ mod tests {
             s1.params_digest().expect("digest"),
             s2.params_digest().expect("digest")
         );
+    }
+
+    #[test]
+    fn reproduced_from_is_backward_compatible_and_round_trips() {
+        // Old records without the field deserialize as None.
+        let mut rec = RunRecord::create(
+            spec(),
+            "demo".into(),
+            Version::parse("1.0.0").expect("v"),
+            Version::parse("1.0.0").expect("v"),
+            1,
+            &Limits::default(),
+        )
+        .expect("valid");
+        rec.transition(RunState::Failed, 2).expect("legal");
+        let old_json = serde_json::to_string(&rec).expect("encode");
+        assert!(!old_json.contains("reproduced_from"));
+        let decoded: RunRecord = serde_json::from_str(&old_json).expect("decode");
+        assert_eq!(decoded.reproduced_from, None);
+
+        // New records carry the link and round-trip it.
+        rec.reproduced_from = Some(RunId::generate());
+        let new_json = serde_json::to_string(&rec).expect("encode");
+        let redelivered: RunRecord = serde_json::from_str(&new_json).expect("decode");
+        assert_eq!(redelivered, rec);
     }
 
     #[test]

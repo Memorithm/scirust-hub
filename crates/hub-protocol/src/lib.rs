@@ -306,6 +306,8 @@ pub struct RunDto {
     pub transitions: Vec<TransitionDto>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub outcome: Option<RunOutcomeDto>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub reproduced_from: Option<RunId>,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
@@ -653,6 +655,7 @@ mod convert {
                     params_digest: o.params_digest,
                     failure: o.failure.clone(),
                 }),
+                reproduced_from: r.reproduced_from,
             }
         }
     }

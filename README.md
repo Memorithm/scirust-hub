@@ -61,6 +61,13 @@ cargo run -p scirust-hub -- --output json run submit \
     --wait
 cargo run -p scirust-hub -- run list
 cargo run -p scirust-hub -- artifact inspect <artifact-uuid> --content
+
+# reproduce a recorded run from its stored spec (same component version,
+# same parameters digest, linked via reproduced_from):
+cargo run -p scirust-hub -- run reproduce <run-uuid> --wait
+
+# discovery: components declaring a capability
+curl -s "http://127.0.0.1:8477/api/v1/components?capability=demo.echo"
 ```
 
 An in-process demo pipeline (no daemon needed):

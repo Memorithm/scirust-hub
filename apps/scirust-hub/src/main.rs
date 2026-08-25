@@ -105,6 +105,13 @@ enum RunCommand {
     Cancel {
         id: String,
     },
+    /// Re-submit a recorded run from its stored spec, linked back to it.
+    Reproduce {
+        id: String,
+        /// Execute the reproduction immediately and wait for completion.
+        #[arg(long)]
+        wait: bool,
+    },
 }
 
 #[derive(Debug, Subcommand)]
@@ -276,6 +283,36 @@ fn dispatch(args: &Args) -> Result<(), CliError> {
                     }
                     if let Some(failure) = outcome["failure"].as_str() {
                         println!("failure: {failure}");
+                    }
+                }
+            })
+        }
+        Command::Run(RunCommand::Reproduce { id, wait }) => {
+            let response = post_empty(url_of(args, &format!("/api/v1/runs/{id}/reproduce")))?;
+            if !*wait {
+                return emit(args, &response, |v| {
+                    println!("run {}: {}", v["run"]["id"], v["run"]["state"]);
+                    println!(
+                        "reproduced_from: {}",
+                        v["run"]["reproduced_from"].as_str().unwrap_or("?")
+                    );
+                });
+            }
+            let new_id = response["run"]["id"]
+                .as_str()
+                .ok_or_else(|| CliError::BadResponse("missing run id".into()))?
+                .to_owned();
+            let executed = send_json(
+                ureq::post(&url_of(args, "/api/v1/executions")),
+                serde_json::json!(new_id),
+            )?;
+            emit(args, &executed, |v| {
+                println!("run {}: {}", v["id"], v["state"]);
+                if !v["outcome"].is_null() {
+                    let o = &v["outcome"];
+                    println!("exit_code: {}", o["exit_code"]);
+                    for out in o["outputs"].as_array().cloned().unwrap_or_default() {
+                        println!("output: {} artifact={}", out["name"], out["artifact"]);
                     }
                 }
             })
