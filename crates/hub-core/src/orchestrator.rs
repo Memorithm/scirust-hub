@@ -523,9 +523,24 @@ impl Orchestrator {
         self.runs.get(run_id).ok().flatten()
     }
 
+    /// All runs in deterministic `(created_at, id)` order.
+    ///
+    /// # Errors
+    /// Storage failures only.
+    pub fn list_runs(&self) -> Result<Vec<RunRecord>, CoreError> {
+        self.runs.list()
+    }
+
     #[must_use]
     pub fn runs(&self) -> Vec<RunRecord> {
         self.runs.list().unwrap_or_default()
+    }
+
+    /// All artifact metadata in deterministic `(created_at, id)` order;
+    /// empty when the metadata store errors (read-only convenience).
+    #[must_use]
+    pub fn artifacts(&self) -> Vec<crate::artifact::ArtifactMeta> {
+        self.artifacts_meta.list().unwrap_or_default()
     }
 
     #[must_use]
@@ -552,6 +567,12 @@ impl Orchestrator {
     #[must_use]
     pub fn blob_store(&self) -> &FileSystemArtifactStore {
         &self.blobs
+    }
+
+    /// Backend identifier of the wired executor (surfaced for operators).
+    #[must_use]
+    pub fn executor_backend_id(&self) -> &str {
+        self.executor.backend_id()
     }
 }
 
