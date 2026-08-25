@@ -1,6 +1,6 @@
 [package]
 name = "hub-executor"
-description = "Executor backends for SciRust Hub: capped local process execution and deterministic mock"
+description = "Executor backends for SciRust Hub: capped local process execution and a deterministic mock"
 version.workspace = true
 edition.workspace = true
 rust-version.workspace = true
