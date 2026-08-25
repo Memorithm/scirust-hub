@@ -21,12 +21,12 @@ jobs:
       - name: Apply reviewed patch
         shell: bash
         run: |
-          git show HEAD^:.github/workflows/pr6-review-fix.yml > /tmp/previous-fix.yml
+          git show e273675248b87f002627196e885e55d730899b0c:.github/workflows/pr6-review-fix.yml > /tmp/original-fix.yml
           python3 - <<'PY'
           from pathlib import Path
           import textwrap
 
-          workflow = Path('/tmp/previous-fix.yml').read_text()
+          workflow = Path('/tmp/original-fix.yml').read_text()
           marker = "          python3 - <<'PY'\n"
           start = workflow.index(marker) + len(marker)
           end = workflow.index("\n          PY", start)
@@ -60,17 +60,37 @@ jobs:
         run: cargo fmt --all
       - name: Format check
         run: cargo fmt --all -- --check
-      - name: Clippy
-        run: cargo clippy --workspace --all-targets --all-features --locked -- -D warnings
+      - name: Clippy diagnostic
+        id: clippy
+        continue-on-error: true
+        shell: bash
+        run: cargo clippy --workspace --all-targets --all-features --locked -- -D warnings > /tmp/pr6-clippy.txt 2>&1
+      - name: Upload diagnostic
+        uses: actions/upload-artifact@v4
+        with:
+          name: pr6-clippy-diagnostic
+          path: |
+            /tmp/pr6-clippy.txt
+            crates/hub-core/src/orchestrator.rs
+      - name: Require clean Clippy
+        if: steps.clippy.outcome != 'success'
+        shell: bash
+        run: |
+          cat /tmp/pr6-clippy.txt
+          exit 1
       - name: Build
+        if: steps.clippy.outcome == 'success'
         run: cargo build --workspace --all-targets --locked
       - name: Test
+        if: steps.clippy.outcome == 'success'
         run: cargo test --workspace --all-features --locked
       - name: Doc
+        if: steps.clippy.outcome == 'success'
         env:
           RUSTDOCFLAGS: -D warnings
         run: cargo doc --workspace --no-deps
       - name: Commit verified fixes
+        if: steps.clippy.outcome == 'success'
         shell: bash
         run: |
           git config user.name "SciRust Hub review fix"
