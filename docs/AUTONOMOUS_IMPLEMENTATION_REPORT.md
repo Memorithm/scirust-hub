@@ -132,6 +132,23 @@ domain construction time instead.
 - Idempotency scope: registration replays are byte-exact canonical JSON;
   whitespace differences in incoming JSON normalize away via re-serialization.
 
+## CI status
+
+PR checks: **blocked by GitHub infrastructure, not by this code.** The
+workflow run fails in ~2 s before executing any step with the annotation:
+
+```text
+The job was not started because recent account payments have failed or your
+spending limit needs to be increased. Please check the 'Billing & plans'
+section in your settings.
+```
+
+Verified persistent across a manual re-run. Resolving it requires an account
+billing action outside this repository's scope. The workflow file runs the
+exact same six gates documented above, which all pass locally on the same
+commit; once billing is resolved, `gh run rerun` should reproduce these
+results remotely.
+
 ## Recommended next PR
 
 SQLite persistence behind `RunRepository`/`ComponentRepository`/
