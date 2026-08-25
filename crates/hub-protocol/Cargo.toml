@@ -1,6 +1,6 @@
 [package]
 name = "hub-protocol"
-description = "Versioned wire protocol DTOs for SciRust Hub"
+description = "Versioned wire protocol DTOs for the SciRust Hub HTTP API"
 version.workspace = true
 edition.workspace = true
 rust-version.workspace = true
