@@ -48,6 +48,7 @@ pub fn router(state: HubState) -> Router {
         .route("/api/v1/runs", post(submit_run).get(list_runs))
         .route("/api/v1/runs/{id}", get(get_run))
         .route("/api/v1/runs/{id}/cancel", post(cancel_run))
+        .route("/api/v1/runs/{id}/reproduce", post(reproduce_run))
         .route("/api/v1/executions", post(execute_run))
         .route(
             "/api/v1/workflows",
@@ -142,9 +143,21 @@ async fn register_component(
     }
 }
 
-async fn list_components(State(state): State<HubState>) -> Response {
+async fn list_components(
+    State(state): State<HubState>,
+    Query(query): Query<std::collections::HashMap<String, String>>,
+) -> Response {
     let orch = state.orchestrator.clone();
-    match joined(tokio::task::spawn_blocking(move || orch.components()).await) {
+    let capability_filter = query.get("capability").cloned();
+    match joined(
+        tokio::task::spawn_blocking(move || match capability_filter {
+            Some(name) => hub_core::CapabilityName::parse(&name)
+                .map_err(|e| CoreError::Validation(e.to_string()))
+                .and_then(|capability| orch.discover_by_capability(&capability)),
+            None => orch.components(),
+        })
+        .await,
+    ) {
         Ok(components) => Json(proto::ComponentListResponse {
             components: components.iter().map(proto::ComponentDto::from).collect(),
         })
@@ -262,6 +275,26 @@ async fn cancel_run(State(state): State<HubState>, Path(id): Path<String>) -> Re
             signalled_active_execution: signalled,
         })
         .into_response(),
+        Err(response) => response,
+    }
+}
+
+/// Reproduces a recorded run: re-submits its stored spec as a new queued run
+/// linked via `reproduced_from`.
+async fn reproduce_run(State(state): State<HubState>, Path(id): Path<String>) -> Response {
+    let Some(parsed) = typed_id::<hub_core::RunId>(&id) else {
+        return not_found("run", &id);
+    };
+    let orch = state.orchestrator.clone();
+    match joined(tokio::task::spawn_blocking(move || orch.reproduce_run(parsed)).await) {
+        Ok(record) => {
+            let mut response = Json(proto::SubmitRunResponse {
+                run: proto::RunDto::from(&record),
+            })
+            .into_response();
+            *response.status_mut() = StatusCode::CREATED;
+            response
+        }
         Err(response) => response,
     }
 }
@@ -947,6 +980,138 @@ mod tests {
                 .len()
                 >= 4
         );
+    }
+
+    #[tokio::test]
+    async fn component_filter_by_capability() {
+        let (state, _clock, _dir) = test_state();
+        let app = router(state);
+        let register = Request::builder()
+            .method("POST")
+            .uri("/api/v1/components")
+            .header("content-type", "application/json")
+            .body(Body::from(sample_manifest_json()))
+            .expect("req");
+        let (status, _) = send(app.clone(), register).await;
+        assert_eq!(status, StatusCode::CREATED);
+
+        // Matching filter returns the declaring component.
+        let (status, list) = send(
+            app.clone(),
+            Request::builder()
+                .uri("/api/v1/components?capability=demo.echo")
+                .body(Body::empty())
+                .expect("req"),
+        )
+        .await;
+        assert_eq!(status, StatusCode::OK);
+        assert_eq!(list["components"].as_array().expect("arr").len(), 1);
+
+        // Declared-but-unmatched filter returns empty list.
+        let (status, list) = send(
+            app.clone(),
+            Request::builder()
+                .uri("/api/v1/components?capability=other.thing")
+                .body(Body::empty())
+                .expect("req"),
+        )
+        .await;
+        assert_eq!(status, StatusCode::OK);
+        assert!(list["components"].as_array().expect("arr").is_empty());
+
+        // Malformed capability names are 422 validation errors.
+        let (status, body) = send(
+            app,
+            Request::builder()
+                .uri("/api/v1/components?capability=BAD%20NAME")
+                .body(Body::empty())
+                .expect("req"),
+        )
+        .await;
+        assert_eq!(status, StatusCode::UNPROCESSABLE_ENTITY);
+        assert_eq!(body["error"]["code"], "validation_failed");
+    }
+
+    #[tokio::test]
+    async fn reproduce_endpoint_links_and_executes() {
+        let (state, _clock, _dir) = test_state();
+        let app = router(state);
+
+        let register = Request::builder()
+            .method("POST")
+            .uri("/api/v1/components")
+            .header("content-type", "application/json")
+            .body(Body::from(sample_manifest_json()))
+            .expect("req");
+        let (_, registered) = send(app.clone(), register).await;
+        let component_id = registered["component"]["id"].as_str().unwrap().to_owned();
+
+        let spec = serde_json::json!({
+            "schema_version": PROTOCOL_VERSION,
+            "run_spec": {
+                "component": component_id,
+                "capability": "demo.echo",
+                "parameters": {"msg": "original"},
+                "inputs": [],
+                "timeout_ms": 5000
+            }
+        });
+        let submit = Request::builder()
+            .method("POST")
+            .uri("/api/v1/runs")
+            .header("content-type", "application/json")
+            .body(Body::from(spec.to_string()))
+            .expect("req");
+        let (_, submitted) = send(app.clone(), submit).await;
+        let run_id = submitted["run"]["id"].as_str().unwrap().to_owned();
+
+        // Reproduce -> new queued run linked to the original.
+        let repro = Request::builder()
+            .method("POST")
+            .uri(format!("/api/v1/runs/{run_id}/reproduce"))
+            .body(Body::empty())
+            .expect("req");
+        let (status, body) = send(app.clone(), repro).await;
+        assert_eq!(status, StatusCode::CREATED);
+        assert_eq!(body["run"]["reproduced_from"], serde_json::json!(run_id));
+        assert_eq!(body["run"]["state"], "queued");
+        let repro_id = body["run"]["id"].as_str().unwrap().to_owned();
+
+        // Execute the reproduction through the normal path.
+        let exec = Request::builder()
+            .method("POST")
+            .uri("/api/v1/executions")
+            .header("content-type", "application/json")
+            .body(Body::from(serde_json::json!(repro_id).to_string()))
+            .expect("req");
+        let (status, executed) = send(app.clone(), exec).await;
+        assert_eq!(status, StatusCode::OK);
+        assert_eq!(executed["state"], "succeeded");
+
+        // The original run is untouched and still queryable.
+        let (status, original) = send(
+            app.clone(),
+            Request::builder()
+                .uri(format!("/api/v1/runs/{run_id}"))
+                .body(Body::empty())
+                .expect("req"),
+        )
+        .await;
+        assert_eq!(status, StatusCode::OK);
+        assert_eq!(original["id"], serde_json::json!(run_id));
+
+        // Unknown runs produce the canonical 404 envelope.
+        let (status, body) = send(
+            app.clone(),
+            Request::builder()
+                .method("POST")
+                .uri(format!("/api/v1/runs/{}/reproduce", uuid::Uuid::new_v4()))
+                .body(Body::empty())
+                .expect("req"),
+        )
+        .await;
+        assert_eq!(status, StatusCode::NOT_FOUND);
+        assert_eq!(body["error"]["code"], "not_found");
     }
 
     #[tokio::test]

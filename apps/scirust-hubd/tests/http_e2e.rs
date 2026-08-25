@@ -429,25 +429,15 @@ fn declared_output_files_round_trip_through_http() {
 /// ComponentDto serializes `id` immediately before `name`, so the closest
 /// preceding id belongs to that object.
 fn find_component_id_by_name(list_json: &str, name: &str) -> Option<String> {
-    let needle = format!("\"name\":\"{name}\"");
-    let mut search_from = 0;
-    while let Some(rel) = list_json[search_from..].find(&needle) {
-        let name_pos = search_from + rel;
-        let id_key = list_json[..name_pos].rfind("\"id\":\"")?;
-        let raw = &list_json[id_key + "\"id\":\"".len()..];
-        // Ensure this id is not claimed by an earlier name match.
-        let prev_name = list_json[..id_key].rfind("\"name\":\"");
-        let valid = prev_name.is_none_or(|p| p < search_from || p < name_pos && false);
-        if valid
-            || prev_name
-                .map(|p| p < name_pos.saturating_sub(needle.len()))
-                .unwrap_or(true)
-        {
-            return Some(raw.chars().take_while(|c| *c != '"').collect());
-        }
-        search_from = name_pos + needle.len();
-    }
-    None
+    let value: serde_json::Value = serde_json::from_str(list_json).ok()?;
+    value
+        .get("components")?
+        .as_array()?
+        .iter()
+        .find(|component| component.get("name").and_then(serde_json::Value::as_str) == Some(name))
+        .and_then(|component| component.get("id"))
+        .and_then(serde_json::Value::as_str)
+        .map(ToOwned::to_owned)
 }
 
 #[test]
@@ -584,4 +574,91 @@ fn two_step_workflow_chains_artifacts_over_http() {
     .expect("re-execute");
     assert_eq!(status, 422, "body: {body}");
     assert!(body.contains("not executable"), "body: {body}");
+}
+
+#[test]
+fn reproduction_round_trip_through_the_daemon() {
+    let (_guard, port) = start_daemon();
+
+    let id = uuid_v4();
+    let (status, _) = http(
+        port,
+        "POST",
+        "/api/v1/components",
+        Some(&echo_manifest(&id)),
+    )
+    .expect("register");
+    assert_eq!(status, 201);
+
+    // Original run, executed.
+    let submit = serde_json::json!({
+        "schema_version": 1,
+        "run_spec": {
+            "component": id,
+            "capability": "demo.echo",
+            "parameters": {"msg": "to-reproduce"},
+            "inputs": [],
+            "timeout_ms": 5000
+        }
+    })
+    .to_string();
+    let (status, body) = http(port, "POST", "/api/v1/runs", Some(&submit)).expect("submit");
+    assert_eq!(status, 201);
+    let original_id: String = json_field(&body, "\"id\":\"").expect("original id");
+    let (_, executed) = http(
+        port,
+        "POST",
+        "/api/v1/executions",
+        Some(&serde_json::json!(original_id).to_string()),
+    )
+    .expect("execute");
+    assert!(executed.contains("\"succeeded\""), "{executed}");
+
+    // Reproduce: new queued run carrying reproduced_from.
+    let (status, body) = http(
+        port,
+        "POST",
+        &format!("/api/v1/runs/{original_id}/reproduce"),
+        None,
+    )
+    .expect("reproduce");
+    assert_eq!(status, 201, "body: {body}");
+    assert!(
+        body.contains(&format!("\"reproduced_from\":\"{original_id}\"")),
+        "link missing: {body}"
+    );
+    let repro_id: String = json_field(&body, "\"id\":\"").expect("repro id");
+
+    // Execute the reproduction; identical params digest proves spec parity.
+    let (_, repro_executed) = http(
+        port,
+        "POST",
+        "/api/v1/executions",
+        Some(&serde_json::json!(repro_id).to_string()),
+    )
+    .expect("execute repro");
+    assert!(repro_executed.contains("\"succeeded\""), "{repro_executed}");
+    let original_digest: String =
+        json_field(&executed, "\"params_digest\":\"").expect("original params digest");
+    let repro_digest: String =
+        json_field(&repro_executed, "\"params_digest\":\"").expect("repro params digest");
+    assert_eq!(
+        original_digest, repro_digest,
+        "same spec must hash identically"
+    );
+
+    // Version drift blocks reproduction of runs recorded under old versions.
+    let drifted = echo_manifest(&id).replace("\"version\": \"1.0.0\"", "\"version\": \"2.0.0\"");
+    let (status, _) =
+        http(port, "POST", "/api/v1/components", Some(&drifted)).expect("register v2");
+    assert_eq!(status, 201);
+    let (status, body) = http(
+        port,
+        "POST",
+        &format!("/api/v1/runs/{original_id}/reproduce"),
+        None,
+    )
+    .expect("reproduce after drift");
+    assert_eq!(status, 422, "body: {body}");
+    assert!(body.contains("evolved"), "body: {body}");
 }

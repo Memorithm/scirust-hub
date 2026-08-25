@@ -8,6 +8,19 @@ pre-1.0 (`0.x`), so minor bumps may contain breaking changes.
 
 ### Added
 
+- Run reproduction closing the provenance loop:
+  `POST /api/v1/runs/{id}/reproduce` and `scirust-hub run reproduce <id>
+  [--wait]` re-submit a recorded run's exact stored spec as a new queued run
+  linked via `reproduced_from`. Guards: the component must still be
+  registered at the same version (drift is a validation error) and every
+  input artifact must still exist. `RunRecord.reproduced_from` is additive
+  and backward-compatible with stored records.
+- Capability discovery over HTTP: `GET /api/v1/components?capability=<name>`
+  filters to latest manifests declaring that capability; malformed names
+  return structured validation errors.
+
+### Added
+
 - Sequential workflow orchestration (ADR-0006): multi-step specs with unique
   step keys, explicit `after` dependencies and cross-step input references
   (`from_step`); deterministic topological execution via the DAG primitive,

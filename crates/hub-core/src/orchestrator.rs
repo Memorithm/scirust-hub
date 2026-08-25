@@ -130,13 +130,16 @@ impl Orchestrator {
         &self,
         capability: &CapabilityName,
     ) -> Result<Vec<ComponentManifest>, CoreError> {
-        let mut out = Vec::new();
+        // `ComponentRepository::list` is ordered by `(id, version)`;
+        // overwriting by id therefore retains exactly the latest manifest.
+        let mut latest_by_id: BTreeMap<ComponentId, ComponentManifest> = BTreeMap::new();
         for manifest in self.components.list()? {
-            if manifest.capability(capability).is_some() {
-                out.push(manifest);
-            }
+            latest_by_id.insert(manifest.id, manifest);
         }
-        Ok(out)
+        Ok(latest_by_id
+            .into_values()
+            .filter(|manifest| manifest.capability(capability).is_some())
+            .collect())
     }
 
     // ------------------------------------------------------------------
@@ -153,11 +156,28 @@ impl Orchestrator {
     /// / spec or storage failures.
     #[instrument(skip_all, fields(capability = %spec.capability))]
     pub fn submit_run(&self, spec: RunSpec) -> Result<RunRecord, CoreError> {
+        self.submit_run_internal(spec, None, None)
+    }
+
+    fn submit_run_internal(
+        &self,
+        spec: RunSpec,
+        reproduced_from: Option<RunId>,
+        required_component_version: Option<crate::Version>,
+    ) -> Result<RunRecord, CoreError> {
         spec.validate(&self.limits)?;
         let manifest = self
             .components
             .latest(&spec.component)?
             .ok_or(CoreError::ComponentNotFound(spec.component))?;
+        if let Some(required_version) =
+            required_component_version.filter(|version| manifest.version != *version)
+        {
+            return Err(CoreError::Validation(format!(
+                "component {} evolved to {} since the original run (recorded {}); reproduction requires the same version",
+                manifest.id, manifest.version, required_version
+            )));
+        }
         let capability: Capability = manifest
             .capability(&spec.capability)
             .ok_or_else(|| CoreError::CapabilityNotDeclared {
@@ -208,6 +228,7 @@ impl Orchestrator {
             now,
             &self.limits,
         )?;
+        record.reproduced_from = reproduced_from;
         record.transition(RunState::Validated, now)?;
         record.transition(RunState::Queued, now)?;
         self.runs.put(&record)?;
@@ -274,6 +295,12 @@ impl Orchestrator {
             .components
             .latest(&record.spec.component)?
             .ok_or(CoreError::ComponentNotFound(record.spec.component))?;
+        if manifest.version != record.component_version {
+            return Err(CoreError::Validation(format!(
+                "component {} evolved to {} after run {} was queued (recorded {}); execution requires the recorded component version",
+                manifest.id, manifest.version, record.id, record.component_version
+            )));
+        }
         let binding = manifest.execution.clone();
 
         // Per-run working directory; inputs materialized under inputs/.
@@ -972,6 +999,61 @@ impl Orchestrator {
         Ok(record.clone())
     }
 
+    /// Reproduces a recorded run: re-submits its exact stored spec (same
+    /// component id + version, capability, canonical parameters and input
+    /// bindings) as a NEW queued run linked back via `reproduced_from`.
+    ///
+    /// Preconditions checked here: the original record exists, the component
+    /// is still registered at the same version, and every input artifact is
+    /// still present. Execution still goes through the normal
+    /// [`Self::execute_run`] path.
+    ///
+    /// # Errors
+    /// [`CoreError::RunNotFound`] for unknown originals,
+    /// [`CoreError::ComponentNotFound`] when the component vanished,
+    /// [`CoreError::Validation`] when its version drifted or inputs are
+    /// missing, storage failures otherwise.
+    #[instrument(skip_all, fields(run = %run_id))]
+    pub fn reproduce_run(&self, run_id: RunId) -> Result<RunRecord, CoreError> {
+        let original = self
+            .runs
+            .get(&run_id)?
+            .ok_or(CoreError::RunNotFound(run_id))?;
+
+        // The component must still exist at the same version so the spec's
+        // meaning cannot silently drift between the two executions.
+        let manifest = self
+            .components
+            .latest(&original.spec.component)?
+            .ok_or(CoreError::ComponentNotFound(original.spec.component))?;
+        if manifest.version != original.component_version {
+            return Err(CoreError::Validation(format!(
+                "component {} evolved to {} since the original run (recorded {}); \
+                 reproduction requires the same version",
+                manifest.id, manifest.version, original.component_version
+            )));
+        }
+
+        // Input artifacts must still be resolvable.
+        for input in &original.spec.inputs {
+            if self.artifacts_meta.get(&input.artifact)?.is_none() {
+                return Err(CoreError::ArtifactNotFound(input.artifact));
+            }
+        }
+
+        let reproduction = self.submit_run_internal(
+            original.spec.clone(),
+            Some(run_id),
+            Some(original.component_version.clone()),
+        )?;
+        info!(
+            run = %reproduction.id,
+            reproduced_from = %run_id,
+            "run queued for reproduction"
+        );
+        Ok(reproduction)
+    }
+
     #[must_use]
     pub fn workflow(&self, id: &crate::id::WorkflowId) -> Option<crate::workflow::WorkflowRecord> {
         self.workflows.get(id).ok().flatten()
@@ -1185,6 +1267,24 @@ mod tests {
             .expect("query");
         assert_eq!(found.len(), 1);
         assert_eq!(found[0].id, m1.id);
+
+        // If the same component evolves and drops the capability, the
+        // historical manifest must not leak through discovery.
+        let evolved = ComponentManifest {
+            version: Version::parse("2.0.0").expect("v"),
+            capabilities: Vec::new(),
+            execution: None,
+            ..m1.clone()
+        };
+        hub.orch.register_component(evolved).expect("evolve m1");
+        let found = hub
+            .orch
+            .discover_by_capability(&CapabilityName::parse("demo.echo").expect("cap"))
+            .expect("query after evolution");
+        assert!(
+            found.is_empty(),
+            "only each component's latest manifest may participate in discovery"
+        );
     }
 
     #[test]
@@ -1858,6 +1958,89 @@ mod tests {
         assert!(outcome.inputs.iter().any(|i| &i.artifact == expected_input));
 
         let _ = std::fs::remove_dir_all(dir);
+    }
+
+    #[test]
+    fn reproduction_relinks_specs_and_guards_against_drift() {
+        let (hub, _clock) = hub(None);
+        let manifest = echo_manifest(ComponentId::generate());
+        hub.orch
+            .register_component(manifest.clone())
+            .expect("register");
+
+        let original = hub
+            .orch
+            .submit_run(RunSpec {
+                component: manifest.id,
+                capability: CapabilityName::parse("demo.echo").expect("cap"),
+                parameters: BTreeMap::from([("msg".to_owned(), serde_json::json!("reproduce-me"))]),
+                inputs: vec![],
+                timeout_ms: 1_000,
+            })
+            .expect("submit");
+
+        // Unknown originals are 404-style errors.
+        assert!(matches!(
+            hub.orch.reproduce_run(RunId::generate()),
+            Err(CoreError::RunNotFound(_))
+        ));
+
+        // Reproduction creates a queued run linked to the original.
+        let reproduction = hub.orch.reproduce_run(original.id).expect("reproduce");
+        assert_eq!(reproduction.state, RunState::Queued);
+        assert_eq!(reproduction.reproduced_from, Some(original.id));
+        assert_eq!(reproduction.spec.parameters, original.spec.parameters);
+        let persisted = hub
+            .orch
+            .run(&reproduction.id)
+            .expect("persisted reproduction");
+        assert_eq!(persisted.reproduced_from, Some(original.id));
+
+        // Version drift after queueing must also block execution; the
+        // reproduction can never silently pick up a newer manifest.
+        let drifted = echo_manifest(manifest.id);
+        let drifted = ComponentManifest {
+            version: Version::parse("9.9.9").expect("v"),
+            ..drifted
+        };
+        hub.orch.register_component(drifted).expect("register v9");
+        match hub.orch.execute_run(reproduction.id) {
+            Err(CoreError::Validation(msg)) => {
+                assert!(msg.contains("evolved"), "message: {msg}");
+                assert!(msg.contains("recorded 1.0.0"), "message: {msg}");
+            }
+            other => panic!("expected execution-time drift rejection, got {other:?}"),
+        }
+        match hub.orch.reproduce_run(original.id) {
+            Err(CoreError::Validation(msg)) => {
+                assert!(msg.contains("evolved"), "message: {msg}");
+            }
+            other => panic!("expected drift rejection, got {other:?}"),
+        }
+
+        // A run recorded under the CURRENT version reproduces fine.
+        let current = hub
+            .orch
+            .submit_run(RunSpec {
+                component: manifest.id,
+                capability: CapabilityName::parse("demo.echo").expect("cap"),
+                parameters: BTreeMap::new(),
+                inputs: vec![],
+                timeout_ms: 1_000,
+            })
+            .expect("submit under v9");
+        assert_eq!(current.component_version.as_str(), "9.9.9");
+        let again = hub
+            .orch
+            .reproduce_run(current.id)
+            .expect("reproduce current");
+        assert_eq!(again.reproduced_from, Some(current.id));
+        assert_eq!(again.spec.parameters, current.spec.parameters);
+        let done = hub
+            .orch
+            .execute_run(again.id)
+            .expect("execute current reproduction");
+        assert_eq!(done.state, RunState::Succeeded);
     }
 
     #[test]
