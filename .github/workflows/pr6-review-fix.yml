@@ -18,76 +18,23 @@ jobs:
         with:
           toolchain: '1.89.0'
           components: rustfmt, clippy
-      - name: Apply focused review fixes
+      - name: Apply reviewed patch
         shell: bash
         run: |
+          git show HEAD^:.github/workflows/pr6-review-fix.yml > /tmp/previous-fix.yml
           python3 - <<'PY'
           from pathlib import Path
+          import textwrap
+
+          workflow = Path('/tmp/previous-fix.yml').read_text()
+          marker = "          python3 - <<'PY'\n"
+          start = workflow.index(marker) + len(marker)
+          end = workflow.index("\n          PY", start)
+          exec(compile(textwrap.dedent(workflow[start:end]), '<pr6-review-fix>', 'exec'))
 
           p = Path('crates/hub-core/src/orchestrator.rs')
           s = p.read_text()
-
-          def replace_once(old: str, new: str, label: str) -> None:
-              global s
-              count = s.count(old)
-              if count != 1:
-                  raise SystemExit(f'{label}: expected exactly one match, found {count}')
-              s = s.replace(old, new, 1)
-
-          replace_once(
-          '''        let mut out = Vec::new();
-                  for manifest in self.components.list()? {
-                      if manifest.capability(capability).is_some() {
-                          out.push(manifest);
-                      }
-                  }
-                  Ok(out)
-          ''',
-          '''        // `ComponentRepository::list` is ordered by `(id, version)`;
-                  // overwriting by id therefore retains exactly the latest manifest.
-                  let mut latest_by_id: BTreeMap<ComponentId, ComponentManifest> = BTreeMap::new();
-                  for manifest in self.components.list()? {
-                      latest_by_id.insert(manifest.id, manifest);
-                  }
-                  Ok(latest_by_id
-                      .into_values()
-                      .filter(|manifest| manifest.capability(capability).is_some())
-                      .collect())
-          ''',
-          'latest-only capability discovery')
-
-          replace_once(
-          '''    #[instrument(skip_all, fields(capability = %spec.capability))]
-              pub fn submit_run(&self, spec: RunSpec) -> Result<RunRecord, CoreError> {
-                  spec.validate(&self.limits)?;
-          ''',
-          '''    #[instrument(skip_all, fields(capability = %spec.capability))]
-              pub fn submit_run(&self, spec: RunSpec) -> Result<RunRecord, CoreError> {
-                  self.submit_run_internal(spec, None, None)
-              }
-
-              fn submit_run_internal(
-                  &self,
-                  spec: RunSpec,
-                  reproduced_from: Option<RunId>,
-                  required_component_version: Option<crate::Version>,
-              ) -> Result<RunRecord, CoreError> {
-                  spec.validate(&self.limits)?;
-          ''',
-          'linked submit helper')
-
-          replace_once(
-          '''        let manifest = self
-                      .components
-                      .latest(&spec.component)?
-                      .ok_or(CoreError::ComponentNotFound(spec.component))?;
-                  let capability: Capability = manifest
-          ''',
-          '''        let manifest = self
-                      .components
-                      .latest(&spec.component)?
-                      .ok_or(CoreError::ComponentNotFound(spec.component))?;
-                  if let Some(required_version) = required_component_version {
+          old = '''        if let Some(required_version) = required_component_version {
                       if manifest.version != required_version {
                           return Err(CoreError::Validation(format!(
                               "component {} evolved to {} since the original run (recorded {}); reproduction requires the same version",
@@ -95,132 +42,21 @@ jobs:
                           )));
                       }
                   }
-                  let capability: Capability = manifest
-          ''',
-          'submission-time required-version guard')
-
-          replace_once(
-          '''        )?;
-                  record.transition(RunState::Validated, now)?;
-          ''',
-          '''        )?;
-                  record.reproduced_from = reproduced_from;
-                  record.transition(RunState::Validated, now)?;
-          ''',
-          'initial reproduction link persistence')
-
-          replace_once(
-          '''        let manifest = self
-                      .components
-                      .latest(&record.spec.component)?
-                      .ok_or(CoreError::ComponentNotFound(record.spec.component))?;
-                  let binding = manifest.execution.clone();
-          ''',
-          '''        let manifest = self
-                      .components
-                      .latest(&record.spec.component)?
-                      .ok_or(CoreError::ComponentNotFound(record.spec.component))?;
-                  if manifest.version != record.component_version {
+          '''
+          new = '''        if let Some(required_version) =
+                      required_component_version.filter(|version| manifest.version != *version)
+                  {
                       return Err(CoreError::Validation(format!(
-                          "component {} evolved to {} after run {} was queued (recorded {}); execution requires the recorded component version",
-                          manifest.id, manifest.version, record.id, record.component_version
+                          "component {} evolved to {} since the original run (recorded {}); reproduction requires the same version",
+                          manifest.id, manifest.version, required_version
                       )));
                   }
-                  let binding = manifest.execution.clone();
-          ''',
-          'execution-time version pin validation')
-
-          replace_once(
-          '''        let mut reproduction = self.submit_run(original.spec.clone())?;
-                  reproduction.reproduced_from = Some(run_id);
-                  self.runs.put(&reproduction)?;
-          ''',
-          '''        let reproduction = self.submit_run_internal(
-                      original.spec.clone(),
-                      Some(run_id),
-                      Some(original.component_version.clone()),
-                  )?;
-          ''',
-          'single-write reproduction creation')
-
-          replace_once(
-          '''        assert_eq!(found.len(), 1);
-                  assert_eq!(found[0].id, m1.id);
-          ''',
-          '''        assert_eq!(found.len(), 1);
-                  assert_eq!(found[0].id, m1.id);
-
-                  // If the same component evolves and drops the capability, the
-                  // historical manifest must not leak through discovery.
-                  let evolved = ComponentManifest {
-                      version: Version::parse("2.0.0").expect("v"),
-                      capabilities: Vec::new(),
-                      execution: None,
-                      ..m1.clone()
-                  };
-                  hub.orch.register_component(evolved).expect("evolve m1");
-                  let found = hub
-                      .orch
-                      .discover_by_capability(&CapabilityName::parse("demo.echo").expect("cap"))
-                      .expect("query after evolution");
-                  assert!(
-                      found.is_empty(),
-                      "only each component's latest manifest may participate in discovery"
-                  );
-          ''',
-          'latest-only discovery regression')
-
-          replace_once(
-          '''        assert_eq!(reproduction.state, RunState::Queued);
-                  assert_eq!(reproduction.reproduced_from, Some(original.id));
-                  assert_eq!(reproduction.spec.parameters, original.spec.parameters);
-                  let _ = hub.orch.execute_run(reproduction.id).expect("execute copy");
-
-                  // Component version drift blocks reproduction of the old run.
-                  let drifted = echo_manifest(manifest.id);
-          ''',
-          '''        assert_eq!(reproduction.state, RunState::Queued);
-                  assert_eq!(reproduction.reproduced_from, Some(original.id));
-                  assert_eq!(reproduction.spec.parameters, original.spec.parameters);
-                  let persisted = hub.orch.run(&reproduction.id).expect("persisted reproduction");
-                  assert_eq!(persisted.reproduced_from, Some(original.id));
-
-                  // Version drift after queueing must also block execution; the
-                  // reproduction can never silently pick up a newer manifest.
-                  let drifted = echo_manifest(manifest.id);
-          ''',
-          'queued reproduction drift regression setup')
-
-          replace_once(
-          '''        hub.orch.register_component(drifted).expect("register v9");
-                  match hub.orch.reproduce_run(original.id) {
-          ''',
-          '''        hub.orch.register_component(drifted).expect("register v9");
-                  match hub.orch.execute_run(reproduction.id) {
-                      Err(CoreError::Validation(msg)) => {
-                          assert!(msg.contains("evolved"), "message: {msg}");
-                          assert!(msg.contains("recorded 1.0.0"), "message: {msg}");
-                      }
-                      other => panic!("expected execution-time drift rejection, got {other:?}"),
-                  }
-                  match hub.orch.reproduce_run(original.id) {
-          ''',
-          'execution-time drift regression assertion')
-
-          replace_once(
-          '''        assert_eq!(again.reproduced_from, Some(current.id));
-                  assert_eq!(again.spec.parameters, current.spec.parameters);
-          ''',
-          '''        assert_eq!(again.reproduced_from, Some(current.id));
-                  assert_eq!(again.spec.parameters, current.spec.parameters);
-                  let done = hub.orch.execute_run(again.id).expect("execute current reproduction");
-                  assert_eq!(done.state, RunState::Succeeded);
-          ''',
-          'current-version reproduction remains executable')
-
-          p.write_text(s)
+          '''
+          if s.count(old) != 1:
+              raise SystemExit(f'clippy refinement: expected one match, found {s.count(old)}')
+          p.write_text(s.replace(old, new, 1))
           PY
-      - name: Format source
+      - name: Format
         run: cargo fmt --all
       - name: Format check
         run: cargo fmt --all -- --check
