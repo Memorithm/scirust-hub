@@ -1,6 +1,6 @@
 [package]
 name = "scirust-hub"
-description = "SciRust Hub CLI"
+description = "SciRust Hub CLI client"
 version.workspace = true
 edition.workspace = true
 rust-version.workspace = true
@@ -8,6 +8,13 @@ publish.workspace = true
 repository.workspace = true
 
 [dependencies]
+clap = { workspace = true }
+serde_json = { workspace = true }
+thiserror = { workspace = true }
+ureq = { workspace = true }
+
+[dev-dependencies]
+serde_json = { workspace = true }
 
 [lints]
 workspace = true

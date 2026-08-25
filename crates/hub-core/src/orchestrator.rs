@@ -277,12 +277,29 @@ impl Orchestrator {
         std::fs::create_dir_all(workdir.join("inputs"))
             .map_err(|e| CoreError::Storage(format!("creating run workdir: {e}")))?;
 
+        // Materialize declared inputs from the content-addressed store so the
+        // process sees immutable copies, not live paths.
+        let mut input_provenance = Vec::with_capacity(record.spec.inputs.len());
+        for input in &record.spec.inputs {
+            let meta = self
+                .artifacts_meta
+                .get(&input.artifact)?
+                .ok_or(CoreError::ArtifactNotFound(input.artifact))?;
+            let dest = workdir.join("inputs").join(&input.name);
+            self.blobs.copy_to_path(&meta.digest, &dest)?;
+            input_provenance.push(crate::run::InputProvenance {
+                name: input.name.clone(),
+                artifact: input.artifact,
+                digest: meta.digest,
+                size: meta.size,
+            });
+        }
+
         let started_at = self.clock.now_ms();
         record.transition(RunState::Running, started_at)?;
         self.runs.put(&record)?;
 
         let outcome = self.run_process(&mut record, binding, &workdir, token)?;
-
         let finished_at = self.clock.now_ms();
         let duration_ms = finished_at.saturating_sub(started_at);
         let params_digest = record.spec.params_digest()?;
@@ -311,6 +328,7 @@ impl Orchestrator {
             cancelled: outcome.cancelled,
             executor_backend: self.executor.backend_id().to_owned(),
             duration_ms,
+            inputs: input_provenance,
             outputs,
             env_keys,
             params_digest,

@@ -190,6 +190,15 @@ pub struct Transition {
     pub at: UnixMillis,
 }
 
+/// Provenance of one input artifact consumed by the run.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub struct InputProvenance {
+    pub name: String,
+    pub artifact: ArtifactId,
+    pub digest: ContentDigest,
+    pub size: u64,
+}
+
 /// Reference to an output artifact produced by a run.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub struct OutputRef {
@@ -211,6 +220,10 @@ pub struct RunOutcome {
     pub cancelled: bool,
     pub executor_backend: String,
     pub duration_ms: u64,
+    /// Provenance of consumed input artifacts (immutable copies materialized
+    /// into the run working directory).
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub inputs: Vec<InputProvenance>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub outputs: Vec<OutputRef>,
     /// Environment variable *names* provided to the process. Values are

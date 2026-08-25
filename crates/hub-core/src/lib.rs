@@ -46,6 +46,7 @@ pub use limits::Limits;
 pub use memory::{FileSystemArtifactStore, InMemoryArtifactMeta, InMemoryComponents, InMemoryRuns};
 pub use orchestrator::{Orchestrator, RegistrationStatus};
 pub use run::{
-    InputBinding, OutputRef, RunOutcome, RunRecord, RunSpec, RunState, Transition,
+    InputBinding, InputProvenance, OutputRef, RunOutcome, RunRecord, RunSpec,
+    RunState, Transition,
 };
 pub use version::Version;

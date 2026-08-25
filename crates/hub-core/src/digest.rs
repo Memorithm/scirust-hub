@@ -9,7 +9,7 @@
 use std::fmt;
 use std::io::Read;
 
-use serde::{Deserialize, Serialize};
+use serde::{Deserialize, Deserializer, Serialize, Serializer};
 use sha2::{Digest as _, Sha256};
 
 const PREFIX: &[u8] = b"scirust-hub-digest:v1\0";
@@ -24,9 +24,9 @@ pub const DOMAIN_RUN_PARAMS: &[u8] = b"scirust-hub:run-params:v1";
 /// Domain for captured process output streams.
 pub const DOMAIN_CAPTURE: &[u8] = b"scirust-hub:capture:v1";
 
-/// A stable 32-byte content digest with lowercase-hex interchange.
-#[derive(Clone, Copy, PartialEq, Eq, Hash, PartialOrd, Ord, Serialize, Deserialize)]
-#[serde(transparent)]
+/// A stable 32-byte content digest. Wire form: lowercase hex string;
+/// deserialization validates length and alphabet.
+#[derive(Clone, Copy, PartialEq, Eq, Hash, PartialOrd, Ord)]
 pub struct ContentDigest([u8; DIGEST_LEN]);
 
 impl ContentDigest {
@@ -82,6 +82,19 @@ impl fmt::Debug for ContentDigest {
 #[derive(Clone, Copy, Debug, PartialEq, Eq, thiserror::Error)]
 #[error("digest must be exactly 64 hexadecimal characters")]
 pub struct ParseDigestError;
+
+impl Serialize for ContentDigest {
+    fn serialize<S: serde::Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
+        serializer.serialize_str(&self.to_hex())
+    }
+}
+
+impl<'de> Deserialize<'de> for ContentDigest {
+    fn deserialize<D: serde::Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
+        let hex = String::deserialize(deserializer)?;
+        Self::from_hex(&hex).map_err(serde::de::Error::custom)
+    }
+}
 
 /// One-shot domain-separated hash of in-memory bytes.
 #[must_use]
@@ -188,6 +201,16 @@ mod tests {
             digest
         );
         assert!(ContentDigest::from_hex("xyz").is_err());
+    }
+
+    #[test]
+    fn wire_form_is_hex_string_and_validated_on_read() {
+        let digest = hash_bytes(DOMAIN_RUN_PARAMS, b"wire");
+        let json = serde_json::to_string(&digest).expect("serialize");
+        assert_eq!(json, format!("\"{}\"", digest.to_hex()));
+        let decoded: ContentDigest = serde_json::from_str(&json).expect("decode");
+        assert_eq!(decoded, digest);
+        assert!(serde_json::from_str::<ContentDigest>("\"short\"").is_err());
     }
 
     #[test]

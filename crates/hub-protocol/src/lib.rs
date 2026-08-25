@@ -321,11 +321,21 @@ pub struct RunOutcomeDto {
     pub executor_backend: String,
     pub duration_ms: u64,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub inputs: Vec<InputProvenanceDto>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub outputs: Vec<OutputRefDto>,
     pub env_keys: Vec<String>,
     pub params_digest: ContentDigest,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub failure: Option<String>,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub struct InputProvenanceDto {
+    pub name: String,
+    pub artifact: ArtifactId,
+    pub digest: ContentDigest,
+    pub size: u64,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
@@ -526,6 +536,16 @@ mod convert {
                     cancelled: o.cancelled,
                     executor_backend: o.executor_backend.clone(),
                     duration_ms: o.duration_ms,
+                    inputs: o
+                        .inputs
+                        .iter()
+                        .map(|i| InputProvenanceDto {
+                            name: i.name.clone(),
+                            artifact: i.artifact,
+                            digest: i.digest,
+                            size: i.size,
+                        })
+                        .collect(),
                     outputs: o
                         .outputs
                         .iter()
