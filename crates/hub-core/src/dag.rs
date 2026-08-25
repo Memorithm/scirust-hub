@@ -1,8 +1,7 @@
 //! A minimal but correct directed acyclic graph.
 //!
-//! Ships now because workflow composition is on the Hub's roadmap and cycle
-//! detection must be right from the start. Multi-node *orchestration* is not
-//! implemented yet; this type is the foundation it will build on.
+//! This type underpins workflow composition: edge direction, cycle detection
+//! and topological ordering are intentionally deterministic and explicit.
 
 use std::collections::{BTreeMap, BTreeSet};
 
@@ -29,7 +28,7 @@ impl Default for DagLimits {
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct Dag<T> {
     nodes: BTreeMap<String, T>,
-    /// edges[u] = set of v such that u depends on v (u -> v).
+    /// `edges[u]` is the set of nodes that must run after `u` (`u -> v`).
     edges: BTreeMap<String, BTreeSet<String>>,
 }
 
@@ -68,7 +67,7 @@ impl<T> Dag<T> {
         Ok(())
     }
 
-    /// Declares that `from` must run after `to` (edge `from -> to`).
+    /// Declares that `from` must run before `to` (edge `from -> to`).
     ///
     /// # Errors
     /// [`CoreError::Validation`] when a node is missing, the edge limit is
@@ -194,7 +193,7 @@ mod tests {
     }
 
     fn sample() -> Dag<&'static str> {
-        // Mission example: A -> B, A? no: A -> B, B -> D, B -> C, C -> D
+        // Example: a -> b, b -> c, b -> d, c -> d.
         let mut g = Dag::new();
         for k in ["a", "b", "c", "d"] {
             g.add_node(k, k, &lim()).expect("add");
@@ -270,7 +269,7 @@ mod tests {
         }
         g.add_edge("a", "b", &lim()).expect("edge");
         g.add_edge("b", "c", &lim()).expect("edge");
-        // c reaches a already? No: a->b->c. Adding c->a closes the loop.
+        // a reaches c through a->b->c. Adding c->a closes the loop.
         assert!(g.add_edge("c", "a", &lim()).is_err());
     }
 
