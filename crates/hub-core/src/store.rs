@@ -71,6 +71,26 @@ pub trait ArtifactMetadataRepository: Send + Sync {
     fn list(&self) -> Result<Vec<ArtifactMeta>, CoreError>;
 }
 
+/// Repository of workflow records.
+pub trait WorkflowRepository: Send + Sync {
+    /// # Errors
+    /// Backend failures only.
+    fn put(&self, record: &crate::workflow::WorkflowRecord) -> Result<(), CoreError>;
+
+    /// # Errors
+    /// Backend failures only.
+    fn get(
+        &self,
+        id: &crate::id::WorkflowId,
+    ) -> Result<Option<crate::workflow::WorkflowRecord>, CoreError>;
+
+    /// All workflows, deterministically ordered by `(created_at, id)`.
+    ///
+    /// # Errors
+    /// Backend failures only.
+    fn list(&self) -> Result<Vec<crate::workflow::WorkflowRecord>, CoreError>;
+}
+
 /// Content-addressed blob storage. Keys are digests; equal bytes are stored
 /// once regardless of how many artifacts reference them.
 pub trait ArtifactStore: Send + Sync {

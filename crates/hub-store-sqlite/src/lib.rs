@@ -25,7 +25,9 @@ use hub_core::artifact::ArtifactMeta;
 use hub_core::component::ComponentManifest;
 use hub_core::error::CoreError;
 use hub_core::run::RunRecord;
-use hub_core::store::{ArtifactMetadataRepository, ComponentRepository, RunRepository};
+use hub_core::store::{
+    ArtifactMetadataRepository, ComponentRepository, RunRepository, WorkflowRepository,
+};
 use rusqlite::OptionalExtension as _;
 
 /// Forward-only migrations; index `i` is schema version `i + 1`.
@@ -53,6 +55,14 @@ const MIGRATIONS: &[&str] = &[
         meta_json   TEXT    NOT NULL
     );
     CREATE INDEX idx_artifacts_created ON artifact_meta (created_at);",
+    // v2: workflow orchestration records.
+    "CREATE TABLE workflows (
+        id          TEXT PRIMARY KEY,
+        created_at  INTEGER NOT NULL,
+        state       TEXT    NOT NULL,
+        record_json TEXT    NOT NULL
+    );
+    CREATE INDEX idx_workflows_created ON workflows (created_at);",
 ];
 
 /// SQLite-backed implementation of all three metadata repository ports.
@@ -385,6 +395,68 @@ impl ArtifactMetadataRepository for SqliteStore {
     }
 }
 
+impl WorkflowRepository for SqliteStore {
+    fn put(&self, record: &hub_core::workflow::WorkflowRecord) -> Result<(), CoreError> {
+        let json = serde_json::to_string(record)
+            .map_err(|e| CoreError::Storage(format!("serializing workflow: {e}")))?;
+        let conn = self.lock()?;
+        conn.execute(
+            "INSERT INTO workflows (id, created_at, state, record_json)
+             VALUES (?1, ?2, ?3, ?4)
+             ON CONFLICT(id) DO UPDATE SET
+                state = excluded.state,
+                record_json = excluded.record_json",
+            rusqlite::params![
+                record.id.to_string(),
+                record.created_at,
+                format!("{:?}", record.state),
+                json
+            ],
+        )
+        .map_err(storage("upserting workflow"))?;
+        Ok(())
+    }
+
+    fn get(
+        &self,
+        id: &hub_core::WorkflowId,
+    ) -> Result<Option<hub_core::workflow::WorkflowRecord>, CoreError> {
+        let conn = self.lock()?;
+        let json: Option<String> = conn
+            .query_row(
+                "SELECT record_json FROM workflows WHERE id = ?1",
+                rusqlite::params![id.to_string()],
+                |row| row.get(0),
+            )
+            .optional()
+            .map_err(storage("loading workflow"))?;
+        json.map(|j| {
+            serde_json::from_str(&j).map_err(|e| {
+                CoreError::Storage(format!("stored workflow failed to deserialize: {e}"))
+            })
+        })
+        .transpose()
+    }
+
+    fn list(&self) -> Result<Vec<hub_core::workflow::WorkflowRecord>, CoreError> {
+        let conn = self.lock()?;
+        let mut stmt = conn
+            .prepare("SELECT record_json FROM workflows ORDER BY created_at, id")
+            .map_err(storage("listing workflows"))?;
+        let rows = stmt
+            .query_map([], |row| row.get::<_, String>(0))
+            .map_err(storage("listing workflows"))?;
+        let mut out = Vec::new();
+        for row in rows {
+            let json = row.map_err(storage("reading workflow row"))?;
+            out.push(serde_json::from_str(&json).map_err(|e| {
+                CoreError::Storage(format!("stored workflow failed to deserialize: {e}"))
+            })?);
+        }
+        Ok(out)
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -620,6 +692,67 @@ mod tests {
         assert_eq!(runs[0].state, RunState::Failed);
         drop(store);
         let _ = std::fs::remove_dir_all(dir);
+    }
+
+    #[test]
+    fn workflows_round_trip_and_survive_reopen() {
+        let dir = std::env::temp_dir().join(format!("hub-sqlite-wf-{}", uuid::Uuid::new_v4()));
+        let db = dir.join("hub.db");
+        let id;
+        {
+            let store = SqliteStore::open(&db).expect("open");
+            assert_eq!(
+                WorkflowRepository::list(&store).expect("empty"),
+                Vec::<hub_core::workflow::WorkflowRecord>::new()
+            );
+            let mut record = hub_core::workflow::WorkflowRecord::create(
+                sample_workflow(),
+                hub_core::Version::parse(hub_core::workflow::WORKFLOW_MODEL_VERSION)
+                    .expect("model version"),
+                42,
+            )
+            .expect("record");
+            id = Some(record.id);
+            record
+                .transition(hub_core::workflow::WorkflowState::Running, 43)
+                .expect("running");
+            record.steps.push(hub_core::workflow::StepResult {
+                key: "emit".into(),
+                run: RunId::generate(),
+                state: RunState::Succeeded,
+                failure: None,
+            });
+            WorkflowRepository::put(&store, &record).expect("put");
+        }
+        let store = SqliteStore::open(&db).expect("reopen");
+        let stored_id = id.expect("assigned in first block");
+        let restored = WorkflowRepository::get(&store, &stored_id)
+            .expect("get")
+            .expect("workflow survived reopen");
+        assert_eq!(restored.id, stored_id);
+        assert_eq!(restored.state, hub_core::workflow::WorkflowState::Running);
+        assert_eq!(restored.steps.len(), 1);
+        drop(store);
+        let _ = std::fs::remove_dir_all(dir);
+    }
+
+    fn sample_workflow() -> hub_core::workflow::WorkflowSpec {
+        use hub_core::capability::CapabilityName;
+        use std::collections::BTreeMap;
+        let component = ComponentId::generate();
+        hub_core::workflow::WorkflowSpec {
+            schema_version: hub_core::workflow::WORKFLOW_SCHEMA_VERSION,
+            name: "chain".into(),
+            steps: vec![hub_core::workflow::Step {
+                key: "emit".into(),
+                component,
+                capability: CapabilityName::parse("x.y").expect("c"),
+                parameters: BTreeMap::new(),
+                inputs: BTreeMap::new(),
+                timeout_ms: 1_000,
+                after: Vec::new(),
+            }],
+        }
     }
 
     impl SqliteStore {

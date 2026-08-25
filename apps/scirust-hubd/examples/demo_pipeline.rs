@@ -39,6 +39,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         Arc::new(InMemoryComponents::default()),
         Arc::new(InMemoryRuns::default()),
         Arc::new(InMemoryArtifactMeta::default()),
+        Arc::new(hub_core::InMemoryWorkflows::default()),
         FileSystemArtifactStore::open(data_dir.join("blobs"))?,
         Arc::new(ProcessExecutor::new()),
         Limits::default(),

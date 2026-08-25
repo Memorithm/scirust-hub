@@ -42,8 +42,20 @@ pub enum CoreError {
     RunNotFound(RunId),
     #[error("invalid transition from {from} to {to}")]
     InvalidTransition { from: RunState, to: RunState },
+    #[error("invalid workflow transition from {from:?} to {to:?}")]
+    InvalidWorkflowTransition {
+        from: crate::workflow::WorkflowState,
+        to: crate::workflow::WorkflowState,
+    },
     #[error("run {run} is not in an executable state (current state {current})")]
     RunNotExecutable { run: RunId, current: RunState },
+    #[error("workflow {0} not found")]
+    WorkflowNotFound(crate::id::WorkflowId),
+    #[error("workflow {workflow} is not executable (current state {current:?})")]
+    WorkflowNotExecutable {
+        workflow: crate::id::WorkflowId,
+        current: crate::workflow::WorkflowState,
+    },
     #[error("run spec validation failed: {0}")]
     InvalidRunSpec(String),
     #[error("manifest validation failed: {0}")]

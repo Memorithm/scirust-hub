@@ -18,8 +18,11 @@ use hub_core::clock::SystemClock;
 use hub_core::limits::Limits;
 use hub_core::memory::{
     FileSystemArtifactStore, InMemoryArtifactMeta, InMemoryComponents, InMemoryRuns,
+    InMemoryWorkflows,
 };
-use hub_core::store::{ArtifactMetadataRepository, ComponentRepository, RunRepository};
+use hub_core::store::{
+    ArtifactMetadataRepository, ComponentRepository, RunRepository, WorkflowRepository,
+};
 use hub_core::Orchestrator;
 use hub_executor::ProcessExecutor;
 use hub_store_sqlite::SqliteStore;
@@ -96,6 +99,7 @@ fn build_orchestrator(
     components: Arc<dyn ComponentRepository>,
     runs: Arc<dyn RunRepository>,
     artifacts_meta: Arc<dyn ArtifactMetadataRepository>,
+    workflows: Arc<dyn WorkflowRepository>,
     blob_store: FileSystemArtifactStore,
     workdir_root: PathBuf,
 ) -> Arc<Orchestrator> {
@@ -104,6 +108,7 @@ fn build_orchestrator(
         components,
         runs,
         artifacts_meta,
+        workflows,
         blob_store,
         Arc::new(ProcessExecutor::new()),
         Limits::default(),
@@ -145,6 +150,7 @@ fn run(args: Args) -> Result<(), DaemonError> {
             build_orchestrator(
                 store.clone(),
                 store.clone(),
+                store.clone(),
                 store,
                 blob_store,
                 workdir_root,
@@ -156,6 +162,7 @@ fn run(args: Args) -> Result<(), DaemonError> {
                 Arc::new(InMemoryComponents::default()),
                 Arc::new(InMemoryRuns::default()),
                 Arc::new(InMemoryArtifactMeta::default()),
+                Arc::new(InMemoryWorkflows::default()),
                 blob_store,
                 workdir_root,
             )

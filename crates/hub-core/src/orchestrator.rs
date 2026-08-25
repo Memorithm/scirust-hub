@@ -20,7 +20,10 @@ use crate::id::{ArtifactId, ComponentId, RunId};
 use crate::limits::Limits;
 use crate::memory::FileSystemArtifactStore;
 use crate::run::{OutputRef, RunOutcome, RunRecord, RunSpec, RunState};
-use crate::store::{ArtifactMetadataRepository, ArtifactStore, ComponentRepository, RunRepository};
+use crate::store::{
+    ArtifactMetadataRepository, ArtifactStore, ComponentRepository, RunRepository,
+    WorkflowRepository,
+};
 
 /// Outcome of an idempotent registration.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -38,6 +41,7 @@ pub struct Orchestrator {
     runs: Arc<dyn RunRepository>,
     artifacts_meta: Arc<dyn ArtifactMetadataRepository>,
     blobs: FileSystemArtifactStore,
+    workflows: Arc<dyn WorkflowRepository>,
     executor: Arc<dyn Executor>,
     limits: Limits,
     workdir_root: PathBuf,
@@ -54,6 +58,7 @@ impl Orchestrator {
         components: Arc<dyn ComponentRepository>,
         runs: Arc<dyn RunRepository>,
         artifacts_meta: Arc<dyn ArtifactMetadataRepository>,
+        workflows: Arc<dyn WorkflowRepository>,
         blobs: FileSystemArtifactStore,
         executor: Arc<dyn Executor>,
         limits: Limits,
@@ -64,6 +69,7 @@ impl Orchestrator {
             components,
             runs,
             artifacts_meta,
+            workflows,
             blobs,
             executor,
             limits,
@@ -792,6 +798,191 @@ fn substitute_placeholders(
     Ok(raw.to_owned())
 }
 
+impl Orchestrator {
+    /// Validates a multi-step workflow against the registry (components must
+    /// exist) and persists it in `created` state. Nothing executes yet.
+    ///
+    /// # Errors
+    /// Validation/component-not-found/storage failures.
+    #[instrument(skip_all)]
+    pub fn submit_workflow(
+        &self,
+        spec: crate::workflow::WorkflowSpec,
+    ) -> Result<crate::workflow::WorkflowRecord, CoreError> {
+        spec.validate()?;
+        for step in &spec.steps {
+            if self.components.latest(&step.component)?.is_none() {
+                return Err(CoreError::ComponentNotFound(step.component));
+            }
+        }
+        let model_version = crate::Version::parse(crate::workflow::WORKFLOW_MODEL_VERSION)?;
+        let record =
+            crate::workflow::WorkflowRecord::create(spec, model_version, self.clock.now_ms())?;
+        self.workflows.put(&record)?;
+        info!(workflow = %record.id, steps = record.spec.steps.len(), "workflow submitted");
+        Ok(record)
+    }
+
+    /// Executes a created workflow sequentially in dependency order
+    /// (fail-fast). Blocking by design; see module docs.
+    ///
+    /// Step inputs referencing other steps resolve to that step's recorded
+    /// output artifact (matched by output label such as `stdout` or
+    /// `file:<name>`).
+    ///
+    /// # Errors
+    /// [`CoreError::WorkflowNotFound`] / [`CoreError::WorkflowNotExecutable`]
+    /// / storage failures. Per-step problems become a `failed` workflow
+    /// record, not an error return.
+    #[instrument(skip_all, fields(workflow = %workflow_id))]
+    pub fn execute_workflow(
+        &self,
+        workflow_id: crate::id::WorkflowId,
+    ) -> Result<crate::workflow::WorkflowRecord, CoreError> {
+        let mut record = self
+            .workflows
+            .get(&workflow_id)?
+            .ok_or(CoreError::WorkflowNotFound(workflow_id))?;
+        if record.state != crate::workflow::WorkflowState::Created {
+            return Err(CoreError::WorkflowNotExecutable {
+                workflow: workflow_id,
+                current: record.state,
+            });
+        }
+
+        let started_at = self.clock.now_ms();
+        record.transition(crate::workflow::WorkflowState::Running, started_at)?;
+        self.workflows.put(&record)?;
+
+        let order = record.spec.topo_keys()?;
+        for key in &order {
+            let Some(step) = record.spec.steps.iter().find(|s| &s.key == key).cloned() else {
+                break; // cannot happen; keys originate from the same spec
+            };
+
+            // Resolve every input source to an existing artifact id.
+            let mut resolved: BTreeMap<String, ArtifactId> = BTreeMap::new();
+            let mut resolution_failure: Option<String> = None;
+            for (input_name, source) in &step.inputs {
+                match source {
+                    crate::workflow::InputSource::Artifact { artifact } => {
+                        match self.artifacts_meta.get(artifact)? {
+                            Some(_) => {
+                                resolved.insert(input_name.clone(), *artifact);
+                            }
+                            None => {
+                                resolution_failure = Some(format!(
+                                    "step {key:?} input {input_name:?}: artifact {} not found",
+                                    artifact
+                                ));
+                                break;
+                            }
+                        }
+                    }
+                    crate::workflow::InputSource::FromStep { key: dep, output } => {
+                        let produced = record
+                            .steps
+                            .iter()
+                            .find(|sr| &sr.key == dep)
+                            .map(|sr| sr.run);
+                        let Some(dep_run) = produced else {
+                            resolution_failure = Some(format!(
+                                "step {key:?} input {input_name:?}: dependency {dep:?} has not run"
+                            ));
+                            break;
+                        };
+                        let dep_record = self.runs.get(&dep_run)?;
+                        let artifact = dep_record.as_ref().and_then(|r| {
+                            r.outcome.as_ref().and_then(|o| {
+                                o.outputs
+                                    .iter()
+                                    .find(|out| &out.name == output)
+                                    .map(|out| out.artifact)
+                            })
+                        });
+                        match artifact {
+                            Some(aid) => {
+                                resolved.insert(input_name.clone(), aid);
+                            }
+                            None => {
+                                resolution_failure = Some(format!(
+                                    "step {key:?} input {input_name:?}: step {dep:?} produced no output named {output:?}"
+                                ));
+                                break;
+                            }
+                        }
+                    }
+                }
+            }
+
+            if let Some(message) = resolution_failure {
+                return self.finish_workflow_failed(&mut record, message);
+            }
+
+            let run_spec = crate::workflow::WorkflowSpec::step_run_spec(&step, &resolved);
+            let step_outcome = match self.submit_run(run_spec).and_then(|submitted| {
+                let id = submitted.id;
+                self.execute_run(id)
+            }) {
+                Ok(finished) => finished,
+                Err(e) => {
+                    return self.finish_workflow_failed(&mut record, e.to_string());
+                }
+            };
+
+            let failure = step_outcome
+                .outcome
+                .as_ref()
+                .and_then(|o| o.failure.clone());
+            let state = step_outcome.state;
+            record.steps.push(crate::workflow::StepResult {
+                key: key.clone(),
+                run: step_outcome.id,
+                state,
+                failure: failure.clone(),
+            });
+
+            if state != RunState::Succeeded {
+                let message = format!(
+                    "step {key:?} ended in state {state}{}",
+                    failure.map(|f| format!(": {f}")).unwrap_or_default()
+                );
+                return self.finish_workflow_failed(&mut record, message);
+            }
+            self.workflows.put(&record)?;
+        }
+
+        let now = self.clock.now_ms();
+        record.transition(crate::workflow::WorkflowState::Succeeded, now)?;
+        self.workflows.put(&record)?;
+        info!(workflow = %workflow_id, "workflow succeeded");
+        Ok(record)
+    }
+
+    fn finish_workflow_failed(
+        &self,
+        record: &mut crate::workflow::WorkflowRecord,
+        message: String,
+    ) -> Result<crate::workflow::WorkflowRecord, CoreError> {
+        let now = self.clock.now_ms();
+        record.transition(crate::workflow::WorkflowState::Failed, now)?;
+        record.failure = Some(message.clone());
+        self.workflows.put(record)?;
+        warn!(workflow = %record.id, %message, "workflow failed");
+        Ok(record.clone())
+    }
+
+    #[must_use]
+    pub fn workflow(&self, id: &crate::id::WorkflowId) -> Option<crate::workflow::WorkflowRecord> {
+        self.workflows.get(id).ok().flatten()
+    }
+
+    #[must_use]
+    pub fn workflows(&self) -> Vec<crate::workflow::WorkflowRecord> {
+        self.workflows.list().unwrap_or_default()
+    }
+}
+
 #[cfg(test)]
 mod tests {
     //! Decision-point tests using the deterministic mock executor. The full
@@ -804,6 +995,7 @@ mod tests {
     use crate::component::{ComponentKind, ComponentName, ExecutionBinding, ProcessBinding};
     use crate::memory::{
         FileSystemArtifactStore, InMemoryArtifactMeta, InMemoryComponents, InMemoryRuns,
+        InMemoryWorkflows,
     };
     use crate::run::InputBinding;
     use crate::Version;
@@ -901,6 +1093,7 @@ mod tests {
             Arc::new(InMemoryComponents::default()),
             Arc::new(InMemoryRuns::default()),
             artifacts.clone(),
+            Arc::new(InMemoryWorkflows::default()),
             FileSystemArtifactStore::open(dir.join("blobs")).expect("blobs"),
             Arc::new(MockExecutor {
                 start_error,
@@ -1299,6 +1492,7 @@ mod tests {
             Arc::new(InMemoryComponents::default()),
             Arc::new(InMemoryRuns::default()),
             artifacts.clone(),
+            Arc::new(InMemoryWorkflows::default()),
             FileSystemArtifactStore::open(dir.join("blobs")).expect("blobs"),
             Arc::new(MockExecutor::write_files(&[(
                 "out/copy.txt",
@@ -1415,6 +1609,255 @@ mod tests {
             outcome.failure.as_deref(),
             Some("required output(s) not produced: copy")
         );
+    }
+
+    fn echo_and_copy_components() -> (ComponentManifest, ComponentManifest) {
+        let emit = ComponentManifest::new_v1(
+            ComponentId::generate(),
+            ComponentName::parse("wf-emit").expect("n"),
+            Version::parse("1.0.0").expect("v"),
+            ComponentKind::parse(ComponentKind::TOOL).expect("k"),
+            vec![Capability {
+                name: CapabilityName::parse("demo.emit").expect("c"),
+                contract_version: Version::parse("1.0.0").expect("cv"),
+                inputs: Vec::new(),
+                outputs: Vec::new(),
+                properties: BTreeMap::new(),
+            }],
+            Some(ExecutionBinding::Process(ProcessBinding {
+                program: "/bin/echo".into(),
+                args: vec!["{params}".into()],
+                working_dir: None,
+                outputs: Vec::new(),
+            })),
+            None,
+            BTreeMap::new(),
+        )
+        .expect("m");
+
+        let copy = ComponentManifest::new_v1(
+            ComponentId::generate(),
+            ComponentName::parse("wf-copy").expect("n"),
+            Version::parse("1.0.0").expect("v"),
+            ComponentKind::parse(ComponentKind::TOOL).expect("k"),
+            vec![Capability {
+                name: CapabilityName::parse("demo.copy").expect("c"),
+                contract_version: Version::parse("1.0.0").expect("cv"),
+                inputs: vec![Port {
+                    name: "source".into(),
+                    description: String::new(),
+                }],
+                outputs: Vec::new(),
+                properties: BTreeMap::new(),
+            }],
+            Some(ExecutionBinding::Process(ProcessBinding {
+                program: "/bin/cp".into(),
+                args: vec!["{input:source}".into(), "{output:copy}".into()],
+                working_dir: None,
+                outputs: vec![crate::component::OutputSpec {
+                    name: "copy".into(),
+                    path: "out/copy.txt".into(),
+                    media_type: Some("text/plain".into()),
+                    required: true,
+                }],
+            })),
+            None,
+            BTreeMap::new(),
+        )
+        .expect("m");
+        (emit, copy)
+    }
+
+    #[test]
+    fn workflow_validation_rejects_structural_mistakes() {
+        use crate::workflow::{InputSource, Step, WorkflowSpec, WORKFLOW_SCHEMA_VERSION};
+        let component = ComponentId::generate();
+        let mk_step = |key: &str, after: Vec<String>, inputs: BTreeMap<String, InputSource>| Step {
+            key: key.to_owned(),
+            component,
+            capability: CapabilityName::parse("demo.emit").expect("c"),
+            parameters: BTreeMap::new(),
+            inputs,
+            timeout_ms: 1_000,
+            after,
+        };
+
+        // Duplicate keys.
+        let spec = WorkflowSpec {
+            schema_version: WORKFLOW_SCHEMA_VERSION,
+            name: "wf".into(),
+            steps: vec![
+                mk_step("a", Vec::new(), BTreeMap::new()),
+                mk_step("a", Vec::new(), BTreeMap::new()),
+            ],
+        };
+        assert!(matches!(
+            spec.validate(),
+            Err(CoreError::InvalidRunSpec(msg)) if msg.contains("duplicate step key")
+        ));
+
+        // Unknown dependency.
+        let spec = WorkflowSpec {
+            schema_version: WORKFLOW_SCHEMA_VERSION,
+            name: "wf".into(),
+            steps: vec![mk_step("a", vec!["ghost".into()], BTreeMap::new())],
+        };
+        assert!(matches!(
+            spec.validate(),
+            Err(CoreError::InvalidRunSpec(msg)) if msg.contains("unknown step")
+        ));
+
+        // Cycle through data dependencies: a consumes b, b consumes a.
+        let mut inputs_a = BTreeMap::new();
+        inputs_a.insert(
+            "x".to_owned(),
+            InputSource::FromStep {
+                key: "b".into(),
+                output: "stdout".into(),
+            },
+        );
+        let mut inputs_b = BTreeMap::new();
+        inputs_b.insert(
+            "x".to_owned(),
+            InputSource::FromStep {
+                key: "a".into(),
+                output: "stdout".into(),
+            },
+        );
+        let spec = WorkflowSpec {
+            schema_version: WORKFLOW_SCHEMA_VERSION,
+            name: "wf".into(),
+            steps: vec![
+                mk_step("a", Vec::new(), inputs_a),
+                mk_step("b", Vec::new(), inputs_b),
+            ],
+        };
+        assert!(spec.validate().is_err(), "data cycle must be rejected");
+        assert!(spec.topo_keys().is_err());
+
+        // Self-consumption rejected.
+        let mut self_inputs = BTreeMap::new();
+        self_inputs.insert(
+            "x".to_owned(),
+            InputSource::FromStep {
+                key: "a".into(),
+                output: "stdout".into(),
+            },
+        );
+        let spec = WorkflowSpec {
+            schema_version: WORKFLOW_SCHEMA_VERSION,
+            name: "wf".into(),
+            steps: vec![mk_step("a", Vec::new(), self_inputs)],
+        };
+        assert!(
+            spec.validate().is_err(),
+            "a step cannot consume its own output"
+        );
+
+        // Bad schema version.
+        let spec = WorkflowSpec {
+            schema_version: 9,
+            name: "wf".into(),
+            steps: vec![mk_step("a", Vec::new(), BTreeMap::new())],
+        };
+        assert!(spec.validate().is_err());
+    }
+
+    #[test]
+    fn sequential_workflow_chains_artifacts_between_steps() {
+        let dir = std::env::temp_dir().join(format!("hub-wf-{}", uuid::Uuid::new_v4()));
+        std::fs::create_dir_all(&dir).expect("mkdir");
+        let orch = Orchestrator::new(
+            Arc::new(ManualClock::starting_at(5_000)),
+            Arc::new(InMemoryComponents::default()),
+            Arc::new(InMemoryRuns::default()),
+            Arc::new(InMemoryArtifactMeta::default()),
+            Arc::new(InMemoryWorkflows::default()),
+            FileSystemArtifactStore::open(dir.join("blobs")).expect("blobs"),
+            // The mock writes the copy target so step 2 produces its declared
+            // output exactly where {output:copy} resolves.
+            Arc::new(MockExecutor {
+                start_error: None,
+                write_files: vec![("out/copy.txt".into(), b"chained-bytes".to_vec())],
+            }),
+            Limits::default(),
+            dir.join("workdirs"),
+        );
+
+        let (emit, copy) = echo_and_copy_components();
+        orch.register_component(emit.clone()).expect("emit");
+        orch.register_component(copy.clone()).expect("copy");
+
+        use crate::workflow::{InputSource, Step};
+        let mut copy_inputs = BTreeMap::new();
+        copy_inputs.insert(
+            "source".to_owned(),
+            InputSource::FromStep {
+                key: "emit".into(),
+                output: "stdout".into(),
+            },
+        );
+        let steps = vec![
+            Step {
+                key: "emit".into(),
+                component: emit.id,
+                capability: CapabilityName::parse("demo.emit").expect("c"),
+                parameters: BTreeMap::from([(
+                    "msg".to_owned(),
+                    serde_json::json!("workflow-payload"),
+                )]),
+                inputs: BTreeMap::new(),
+                timeout_ms: 1_000,
+                after: Vec::new(),
+            },
+            Step {
+                key: "store".into(),
+                component: copy.id,
+                capability: CapabilityName::parse("demo.copy").expect("c"),
+                parameters: BTreeMap::new(),
+                inputs: copy_inputs,
+                timeout_ms: 1_000,
+                after: Vec::new(),
+            },
+        ];
+        let spec = crate::workflow::WorkflowSpec {
+            schema_version: crate::workflow::WORKFLOW_SCHEMA_VERSION,
+            name: "chain".into(),
+            steps,
+        };
+        // Deterministic topological order puts emit before store.
+        assert_eq!(spec.topo_keys().expect("order"), vec!["emit", "store"]);
+
+        let submitted = orch.submit_workflow(spec).expect("submit");
+        assert_eq!(submitted.state, crate::workflow::WorkflowState::Created);
+
+        let done = orch.execute_workflow(submitted.id).expect("execute");
+        assert_eq!(done.state, crate::workflow::WorkflowState::Succeeded);
+        assert_eq!(done.steps.len(), 2);
+        assert!(done.steps.iter().all(|sr| sr.state == RunState::Succeeded));
+
+        // The second step consumed the FIRST step's captured stdout:
+        // its run record shows the input binding and produced the file.
+        let store_run_id = &done.steps[1].run;
+        let store_record = orch.run(store_run_id).expect("store run record");
+        let outcome = store_record.outcome.as_ref().expect("outcome");
+        let file_ref = outcome
+            .outputs
+            .iter()
+            .find(|o| o.name == "file:copy")
+            .expect("file output recorded");
+        let (_meta, bytes) = orch.artifact_bytes(&file_ref.artifact).expect("bytes");
+        assert_eq!(bytes, b"chained-bytes");
+        // Provenance: input of store step is the emit step's stdout artifact.
+        let emit_run_id = &done.steps[0].run;
+        let emit_outcome = orch
+            .run(emit_run_id)
+            .and_then(|r| r.outcome)
+            .expect("emit outcome");
+        let expected_input = &emit_outcome.outputs[0].artifact;
+        assert!(outcome.inputs.iter().any(|i| &i.artifact == expected_input));
+
+        let _ = std::fs::remove_dir_all(dir);
     }
 
     #[test]

@@ -4,7 +4,17 @@ All notable changes to SciRust Hub are documented here. Format follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/); versioning is
 pre-1.0 (`0.x`), so minor bumps may contain breaking changes.
 
-## [0.2.0] - 2026-08-25
+## [Unreleased]
+
+### Added
+
+- Sequential workflow orchestration (ADR-0006): multi-step specs with unique
+  step keys, explicit `after` dependencies and cross-step input references
+  (`from_step`); deterministic topological execution via the DAG primitive,
+  fail-fast on step failure; per-step run provenance recorded in
+  `WorkflowRecord`s; SQLite migration v2 stores them durably; HTTP endpoints
+  (`POST/GET /api/v1/workflows[/{id}|/executions]`) and CLI
+  (`workflow submit/run/list/inspect`).
 
 ### Added
 

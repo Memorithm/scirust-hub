@@ -13,7 +13,10 @@ use crate::digest::ContentDigest;
 use crate::error::CoreError;
 use crate::id::{ArtifactId, ComponentId, RunId};
 use crate::run::RunRecord;
-use crate::store::{ArtifactMetadataRepository, ArtifactStore, ComponentRepository, RunRepository};
+use crate::store::{
+    ArtifactMetadataRepository, ArtifactStore, ComponentRepository, RunRepository,
+    WorkflowRepository,
+};
 use crate::version::Version;
 
 #[derive(Debug, Default)]
@@ -203,6 +206,38 @@ impl ArtifactStore for FileSystemArtifactStore {
 
     fn contains(&self, digest: &ContentDigest) -> bool {
         self.blob_path(digest).exists()
+    }
+}
+
+#[derive(Debug, Default)]
+struct WorkflowsInner {
+    records: BTreeMap<crate::id::WorkflowId, crate::workflow::WorkflowRecord>,
+}
+
+/// In-memory workflow backend.
+#[derive(Debug, Default)]
+pub struct InMemoryWorkflows(Mutex<WorkflowsInner>);
+
+impl WorkflowRepository for InMemoryWorkflows {
+    fn put(&self, record: &crate::workflow::WorkflowRecord) -> Result<(), CoreError> {
+        let mut inner = self.0.lock().map_err(poison)?;
+        inner.records.insert(record.id, record.clone());
+        Ok(())
+    }
+
+    fn get(
+        &self,
+        id: &crate::id::WorkflowId,
+    ) -> Result<Option<crate::workflow::WorkflowRecord>, CoreError> {
+        let inner = self.0.lock().map_err(poison)?;
+        Ok(inner.records.get(id).cloned())
+    }
+
+    fn list(&self) -> Result<Vec<crate::workflow::WorkflowRecord>, CoreError> {
+        let inner = self.0.lock().map_err(poison)?;
+        let mut rows: Vec<&crate::workflow::WorkflowRecord> = inner.records.values().collect();
+        rows.sort_by_key(|r| (r.created_at, r.id));
+        Ok(rows.into_iter().cloned().collect())
     }
 }
 
