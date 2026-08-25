@@ -1,0 +1,29 @@
+[package]
+name = "scirust-hubd"
+description = "SciRust Hub daemon: registry, orchestration, provenance"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+publish.workspace = true
+repository.workspace = true
+
+[dependencies]
+hub-core = { workspace = true }
+hub-executor = { workspace = true }
+hub-api = { workspace = true }
+axum = { workspace = true }
+tokio = { workspace = true }
+clap = { workspace = true }
+tracing = { workspace = true }
+tracing-subscriber = { workspace = true }
+thiserror = { workspace = true }
+
+[dev-dependencies]
+serde_json = { workspace = true }
+
+[lints]
+workspace = true
+
+[[bin]]
+name = "scirust-hubd"
+path = "src/main.rs"
