@@ -96,11 +96,36 @@ pub struct SourceInfo {
     pub dirty: bool,
 }
 
+/// One declared output file a component writes into its working directory.
+/// After a clean exit the orchestrator ingests it as an artifact.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub struct OutputSpec {
+    /// Stable artifact label; also referenced by `{output:<name>}` argv
+    /// placeholders. Same grammar as input names.
+    pub name: String,
+    /// Working-directory-relative file path (forward slashes, no `..`,
+    /// not absolute).
+    pub path: String,
+    /// Media type recorded on the ingested artifact
+    /// (default `application/octet-stream`).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub media_type: Option<String>,
+    /// When true (default), a clean exit without this file fails the run.
+    #[serde(default = "crate::component::default_true")]
+    pub required: bool,
+}
+
+fn default_true() -> bool {
+    true
+}
+
 /// A validated fixed argv binding.
 ///
 /// Placeholders allowed in `args` (never in `program`):
 /// - `{params}` — compact JSON of the run parameters;
-/// - `{input:<name>}` — absolute path of the materialized input artifact.
+/// - `{input:<name>}` — absolute path of the materialized input artifact;
+/// - `{output:<name>}` — absolute path where the component must write the
+///   named declared output.
 ///
 /// The argv is passed directly to the OS (`Command`), never through a shell.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
@@ -109,6 +134,10 @@ pub struct ProcessBinding {
     pub args: Vec<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub working_dir: Option<String>,
+    /// Files the component declares it will produce in its working
+    /// directory; ingested as artifacts after execution.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub outputs: Vec<OutputSpec>,
 }
 
 /// How the Hub may execute this component. Extensible enum: new variants are
@@ -130,6 +159,83 @@ impl ExecutionBinding {
             ExecutionBinding::Process(p) => validate_process_binding(p),
         }
     }
+}
+
+fn validate_output_specs(outputs: &[OutputSpec]) -> Result<(), CoreError> {
+    if outputs.len() > crate::limits::Limits::default().max_outputs {
+        return Err(CoreError::InvalidManifest(format!(
+            "binding declares {} outputs, more than the allowed {}",
+            outputs.len(),
+            crate::limits::Limits::default().max_outputs
+        )));
+    }
+    let mut names = std::collections::BTreeSet::new();
+    let mut paths = std::collections::BTreeSet::new();
+    for out in outputs {
+        // Names double as placeholder references and provenance labels.
+        let name_ok = !out.name.is_empty()
+            && out.name.len() <= 64
+            && out
+                .name
+                .starts_with(|c: char| c.is_ascii_lowercase() || c.is_ascii_digit())
+            && out
+                .name
+                .chars()
+                .all(|c| c.is_ascii_lowercase() || c.is_ascii_digit() || c == '_' || c == '-');
+        if !name_ok {
+            return Err(CoreError::InvalidManifest(format!(
+                "output name {:?} must match [a-z0-9][a-z0-9_-]{{0,63}}",
+                out.name
+            )));
+        }
+        if !names.insert(out.name.as_str()) {
+            return Err(CoreError::InvalidManifest(format!(
+                "duplicate output name {:?}",
+                out.name
+            )));
+        }
+        validate_relative_workdir_path(&out.path)?;
+        if !paths.insert(out.path.as_str()) {
+            return Err(CoreError::InvalidManifest(format!(
+                "duplicate output path {:?}",
+                out.path
+            )));
+        }
+        if let Some(media) = &out.media_type {
+            if media.is_empty() || media.len() > 128 || media.chars().any(char::is_control) {
+                return Err(CoreError::InvalidManifest(
+                    "output media_type must be 1..=128 printable characters".into(),
+                ));
+            }
+        }
+    }
+    Ok(())
+}
+
+/// Output paths are joined onto the per-run working directory; they must
+/// stay inside it.
+fn validate_relative_workdir_path(path: &str) -> Result<(), CoreError> {
+    if path.is_empty() || path.len() > 256 {
+        return Err(CoreError::InvalidManifest(
+            "output path must be 1..=256 characters".into(),
+        ));
+    }
+    if path.starts_with('/') || path.contains('\\') || path.contains('\0') {
+        return Err(CoreError::InvalidManifest(format!(
+            "output path {path:?} must be relative with forward slashes"
+        )));
+    }
+    for component in std::path::Path::new(path).components() {
+        match component {
+            std::path::Component::Normal(_) => {}
+            other => {
+                return Err(CoreError::InvalidManifest(format!(
+                    "output path {path:?} contains forbidden component {other:?}"
+                )));
+            }
+        }
+    }
+    Ok(())
 }
 
 fn validate_process_binding(p: &ProcessBinding) -> Result<(), CoreError> {
@@ -163,7 +269,7 @@ fn validate_process_binding(p: &ProcessBinding) -> Result<(), CoreError> {
             ));
         }
     }
-    Ok(())
+    validate_output_specs(&p.outputs)
 }
 
 /// A complete, validated component registration payload.
@@ -305,6 +411,7 @@ mod tests {
                 program: "/bin/echo".into(),
                 args: vec!["{params}".into()],
                 working_dir: None,
+                outputs: Vec::new(),
             })),
             None,
             BTreeMap::new(),
@@ -354,6 +461,7 @@ mod tests {
             program: "/bin/echo\0".into(),
             args: vec![],
             working_dir: None,
+            outputs: Vec::new(),
         });
         assert!(bad.validate().is_err());
     }
@@ -366,6 +474,7 @@ mod tests {
             program: "/bin/echo".into(),
             args: vec!["{input:missing}".into()],
             working_dir: None,
+            outputs: Vec::new(),
         });
         assert!(ok.validate().is_ok());
     }

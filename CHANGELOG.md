@@ -15,6 +15,12 @@ pre-1.0 (`0.x`), so minor bumps may contain breaking changes.
 - Daemon `--store sqlite|memory` switch; `sqlite` is the default so daemon
   state survives restarts (proven by a kill -9 restart e2e test).
 
+- Declared output-file ingestion: process bindings may declare `outputs`
+  (name + workdir-relative path + media type + required flag); argv gains a
+  `{output:<name>}` placeholder; the orchestrator pre-creates output parent
+  directories, ingests produced files as artifacts after clean exits, and
+  fails runs whose required outputs were not produced.
+
 ### Fixed
 
 - Store-level semantics pinned by tests to match the in-memory backend

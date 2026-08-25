@@ -293,21 +293,59 @@ impl Orchestrator {
             });
         }
 
+        // Pre-create parent directories of every declared output so
+        // components can rely on them existing inside their workdir.
+        if let Some(ExecutionBinding::Process(p)) = &binding {
+            for out in &p.outputs {
+                let path = workdir.join(&out.path);
+                if let Some(parent) = path.parent() {
+                    std::fs::create_dir_all(parent).map_err(|e| {
+                        CoreError::Storage(format!("creating output dir {:?}: {e}", parent))
+                    })?;
+                }
+            }
+        }
+
         let started_at = self.clock.now_ms();
         record.transition(RunState::Running, started_at)?;
         self.runs.put(&record)?;
 
-        let outcome = self.run_process(&mut record, binding, &workdir, token)?;
+        let outcome = self.run_process(&mut record, &binding, &workdir, token)?;
         let finished_at = self.clock.now_ms();
         let duration_ms = finished_at.saturating_sub(started_at);
         let params_digest = record.spec.params_digest()?;
         let env_keys = vec!["PATH".to_owned(), "TMPDIR".to_owned()];
-        let failure = if outcome.exited_cleanly() {
+        let mut outputs = self.persist_stream_artifacts(&record, &outcome, finished_at)?;
+
+        // Ingest declared output files. Only on clean exits: files left by a
+        // killed or timed-out process are partial by definition.
+        let mut missing_required = Vec::new();
+        let declared_outputs: &[crate::component::OutputSpec] = match &binding {
+            Some(ExecutionBinding::Process(p)) => &p.outputs,
+            None => &[],
+        };
+        if outcome.exited_cleanly() {
+            for spec in declared_outputs {
+                match self.ingest_output_file(&record, spec, &workdir, finished_at)? {
+                    Some(reference) => outputs.push(reference),
+                    None if spec.required => missing_required.push(spec.name.clone()),
+                    None => {}
+                }
+            }
+        }
+        let clean = outcome.exited_cleanly() && missing_required.is_empty();
+
+        let failure = if clean {
             None
         } else if outcome.cancelled {
             Some("cancelled".into())
         } else if outcome.timed_out {
             Some(format!("timed out after {} ms", record.spec.timeout_ms))
+        } else if !missing_required.is_empty() {
+            Some(format!(
+                "required output(s) not produced: {}",
+                missing_required.join(", ")
+            ))
         } else if let Some(start_error) = &outcome.start_error {
             Some(format!("failed to start: {start_error}"))
         } else {
@@ -316,8 +354,6 @@ impl Orchestrator {
                 None => "terminated by signal".into(),
             })
         };
-        let outputs = self.persist_stream_artifacts(&record, &outcome, finished_at)?;
-        let cancelled_by_user = outcome.cancelled && !outcome.timed_out;
 
         record.outcome = Some(RunOutcome {
             exit_code: outcome.exit_code,
@@ -333,9 +369,9 @@ impl Orchestrator {
             failure: failure.clone(),
         });
 
-        let final_state = if cancelled_by_user {
+        let final_state = if outcome.cancelled && !outcome.timed_out {
             RunState::Cancelled
-        } else if outcome.exited_cleanly() {
+        } else if clean {
             RunState::Succeeded
         } else {
             RunState::Failed
@@ -355,7 +391,7 @@ impl Orchestrator {
     fn run_process(
         &self,
         record: &mut RunRecord,
-        binding: Option<ExecutionBinding>,
+        binding: &Option<ExecutionBinding>,
         workdir: &std::path::Path,
         token: &CancelToken,
     ) -> Result<ExecutionOutcome, CoreError> {
@@ -414,7 +450,7 @@ impl Orchestrator {
     fn build_request(
         &self,
         spec: &RunSpec,
-        binding: Option<ExecutionBinding>,
+        binding: &Option<ExecutionBinding>,
         workdir: &std::path::Path,
     ) -> Result<ExecutionRequest, CoreError> {
         let process = match binding {
@@ -438,9 +474,15 @@ impl Orchestrator {
                 )
             })
             .collect();
+        let output_paths: BTreeMap<&str, PathBuf> = process
+            .outputs
+            .iter()
+            .map(|o| (o.name.as_str(), workdir.join(&o.path)))
+            .collect();
         let mut args = Vec::with_capacity(process.args.len());
         for raw in &process.args {
-            let substituted = substitute_placeholders(raw, &params_json, &input_paths, spec)?;
+            let substituted =
+                substitute_placeholders(raw, &params_json, &input_paths, &output_paths)?;
             args.push(substituted);
         }
         // Environment built from scratch; nothing else leaks in. Values are
@@ -461,6 +503,62 @@ impl Orchestrator {
             timeout_ms: spec.timeout_ms,
             max_capture_bytes_per_stream: self.limits.max_capture_bytes,
         })
+    }
+
+    /// Reads one declared output file from the working directory and stores
+    /// it as an artifact. `Ok(None)` means the file was not produced.
+    fn ingest_output_file(
+        &self,
+        record: &RunRecord,
+        spec: &crate::component::OutputSpec,
+        workdir: &std::path::Path,
+        now: UnixMillis,
+    ) -> Result<Option<OutputRef>, CoreError> {
+        let path = workdir.join(&spec.path);
+        if !path.is_file() {
+            return Ok(None);
+        }
+        // Size gate before reading; oversized declared outputs fail the run
+        // rather than being silently truncated (truncation would corrupt the
+        // artifact's meaning).
+        let size = std::fs::metadata(&path)
+            .map_err(|e| CoreError::Storage(format!("stating output {:?}: {e}", spec.path)))?
+            .len();
+        if size > self.limits.max_artifact_bytes {
+            return Err(CoreError::ArtifactTooLarge {
+                artifact: ArtifactId::generate(),
+                size,
+                limit: self.limits.max_artifact_bytes,
+            });
+        }
+        let bytes = std::fs::read(&path)
+            .map_err(|e| CoreError::Storage(format!("reading output {:?}: {e}", spec.path)))?;
+        let digest = self.blobs.put(
+            &bytes,
+            self.limits.max_artifact_bytes,
+            crate::digest::DOMAIN_ARTIFACT_BLOB,
+        )?;
+        let media_type = spec
+            .media_type
+            .clone()
+            .unwrap_or_else(|| "application/octet-stream".to_owned());
+        let meta = crate::artifact::ArtifactMeta {
+            id: ArtifactId::generate(),
+            name: format!("{}-{}", record.id, spec.name),
+            media_type,
+            digest,
+            size,
+            created_at: now,
+            produced_by_run: Some(record.id),
+        };
+        meta.validate()?;
+        self.artifacts_meta.put(&meta)?;
+        Ok(Some(OutputRef {
+            name: format!("file:{}", spec.name),
+            artifact: meta.id,
+            digest,
+            size: meta.size,
+        }))
     }
 
     fn persist_stream_artifacts(
@@ -623,7 +721,24 @@ fn check_placeholders(binding: &ExecutionBinding, spec: &RunSpec) -> Result<(), 
             }
             continue;
         }
-        if raw.contains("{params}") || raw.contains("{input:") {
+        if let Some(name) = raw
+            .strip_prefix("{output:")
+            .and_then(|r| r.strip_suffix('}'))
+        {
+            let declared = process.outputs.iter().any(|o| o.name == name);
+            if !declared {
+                return Err(CoreError::Validation(format!(
+                    "binding references unknown output {name:?}; declared outputs: {:?}",
+                    process
+                        .outputs
+                        .iter()
+                        .map(|o| o.name.as_str())
+                        .collect::<Vec<_>>()
+                )));
+            }
+            continue;
+        }
+        if raw.contains("{params}") || raw.contains("{input:") || raw.contains("{output:") {
             return Err(CoreError::Validation(format!(
                 "placeholder must occupy the whole argument, got {raw:?}"
             )));
@@ -636,7 +751,7 @@ fn substitute_placeholders(
     raw: &str,
     params_json: &str,
     input_paths: &BTreeMap<&str, PathBuf>,
-    spec: &RunSpec,
+    output_paths: &BTreeMap<&str, PathBuf>,
 ) -> Result<String, CoreError> {
     if raw == "{params}" {
         return Ok(params_json.to_owned());
@@ -648,11 +763,20 @@ fn substitute_placeholders(
         return input_paths.get(name).map_or_else(
             || {
                 Err(CoreError::Validation(format!(
-                    "binding references unknown input {name:?}; declared inputs: {:?}",
-                    spec.inputs
-                        .iter()
-                        .map(|i| i.name.as_str())
-                        .collect::<Vec<_>>()
+                    "unresolved input placeholder {name:?} at execution time"
+                )))
+            },
+            |p| Ok(p.display().to_string()),
+        );
+    }
+    if let Some(name) = raw
+        .strip_prefix("{output:")
+        .and_then(|r| r.strip_suffix('}'))
+    {
+        return output_paths.get(name).map_or_else(
+            || {
+                Err(CoreError::Validation(format!(
+                    "unresolved output placeholder {name:?} at execution time"
                 )))
             },
             |p| Ok(p.display().to_string()),
@@ -660,7 +784,7 @@ fn substitute_placeholders(
     }
     // Literal argument; placeholders must appear alone to keep substitution
     // unambiguous (no partial splicing into larger strings).
-    if raw.contains("{params}") || raw.contains("{input:") {
+    if raw.contains("{params}") || raw.contains("{input:") || raw.contains("{output:") {
         return Err(CoreError::Validation(format!(
             "placeholder must occupy the whole argument, got {raw:?}"
         )));
@@ -681,12 +805,29 @@ mod tests {
     use crate::memory::{
         FileSystemArtifactStore, InMemoryArtifactMeta, InMemoryComponents, InMemoryRuns,
     };
+    use crate::run::InputBinding;
     use crate::Version;
     use std::collections::BTreeMap;
     use std::sync::Arc;
 
     struct MockExecutor {
         start_error: Option<String>,
+        /// Relative path -> bytes, written into the request's working
+        /// directory before returning success (simulates components that
+        /// produce files).
+        write_files: Vec<(String, Vec<u8>)>,
+    }
+
+    impl MockExecutor {
+        fn write_files(paths: &[(&str, &[u8])]) -> Self {
+            Self {
+                start_error: None,
+                write_files: paths
+                    .iter()
+                    .map(|(p, b)| ((*p).to_owned(), b.to_vec()))
+                    .collect(),
+            }
+        }
     }
 
     impl Executor for MockExecutor {
@@ -699,6 +840,13 @@ mod tests {
             request: &ExecutionRequest,
             _cancel: &CancelToken,
         ) -> Result<ExecutionOutcome, crate::error::ExecutorFailure> {
+            for (relative, bytes) in &self.write_files {
+                let target = request.working_dir.join(relative);
+                if let Some(parent) = target.parent() {
+                    std::fs::create_dir_all(parent).expect("create output parent");
+                }
+                std::fs::write(target, bytes).expect("write simulated output");
+            }
             if let Some(err) = &self.start_error {
                 return Ok(ExecutionOutcome {
                     exit_code: None,
@@ -754,7 +902,10 @@ mod tests {
             Arc::new(InMemoryRuns::default()),
             artifacts.clone(),
             FileSystemArtifactStore::open(dir.join("blobs")).expect("blobs"),
-            Arc::new(MockExecutor { start_error }),
+            Arc::new(MockExecutor {
+                start_error,
+                write_files: Vec::new(),
+            }),
             Limits::default(),
             dir.join("workdirs"),
         );
@@ -788,6 +939,7 @@ mod tests {
                 program: "/bin/echo".into(),
                 args: vec!["{params}".into()],
                 working_dir: None,
+                outputs: Vec::new(),
             })),
             None,
             BTreeMap::new(),
@@ -1010,6 +1162,7 @@ mod tests {
                     program: "/bin/cat".into(),
                     args,
                     working_dir: None,
+                    outputs: Vec::new(),
                 })),
                 None,
                 BTreeMap::new(),
@@ -1103,6 +1256,165 @@ mod tests {
         assert!(!hub.orch.cancel_run(run.id).expect("cancel"));
         let record = hub.orch.run(&run.id).expect("record");
         assert_eq!(record.state, RunState::Cancelled);
+    }
+
+    fn copy_manifest(outputs: Vec<crate::component::OutputSpec>) -> ComponentManifest {
+        ComponentManifest::new_v1(
+            ComponentId::generate(),
+            ComponentName::parse("demo-copy").expect("n"),
+            Version::parse("1.0.0").expect("v"),
+            ComponentKind::parse(ComponentKind::TOOL).expect("k"),
+            vec![Capability {
+                name: CapabilityName::parse("demo.copy").expect("c"),
+                contract_version: Version::parse("1.0.0").expect("cv"),
+                inputs: vec![Port {
+                    name: "source".into(),
+                    description: String::new(),
+                }],
+                outputs: Vec::new(),
+                properties: BTreeMap::new(),
+            }],
+            Some(ExecutionBinding::Process(ProcessBinding {
+                program: "/bin/cp".into(),
+                args: vec!["{input:source}".into(), "{output:copy}".into()],
+                working_dir: None,
+                outputs,
+            })),
+            None,
+            BTreeMap::new(),
+        )
+        .expect("m")
+    }
+
+    #[test]
+    fn declared_output_file_is_ingested_as_artifact() {
+        // The mock executor writes the file exactly where {output:copy}
+        // resolves, mirroring what /bin/cp would do with real paths.
+        let dir = std::env::temp_dir().join(format!("hub-orch-{}", uuid::Uuid::new_v4()));
+        std::fs::create_dir_all(&dir).expect("mkdir");
+        let clock = Arc::new(ManualClock::starting_at(1_000));
+        let artifacts = Arc::new(InMemoryArtifactMeta::default());
+        let orch = Orchestrator::new(
+            clock.clone(),
+            Arc::new(InMemoryComponents::default()),
+            Arc::new(InMemoryRuns::default()),
+            artifacts.clone(),
+            FileSystemArtifactStore::open(dir.join("blobs")).expect("blobs"),
+            Arc::new(MockExecutor::write_files(&[(
+                "out/copy.txt",
+                b"file-output-bytes",
+            )])),
+            Limits::default(),
+            dir.join("workdirs"),
+        );
+
+        let manifest = copy_manifest(vec![crate::component::OutputSpec {
+            name: "copy".into(),
+            path: "out/copy.txt".into(),
+            media_type: Some("text/plain".into()),
+            required: true,
+        }]);
+        orch.register_component(manifest.clone()).expect("register");
+
+        // Seed the input artifact through the same in-memory metadata store
+        // the orchestrator uses.
+        let bytes = b"input-payload".to_vec();
+        let digest = orch
+            .blob_store()
+            .put(&bytes, 1024, crate::digest::DOMAIN_ARTIFACT_BLOB)
+            .expect("seed blob");
+        let seed_meta = crate::artifact::ArtifactMeta {
+            id: ArtifactId::generate(),
+            name: "seed".into(),
+            media_type: "text/plain".into(),
+            digest,
+            size: bytes.len() as u64,
+            created_at: 0,
+            produced_by_run: None,
+        };
+        use crate::store::ArtifactMetadataRepository as _;
+        artifacts.put(&seed_meta).expect("seed meta");
+
+        let run = orch
+            .submit_run(RunSpec {
+                component: manifest.id,
+                capability: CapabilityName::parse("demo.copy").expect("cap"),
+                parameters: BTreeMap::new(),
+                inputs: vec![InputBinding {
+                    name: "source".into(),
+                    artifact: seed_meta.id,
+                }],
+                timeout_ms: 1_000,
+            })
+            .expect("submit");
+        let done = orch.execute_run(run.id).expect("execute");
+        assert_eq!(done.state, RunState::Succeeded);
+        let outcome = done.outcome.as_ref().expect("outcome");
+
+        // Ingested file artifact present alongside stdout capture.
+        let file_refs: Vec<_> = outcome
+            .outputs
+            .iter()
+            .filter(|o| o.name == "file:copy")
+            .collect();
+        assert_eq!(file_refs.len(), 1, "outputs: {:?}", outcome.outputs);
+        let (_meta, stored) = orch.artifact_bytes(&file_refs[0].artifact).expect("bytes");
+        assert_eq!(stored, b"file-output-bytes");
+
+        let _ = std::fs::remove_dir_all(dir);
+    }
+
+    #[test]
+    fn missing_required_output_fails_the_run() {
+        let (hub, _clock) = hub(None);
+        let manifest = copy_manifest(vec![crate::component::OutputSpec {
+            name: "copy".into(),
+            path: "out/never-written.txt".into(),
+            media_type: None,
+            required: true,
+        }]);
+        hub.orch
+            .register_component(manifest.clone())
+            .expect("register");
+
+        let bytes = b"payload".to_vec();
+        let digest = hub
+            .orch
+            .blob_store()
+            .put(&bytes, 1024, crate::digest::DOMAIN_ARTIFACT_BLOB)
+            .expect("seed blob");
+        let seed_meta = crate::artifact::ArtifactMeta {
+            id: ArtifactId::generate(),
+            name: "seed".into(),
+            media_type: "text/plain".into(),
+            digest,
+            size: bytes.len() as u64,
+            created_at: 0,
+            produced_by_run: None,
+        };
+        use crate::store::ArtifactMetadataRepository as _;
+        hub.artifacts.put(&seed_meta).expect("seed meta");
+
+        let run = hub
+            .orch
+            .submit_run(RunSpec {
+                component: manifest.id,
+                capability: CapabilityName::parse("demo.copy").expect("cap"),
+                parameters: BTreeMap::new(),
+                inputs: vec![InputBinding {
+                    name: "source".into(),
+                    artifact: seed_meta.id,
+                }],
+                timeout_ms: 1_000,
+            })
+            .expect("submit");
+        let done = hub.orch.execute_run(run.id).expect("execute call");
+        assert_eq!(done.state, RunState::Failed);
+        let outcome = done.outcome.expect("outcome");
+        assert_eq!(
+            outcome.failure.as_deref(),
+            Some("required output(s) not produced: copy")
+        );
     }
 
     #[test]

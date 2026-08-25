@@ -279,3 +279,173 @@ fn malformed_requests_get_structured_errors_not_panics() {
     assert_eq!(status, 422);
     assert!(body.contains("validation_failed"), "body: {body}");
 }
+
+#[test]
+fn declared_output_files_round_trip_through_http() {
+    let (_guard, port) = start_daemon();
+
+    // Component copies its materialized input into a declared output file.
+    let manifest = format!(
+        r#"{{
+            "schema_version": 1,
+            "manifest": {{
+                "id": "{id}",
+                "name": "demo-copy",
+                "version": "1.0.0",
+                "kind": "tool",
+                "capabilities": [
+                    {{
+                        "name": "demo.copy",
+                        "contract_version": "1.0.0",
+                        "inputs": [{{"name": "source"}}]
+                    }}
+                ],
+                "execution": {{
+                    "type": "process",
+                    "program": "/bin/cp",
+                    "args": ["{{input:source}}", "{{output:copy}}"],
+                    "outputs": [
+                        {{
+                            "name": "copy",
+                            "path": "out/copy.txt",
+                            "media_type": "text/plain",
+                            "required": true
+                        }}
+                    ]
+                }}
+            }}
+        }}"#,
+        id = uuid_v4()
+    );
+    let (status, body) =
+        http(port, "POST", "/api/v1/components", Some(&manifest)).expect("register copy");
+    assert_eq!(status, 201, "body: {body}");
+
+    // Produce an input artifact using echo (stream capture), then feed it
+    // into the copy component.
+    let echo = format!(
+        r#"{{
+            "schema_version": 1,
+            "manifest": {{
+                "id": "{id}",
+                "name": "demo-echo-seed",
+                "version": "1.0.0",
+                "kind": "tool",
+                "capabilities": [
+                    {{"name": "demo.echo", "contract_version": "1.0.0"}}
+                ],
+                "execution": {{
+                    "type": "process",
+                    "program": "/bin/echo",
+                    "args": ["seed-for-copy"]
+                }}
+            }}
+        }}"#,
+        id = uuid_v4()
+    );
+    let (status, _body) =
+        http(port, "POST", "/api/v1/components", Some(&echo)).expect("register echo");
+    assert_eq!(status, 201);
+    let submit_echo = serde_json::json!({
+        "schema_version": 1,
+        "run_spec": {
+            "component": serde_json::Value::Null,
+            "capability": "demo.echo",
+            "parameters": {},
+            "inputs": [],
+            "timeout_ms": 5000
+        }
+    });
+    // Resolve the echo component id by listing and matching the name.
+    let (status, list) = http(port, "GET", "/api/v1/components", None).expect("list");
+    assert_eq!(status, 200);
+    let echo_id = find_component_id_by_name(&list, "demo-echo-seed");
+    let copy_id = find_component_id_by_name(&list, "demo-copy");
+    assert!(echo_id.is_some() && copy_id.is_some(), "list: {list}");
+
+    let mut spec = submit_echo;
+    spec["run_spec"]["component"] = serde_json::json!(echo_id.clone().unwrap());
+    let (status, body) =
+        http(port, "POST", "/api/v1/runs", Some(&spec.to_string())).expect("submit echo");
+    assert_eq!(status, 201, "body: {body}");
+    let run_id: String = json_field(&body, "\"id\":\"").expect("echo run id");
+    let (status, executed) = http(
+        port,
+        "POST",
+        "/api/v1/executions",
+        Some(&serde_json::json!(run_id).to_string()),
+    )
+    .expect("execute echo");
+    assert_eq!(status, 200);
+    assert!(executed.contains("\"succeeded\""), "body: {executed}");
+    let seed_artifact: String = json_field(&executed, "\"artifact\":\"").expect("seed artifact");
+
+    // Copy run consumes the seed artifact and declares the file output.
+    let submit_copy = serde_json::json!({
+        "schema_version": 1,
+        "run_spec": {
+            "component": copy_id.unwrap(),
+            "capability": "demo.copy",
+            "parameters": {},
+            "inputs": [{"name": "source", "artifact": seed_artifact}],
+            "timeout_ms": 5000
+        }
+    })
+    .to_string();
+    let (status, body) =
+        http(port, "POST", "/api/v1/runs", Some(&submit_copy)).expect("submit copy");
+    assert_eq!(status, 201, "body: {body}");
+    let copy_run_id: String = json_field(&body, "\"id\":\"").expect("copy run id");
+    let (status, executed) = http(
+        port,
+        "POST",
+        "/api/v1/executions",
+        Some(&serde_json::json!(copy_run_id).to_string()),
+    )
+    .expect("execute copy");
+    assert_eq!(status, 200, "body: {executed}");
+    assert!(executed.contains("\"succeeded\""), "body: {executed}");
+
+    // The ingested file artifact carries byte-exact content of the seed.
+    // Seed stdout was "seed-for-copy\n"; cp preserved it verbatim.
+    let file_ref_start = executed.find("\"name\":\"file:copy\"").expect("file ref");
+    let artifact_id: String =
+        json_field(&executed[file_ref_start..], "\"artifact\":\"").expect("ingested artifact id");
+    let (status, artifact) = http(
+        port,
+        "GET",
+        &format!("/api/v1/artifacts/{artifact_id}?include=content"),
+        None,
+    )
+    .expect("fetch ingested artifact");
+    assert_eq!(status, 200, "body: {artifact}");
+    assert!(
+        artifact.contains("seed-for-copy"),
+        "ingested content mismatch: {artifact}"
+    );
+}
+
+/// Finds a component id by display name in a serialized components list.
+/// ComponentDto serializes `id` immediately before `name`, so the closest
+/// preceding id belongs to that object.
+fn find_component_id_by_name(list_json: &str, name: &str) -> Option<String> {
+    let needle = format!("\"name\":\"{name}\"");
+    let mut search_from = 0;
+    while let Some(rel) = list_json[search_from..].find(&needle) {
+        let name_pos = search_from + rel;
+        let id_key = list_json[..name_pos].rfind("\"id\":\"")?;
+        let raw = &list_json[id_key + "\"id\":\"".len()..];
+        // Ensure this id is not claimed by an earlier name match.
+        let prev_name = list_json[..id_key].rfind("\"name\":\"");
+        let valid = prev_name.is_none_or(|p| p < search_from || p < name_pos && false);
+        if valid
+            || prev_name
+                .map(|p| p < name_pos.saturating_sub(needle.len()))
+                .unwrap_or(true)
+        {
+            return Some(raw.chars().take_while(|c| *c != '"').collect());
+        }
+        search_from = name_pos + needle.len();
+    }
+    None
+}
