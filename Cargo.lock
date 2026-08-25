@@ -470,6 +470,16 @@ dependencies = [
 ]
 
 [[package]]
+name = "hub-mcp"
+version = "0.2.0"
+dependencies = [
+ "clap",
+ "serde_json",
+ "thiserror",
+ "ureq",
+]
+
+[[package]]
 name = "hub-protocol"
 version = "0.2.0"
 dependencies = [
