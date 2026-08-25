@@ -237,6 +237,7 @@ mod tests {
                 program: program.into(),
                 args: vec![],
                 working_dir: None,
+                outputs: Vec::new(),
             })),
             None,
             BTreeMap::new(),

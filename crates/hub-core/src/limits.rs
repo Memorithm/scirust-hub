@@ -16,6 +16,8 @@ pub struct Limits {
     pub max_params_bytes: usize,
     /// Maximum number of input artifact references per run.
     pub max_inputs: usize,
+    /// Maximum number of declared output files per component binding.
+    pub max_outputs: usize,
     /// Maximum bytes captured from one output stream (stdout or stderr).
     /// Excess is truncated and flagged, not dropped silently.
     pub max_capture_bytes: usize,
@@ -33,6 +35,7 @@ impl Default for Limits {
             max_arg_bytes: 4096,
             max_params_bytes: 16 * 1024,
             max_inputs: 32,
+            max_outputs: 16,
             max_capture_bytes: 1024 * 1024,
             max_artifact_bytes: 16 * 1024 * 1024,
             max_timeout_ms: 60 * 60 * 1000,

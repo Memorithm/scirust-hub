@@ -77,9 +77,13 @@ See [`examples/component.json`](examples/component.json). Key points:
 - Capabilities are validated open names (`namespace.action`) with typed ports;
   the Hub indexes whatever is truthfully declared.
 - `execution.type: "process"` declares a fixed argv binding. Placeholders
-  `{params}` (canonical JSON) and `{input:<name>}` (materialized artifact
-  path) may occupy a whole argument each. argv goes straight to the OS —
-  there is no shell anywhere.
+  `{params}` (canonical JSON), `{input:<name>}` (materialized artifact path)
+  and `{output:<name>}` (declared output file path, parent directories
+  pre-created by the Hub) may occupy a whole argument each. argv goes
+  straight to the OS — there is no shell anywhere.
+- Declared `outputs` are ingested as artifacts after a clean exit
+  (`required: true` fails the run when the file was not produced; oversized
+  files fail rather than being truncated).
 - Registration is idempotent: byte-identical manifests are accepted replays;
   different content under the same `(id, version)` is a `409 conflict`.
 
@@ -115,8 +119,8 @@ provenance walk driven through the CLI.
 
 ## Current limitations
 
-- Only stdout/stderr capture is tracked; files written into the working
-  directory are not auto-ingested as artifacts yet.
+- Only declared outputs and captured streams are tracked; undeclared files
+  written into the working directory are ignored.
 - Multi-node workflow orchestration is not implemented; the DAG primitive
   ships unit-tested but nothing schedules it yet.
 - No authentication/TLS: bind to localhost until that lands.

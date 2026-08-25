@@ -25,7 +25,11 @@ A single-node control plane with one tested vertical slice:
 8. everything is queryable through HTTP and the CLI;
 9. after v0.2.0: registries/run records are durable across daemon restarts
    via `hub-store-sqlite` (embedded SQLite, WAL + FULL sync, versioned
-   migrations), proven by a kill -9/restart e2e test.
+   migrations), proven by a kill -9/restart e2e test;
+10. after v0.2.0: components can declare output files (`outputs:` with
+   `{output:<name>}` argv placeholders); the Hub pre-creates their parent
+   directories, ingests them byte-exactly on clean exits and fails runs
+   whose required outputs are missing.
 
 ## Architecture
 

@@ -622,6 +622,7 @@ mod tests {
                 program: "/bin/echo".into(),
                 args: vec!["{params}".into()],
                 working_dir: None,
+                outputs: Vec::new(),
             })),
             None,
             BTreeMap::new(),

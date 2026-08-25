@@ -56,6 +56,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             // no shell interpolation ever happens.
             args: vec!["{params}".into()],
             working_dir: None,
+            outputs: Vec::new(),
         },
     );
     let upper = upper_component();
@@ -169,6 +170,7 @@ fn upper_component() -> ComponentManifest {
             // placeholder becomes one literal argv entry (file operand).
             args: vec![r"s/.*/\U&/".into(), "{input:source}".into()],
             working_dir: None,
+            outputs: Vec::new(),
         },
     )
 }
