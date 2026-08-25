@@ -29,6 +29,7 @@ pub mod orchestrator;
 pub mod run;
 pub mod store;
 pub mod version;
+pub mod workflow;
 
 pub use artifact::ArtifactMeta;
 pub use capability::{Capability, CapabilityName, Port};
@@ -41,11 +42,18 @@ pub use dag::{Dag, DagLimits};
 pub use digest::ContentDigest;
 pub use error::{CoreError, ExecutorFailure};
 pub use exec::{CancelToken, ExecutionOutcome, ExecutionRequest, Executor};
-pub use id::{ArtifactId, ComponentId, RunId};
+pub use id::{ArtifactId, ComponentId, RunId, WorkflowId};
 pub use limits::Limits;
-pub use memory::{FileSystemArtifactStore, InMemoryArtifactMeta, InMemoryComponents, InMemoryRuns};
+pub use memory::{
+    FileSystemArtifactStore, InMemoryArtifactMeta, InMemoryComponents, InMemoryRuns,
+    InMemoryWorkflows,
+};
 pub use orchestrator::{Orchestrator, RegistrationStatus};
 pub use run::{
     InputBinding, InputProvenance, OutputRef, RunOutcome, RunRecord, RunSpec, RunState, Transition,
 };
 pub use version::Version;
+pub use workflow::{
+    InputSource, Step, StepResult, WorkflowRecord, WorkflowSpec, WorkflowState,
+    WORKFLOW_SCHEMA_VERSION,
+};

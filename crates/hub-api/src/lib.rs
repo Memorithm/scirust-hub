@@ -49,6 +49,12 @@ pub fn router(state: HubState) -> Router {
         .route("/api/v1/runs/{id}", get(get_run))
         .route("/api/v1/runs/{id}/cancel", post(cancel_run))
         .route("/api/v1/executions", post(execute_run))
+        .route(
+            "/api/v1/workflows",
+            post(submit_workflow).get(list_workflows),
+        )
+        .route("/api/v1/workflows/{id}", get(get_workflow))
+        .route("/api/v1/workflows/{id}/executions", post(execute_workflow))
         .route("/api/v1/artifacts", get(list_artifacts))
         .route("/api/v1/artifacts/{id}", get(get_artifact))
         .layer(DefaultBodyLimit::max(manifest_limit))
@@ -341,6 +347,70 @@ async fn get_artifact(
     }
 }
 
+async fn submit_workflow(
+    State(state): State<HubState>,
+    body: Result<Json<proto::SubmitWorkflowRequest>, axum::extract::rejection::JsonRejection>,
+) -> Response {
+    let Json(request) = match body {
+        Ok(parsed) => parsed,
+        Err(rejection) => return bad_request(format!("malformed request body: {rejection}")),
+    };
+    if let Err(e) = proto::check_schema_version(request.schema_version) {
+        return protocol_error(e);
+    }
+    let orch = state.orchestrator.clone();
+    match joined(tokio::task::spawn_blocking(move || orch.submit_workflow(request.workflow)).await)
+    {
+        Ok(record) => {
+            let mut response = Json(proto::SubmitWorkflowResponse {
+                workflow: proto::WorkflowDto::from(&record),
+            })
+            .into_response();
+            *response.status_mut() = StatusCode::CREATED;
+            response
+        }
+        Err(response) => response,
+    }
+}
+
+async fn list_workflows(State(state): State<HubState>) -> Response {
+    let workflows = blocking_workflows(&state);
+    Json(proto::WorkflowListResponse {
+        workflows: workflows.iter().map(proto::WorkflowDto::from).collect(),
+    })
+    .into_response()
+}
+
+fn blocking_workflows(state: &HubState) -> Vec<hub_core::WorkflowRecord> {
+    state.orchestrator.workflows()
+}
+
+async fn get_workflow(State(state): State<HubState>, Path(id): Path<String>) -> Response {
+    let Some(parsed) = typed_id::<hub_core::WorkflowId>(&id) else {
+        return not_found("workflow", &id);
+    };
+    let orch = state.orchestrator.clone();
+    match joined_or_none(tokio::task::spawn_blocking(move || orch.workflow(&parsed)).await) {
+        Ok(Some(record)) => Json(proto::WorkflowDto::from(&record)).into_response(),
+        Ok(None) => not_found("workflow", &id),
+        Err(_) => internal("workflow lookup failed"),
+    }
+}
+
+/// Executes a created workflow sequentially; returns the final record with
+/// per-step provenance.
+async fn execute_workflow(State(state): State<HubState>, Path(id): Path<String>) -> Response {
+    let Some(parsed) = typed_id::<hub_core::WorkflowId>(&id) else {
+        return not_found("workflow", &id);
+    };
+    let orch = state.orchestrator.clone();
+    match joined(tokio::task::spawn_blocking(move || orch.execute_workflow(parsed)).await) {
+        Ok(record) => Json(proto::WorkflowDto::from(&record)).into_response(),
+        // WorkflowNotFound maps to 404 through core_error already.
+        Err(response) => response,
+    }
+}
+
 // ----------------------------------------------------------------------
 // Plumbing
 // ----------------------------------------------------------------------
@@ -435,10 +505,13 @@ fn core_error(error: CoreError) -> Response {
         CoreError::CapabilityNotDeclared { .. }
         | CoreError::MissingInputBinding { .. }
         | CoreError::InvalidTransition { .. }
+        | CoreError::InvalidWorkflowTransition { .. }
         | CoreError::RunNotExecutable { .. }
+        | CoreError::WorkflowNotExecutable { .. }
         | CoreError::InvalidRunSpec(_)
         | CoreError::InvalidManifest(_)
         | CoreError::Validation(_) => (StatusCode::UNPROCESSABLE_ENTITY, ErrorCode::Validation),
+        CoreError::WorkflowNotFound(_) => (StatusCode::NOT_FOUND, ErrorCode::NotFound),
         CoreError::ArtifactTooLarge { .. } => {
             (StatusCode::PAYLOAD_TOO_LARGE, ErrorCode::Validation)
         }
@@ -471,6 +544,7 @@ mod tests {
     use hub_core::limits::Limits;
     use hub_core::memory::{
         FileSystemArtifactStore, InMemoryArtifactMeta, InMemoryComponents, InMemoryRuns,
+        InMemoryWorkflows,
     };
     use hub_protocol::PROTOCOL_VERSION;
     use std::sync::Arc;
@@ -484,6 +558,7 @@ mod tests {
             Arc::new(InMemoryComponents::default()),
             Arc::new(InMemoryRuns::default()),
             Arc::new(InMemoryArtifactMeta::default()),
+            Arc::new(InMemoryWorkflows::default()),
             FileSystemArtifactStore::open(dir.0.join("blobs")).expect("blobs"),
             // Real process executor: the vertical slice must not be mocked.
             Arc::new(hub_exec_for_tests()),

@@ -369,6 +369,79 @@ pub struct CancelRunResponse {
 }
 
 // ----------------------------------------------------------------------
+// Workflows
+// ----------------------------------------------------------------------
+
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+pub struct SubmitWorkflowRequest {
+    pub schema_version: u16,
+    /// Domain workflow spec (already serde-shaped and validated on the core
+    /// side, mirroring how run input bindings travel).
+    pub workflow: hub_core::WorkflowSpec,
+}
+
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+pub struct SubmitWorkflowResponse {
+    pub workflow: WorkflowDto,
+}
+
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+pub struct WorkflowDto {
+    pub id: hub_core::WorkflowId,
+    pub name: String,
+    pub state: hub_core::WorkflowState,
+    pub model_version: Version,
+    pub created_at: u64,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub started_at: Option<u64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub finished_at: Option<u64>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub steps: Vec<StepResultDto>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub failure: Option<String>,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub struct StepResultDto {
+    pub key: String,
+    pub run: RunId,
+    pub state: RunState,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub failure: Option<String>,
+}
+
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+pub struct WorkflowListResponse {
+    pub workflows: Vec<WorkflowDto>,
+}
+
+impl From<&hub_core::WorkflowRecord> for WorkflowDto {
+    fn from(w: &hub_core::WorkflowRecord) -> Self {
+        Self {
+            id: w.id,
+            name: w.spec.name.clone(),
+            state: w.state,
+            model_version: w.model_version.clone(),
+            created_at: w.created_at,
+            started_at: w.started_at,
+            finished_at: w.finished_at,
+            steps: w
+                .steps
+                .iter()
+                .map(|sr| StepResultDto {
+                    key: sr.key.clone(),
+                    run: sr.run,
+                    state: sr.state,
+                    failure: sr.failure.clone(),
+                })
+                .collect(),
+            failure: w.failure.clone(),
+        }
+    }
+}
+
+// ----------------------------------------------------------------------
 // Artifacts
 // ----------------------------------------------------------------------
 

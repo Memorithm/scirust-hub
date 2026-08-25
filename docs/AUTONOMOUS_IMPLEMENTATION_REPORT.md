@@ -29,7 +29,22 @@ A single-node control plane with one tested vertical slice:
 10. after v0.2.0: components can declare output files (`outputs:` with
    `{output:<name>}` argv placeholders); the Hub pre-creates their parent
    directories, ingests them byte-exactly on clean exits and fails runs
-   whose required outputs are missing.
+   whose required outputs are missing;
+11. after v0.2.0: sequential workflow orchestration (ADR-0006) — multi-step
+   specs with cross-step artifact references, deterministic topological
+   execution, fail-fast semantics, per-step provenance, SQLite migration v2,
+   HTTP endpoints and CLI verbs.
+
+## PR history
+
+| PR | Scope | Status |
+|---|---|---|
+| #1 `feat/hub-foundation` | domain, registry, runs, executor, API, CLI, e2e | merged |
+| #2 `feat/durable-sqlite-store` | SQLite persistence behind existing ports | merged |
+| #3 `feat/artifact-file-ingestion` | declared output-file ingestion | merged |
+| #4 `feat/workflow-orchestration` | sequential workflows over the DAG | open (this branch) |
+
+## Tests executed (exact commands and results)
 
 ## Architecture
 
@@ -66,12 +81,12 @@ cargo fmt --all -- --check                                   → PASS
 cargo clippy --workspace --all-targets --all-features --locked \
     -- -D warnings                                           → PASS (0 warnings)
 cargo build --workspace --all-targets --locked               → PASS
-cargo test --workspace --all-features --locked               → PASS, 83 passed / 0 failed / 0 ignored
+cargo test --workspace --all-features --locked               → PASS, 96 passed / 0 failed / 0 ignored
 RUSTDOCFLAGS="-D warnings" cargo doc --workspace --no-deps   → PASS
 git diff --check                                             → clean
 ```
 
-Breakdown of the 83: 57 hub-core units, 11 hub-executor process-behavior
+Breakdown of the 96 (83 foundation + 6 sqlite + 7 ingestion/workflow units + e2e additions): 57 hub-core units, 11 hub-executor process-behavior
 units (timeout/cancel/truncation/env isolation/argv verbatim), 5 protocol
 round-trips, 7 API router tests over the real axum stack, 2 TCP e2e suites
 (daemon walking skeleton + malformed-request hardening), 1 CLI e2e driving

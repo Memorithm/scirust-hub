@@ -67,6 +67,10 @@ An in-process demo pipeline (no daemon needed):
 
 ```bash
 cargo run -p scirust-hubd --example demo_pipeline
+
+# multi-step workflows chain artifacts between runs (sequential, fail-fast):
+cargo run -p scirust-hub -- workflow submit examples/workflow.json
+cargo run -p scirust-hub -- workflow run <workflow-uuid>
 ```
 
 ## Manifest format
@@ -121,8 +125,9 @@ provenance walk driven through the CLI.
 
 - Only declared outputs and captured streams are tracked; undeclared files
   written into the working directory are ignored.
-- Multi-node workflow orchestration is not implemented; the DAG primitive
-  ships unit-tested but nothing schedules it yet.
+- Workflow execution is sequential and fail-fast (ADR-0006); parallel
+  scheduling, retries and distributed execution do not exist yet. Workflow
+  cancellation is not wired to running steps.
 - No authentication/TLS: bind to localhost until that lands.
 
 Licensing: this repository currently has **no license file**; licensing is an

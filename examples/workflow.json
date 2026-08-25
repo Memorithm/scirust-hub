@@ -1,0 +1,29 @@
+{
+  "schema_version": 1,
+  "workflow": {
+    "schema_version": 1,
+    "name": "echo-then-copy",
+    "steps": [
+      {
+        "key": "emit",
+        "component": "aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee",
+        "capability": "demo.echo",
+        "parameters": { "msg": "workflow-payload" },
+        "inputs": {},
+        "timeout_ms": 30000,
+        "after": []
+      },
+      {
+        "key": "store",
+        "component": "11111111-2222-3333-4444-555555555555",
+        "capability": "demo.copy",
+        "parameters": {},
+        "inputs": {
+          "source": { "from_step": { "key": "emit", "output": "stdout" } }
+        },
+        "timeout_ms": 30000,
+        "after": ["emit"]
+      }
+    ]
+  }
+}

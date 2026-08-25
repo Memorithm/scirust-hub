@@ -449,3 +449,139 @@ fn find_component_id_by_name(list_json: &str, name: &str) -> Option<String> {
     }
     None
 }
+
+#[test]
+fn two_step_workflow_chains_artifacts_over_http() {
+    let (_guard, port) = start_daemon();
+
+    // emit component: params -> stdout
+    let echo = format!(
+        r#"{{
+            "schema_version": 1,
+            "manifest": {{
+                "id": "{id}",
+                "name": "wf-emit",
+                "version": "1.0.0",
+                "kind": "tool",
+                "capabilities": [
+                    {{"name": "demo.emit", "contract_version": "1.0.0"}}
+                ],
+                "execution": {{
+                    "type": "process",
+                    "program": "/bin/echo",
+                    "args": ["{{params}}"]
+                }}
+            }}
+        }}"#,
+        id = uuid_v4()
+    );
+    // copy component: input file -> declared output file
+    let copy = format!(
+        r#"{{
+            "schema_version": 1,
+            "manifest": {{
+                "id": "{id}",
+                "name": "wf-copy",
+                "version": "1.0.0",
+                "kind": "tool",
+                "capabilities": [
+                    {{
+                        "name": "demo.copy",
+                        "contract_version": "1.0.0",
+                        "inputs": [{{"name": "source"}}]
+                    }}
+                ],
+                "execution": {{
+                    "type": "process",
+                    "program": "/bin/cp",
+                    "args": ["{{input:source}}", "{{output:copy}}"],
+                    "outputs": [
+                        {{"name": "copy", "path": "out/copy.txt", "required": true}}
+                    ]
+                }}
+            }}
+        }}"#,
+        id = uuid_v4()
+    );
+    for manifest in [&echo, &copy] {
+        let (status, body) =
+            http(port, "POST", "/api/v1/components", Some(manifest)).expect("register");
+        assert_eq!(status, 201, "body: {body}");
+    }
+    let (status, list) = http(port, "GET", "/api/v1/components", None).expect("list");
+    assert_eq!(status, 200);
+    let emit_id = find_component_id_by_name(&list, "wf-emit").expect("wf-emit id");
+    let copy_id = find_component_id_by_name(&list, "wf-copy").expect("wf-copy id");
+
+    // Workflow spec referencing the previous step's stdout.
+    let workflow = serde_json::json!({
+        "schema_version": 1,
+        "workflow": {
+            "schema_version": 1,
+            "name": "echo-then-copy",
+            "steps": [
+                {
+                    "key": "emit",
+                    "component": emit_id,
+                    "capability": "demo.emit",
+                    "parameters": {"msg": "via-workflow"},
+                    "inputs": {},
+                    "timeout_ms": 5000,
+                    "after": []
+                },
+                {
+                    "key": "store",
+                    "component": copy_id,
+                    "capability": "demo.copy",
+                    "parameters": {},
+                    "inputs": {
+                        "source": {"from_step": {"key": "emit", "output": "stdout"}}
+                    },
+                    "timeout_ms": 5000,
+                    "after": ["emit"]
+                }
+            ]
+        }
+    })
+    .to_string();
+    let (status, body) =
+        http(port, "POST", "/api/v1/workflows", Some(&workflow)).expect("submit wf");
+    assert_eq!(status, 201, "body: {body}");
+    assert!(body.contains("\"created\""), "body: {body}");
+    let workflow_id: String = json_field(&body, "\"id\":\"").expect("workflow id");
+
+    // Execute and verify success with both steps recorded.
+    let (status, executed) = http(
+        port,
+        "POST",
+        &format!("/api/v1/workflows/{workflow_id}/executions"),
+        None,
+    )
+    .expect("execute wf");
+    assert_eq!(status, 200, "body: {executed}");
+    assert!(executed.contains("\"succeeded\""), "body: {executed}");
+    assert!(executed.contains("\"emit\""), "body: {executed}");
+    assert!(executed.contains("\"store\""), "body: {executed}");
+
+    // The copied file artifact must exist alongside the emit stdout capture:
+    let (status, artifacts) = http(port, "GET", "/api/v1/artifacts", None).expect("artifacts");
+    assert_eq!(status, 200);
+    // Three stream/file artifacts expected: emit stdout + store stdout? cp is
+    // silent, so exactly two: emit stdout and store's out/copy.txt file.
+    let count = artifacts.matches("\"media_type\"").count();
+    assert!(
+        count >= 2,
+        "expected at least emit-stdout and copied-file artifacts: {artifacts}"
+    );
+
+    // Re-execution of a finished workflow is rejected cleanly.
+    let (status, body) = http(
+        port,
+        "POST",
+        &format!("/api/v1/workflows/{workflow_id}/executions"),
+        None,
+    )
+    .expect("re-execute");
+    assert_eq!(status, 422, "body: {body}");
+    assert!(body.contains("not executable"), "body: {body}");
+}

@@ -43,6 +43,25 @@ enum Command {
     Run(RunCommand),
     #[command(subcommand)]
     Artifact(ArtifactCommand),
+    #[command(subcommand)]
+    Workflow(WorkflowCommand),
+}
+
+#[derive(Debug, Subcommand)]
+enum WorkflowCommand {
+    /// Register a workflow from a spec JSON file.
+    Submit {
+        /// Path to the workflow spec (`-` for stdin).
+        path: String,
+    },
+    /// Execute a created workflow sequentially and wait.
+    Run {
+        id: String,
+    },
+    List,
+    Inspect {
+        id: String,
+    },
 }
 
 #[derive(Debug, Subcommand)]
@@ -318,6 +337,73 @@ fn dispatch(args: &Args) -> Result<(), CliError> {
                     "run {}: signalled_active_execution={}",
                     v["run_id"], v["signalled_active_execution"]
                 );
+            })
+        }
+        Command::Workflow(WorkflowCommand::Submit { path }) => {
+            let body = read_manifest(path)?;
+            let response = send_json(ureq::post(&url_of(args, "/api/v1/workflows")), body)?;
+            emit(args, &response, |v| {
+                println!(
+                    "workflow {}: {}",
+                    v["workflow"]["id"], v["workflow"]["state"]
+                );
+                for (i, step) in v["workflow"]["steps"]
+                    .as_array()
+                    .cloned()
+                    .unwrap_or_default()
+                    .iter()
+                    .enumerate()
+                {
+                    println!("  step {}: {:?}", i, step["key"]);
+                }
+            })
+        }
+        Command::Workflow(WorkflowCommand::Run { id }) => {
+            let response = post_empty(url_of(args, &format!("/api/v1/workflows/{id}/executions")))?;
+            emit(args, &response, |v| {
+                println!("workflow {}: {}", v["id"], v["state"]);
+                for step in v["steps"].as_array().cloned().unwrap_or_default() {
+                    println!(
+                        "  step {:?}: run {} {}",
+                        step["key"], step["run"], step["state"]
+                    );
+                }
+                if let Some(f) = v["failure"].as_str() {
+                    println!("failure: {f}");
+                }
+            })
+        }
+        Command::Workflow(WorkflowCommand::List) => {
+            let response = get(url_of(args, "/api/v1/workflows"))?;
+            emit(args, &response, |v| {
+                let items = v["workflows"].as_array().cloned().unwrap_or_default();
+                if items.is_empty() {
+                    println!("no workflows recorded");
+                }
+                for w in items {
+                    println!("{}  {}  {}", w["id"], w["name"], w["state"]);
+                }
+            })
+        }
+        Command::Workflow(WorkflowCommand::Inspect { id }) => {
+            let response = get(url_of(args, &format!("/api/v1/workflows/{id}")))?;
+            emit(args, &response, |v| {
+                println!("id:       {}", v["id"]);
+                println!("name:     {}", v["name"]);
+                println!("state:    {}", v["state"]);
+                println!("model:    {}", v["model_version"]);
+                for step in v["steps"].as_array().cloned().unwrap_or_default() {
+                    println!(
+                        "step {:?}: run {} {}{}",
+                        step["key"],
+                        step["run"],
+                        step["state"],
+                        step["failure"]
+                            .as_str()
+                            .map(|f| format!(" ({f})"))
+                            .unwrap_or_default()
+                    );
+                }
             })
         }
         Command::Artifact(ArtifactCommand::Inspect { id, content }) => {

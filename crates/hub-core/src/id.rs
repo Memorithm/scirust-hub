@@ -71,6 +71,10 @@ uuid_id! {
     /// Handle to artifact metadata; contents live in the artifact store.
     ArtifactId
 }
+uuid_id! {
+    /// Identity of one submitted workflow (multi-step orchestration).
+    WorkflowId
+}
 
 #[cfg(test)]
 mod tests {
