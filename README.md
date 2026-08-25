@@ -5,9 +5,10 @@ ecosystem components, describes what they can do, orchestrates executions,
 captures output artifacts and records execution provenance — without
 absorbing anyone's code.
 
-Status: `0.2.0`. One tested vertical slice (registry → discovery → run →
-process executor → artifacts → provenance → HTTP API → CLI) with durable
-SQLite-backed registries.
+Status: `0.2.0`. The tested control-plane slice now covers registry and
+discovery, durable SQLite-backed run/workflow records, local process execution,
+declared file artifacts, provenance, HTTP/CLI access and deterministic
+sequential workflow chaining.
 
 ## Why it exists
 
@@ -100,7 +101,7 @@ crates/hub-api     axum /api/v1      ┘
 crates/hub-protocol  versioned wire DTOs
 crates/hub-executor  process executor (+ mock for tests)
 crates/hub-core      domain: ids, digests, capabilities, components,
-                     runs/state machine, DAG, repository ports,
+                     runs/workflows + state machines, DAG, repository ports,
                      in-memory stores, orchestrator
 ```
 
@@ -115,11 +116,11 @@ integration model diagram is in
 cargo test --workspace --all-features --locked
 ```
 
-83 tests: domain units (state machine, digests, validation, DAG, registry),
-executor behavior (timeout, cancellation, truncation, env isolation), router
-tests over the real axum stack, and two end-to-end suites that spawn the real
-binaries over TCP — including a full register → discover → run → artifact →
-provenance walk driven through the CLI.
+At the workflow-orchestration merge, the suite contained **96 passing tests**.
+It covers domain state machines, digests, validation, DAG ordering, registry
+and workflow chaining; executor timeout/cancellation/truncation/env isolation;
+router behavior over the real axum stack; SQLite persistence/migrations; and
+end-to-end daemon/CLI flows with byte-exact artifact propagation.
 
 ## Current limitations
 
