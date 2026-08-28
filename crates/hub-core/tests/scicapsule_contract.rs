@@ -13,7 +13,10 @@ fn scicapsule_generated_manifest_is_a_valid_hub_v1_process_contract() {
     assert_eq!(manifest.name.as_str(), "SciCapsule");
     assert_eq!(manifest.version.as_str(), "0.1.0");
     assert_eq!(
-        manifest.metadata.get("canonical_capsule_owner").map(String::as_str),
+        manifest
+            .metadata
+            .get("canonical_capsule_owner")
+            .map(String::as_str),
         Some("scirust")
     );
     assert_eq!(
@@ -34,10 +37,7 @@ fn scicapsule_generated_manifest_is_a_valid_hub_v1_process_contract() {
             .collect::<Vec<_>>(),
         vec![
             ("capsule", "application/vnd.scirust.scicap"),
-            (
-                "policy",
-                "application/vnd.scicapsule.trust-policy.v1+json"
-            ),
+            ("policy", "application/vnd.scicapsule.trust-policy.v1+json"),
             (
                 "request",
                 "application/vnd.scicapsule.hub-run-request.v1+json"
@@ -56,7 +56,10 @@ fn scicapsule_generated_manifest_is_a_valid_hub_v1_process_contract() {
         )]
     );
     assert_eq!(
-        capability.properties.get("authorization").map(String::as_str),
+        capability
+            .properties
+            .get("authorization")
+            .map(String::as_str),
         Some("local_trust_policy")
     );
     assert_eq!(
