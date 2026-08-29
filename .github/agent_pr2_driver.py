@@ -121,3 +121,27 @@ for root in (Path('crates'), Path('apps')):
     for rust_file in root.rglob('*.rs'):
         patched_literals += add_default_concurrency(rust_file)
 print(f'patched {patched_literals} legacy WorkflowSpec literal(s)')
+
+# The historical orchestrator test literals are compact (`name` immediately
+# followed by `steps`) and must preserve the old sequential semantics. Patch
+# that exact shape explicitly; this is intentionally restricted to the test
+# module source rather than a broad workspace rewrite.
+p = Path('crates/hub-core/src/orchestrator.rs')
+generated = p.read_text()
+adjacent = re.compile(
+    r'(?m)^(?P<indent>[ \t]*)name:(?P<value>[^\n]*),\n(?P=indent)steps(?P<tail>[ \t]*[:,])'
+)
+
+def add_adjacent_default(match: re.Match[str]) -> str:
+    indent = match.group('indent')
+    return (
+        f"{indent}name:{match.group('value')},\n"
+        f"{indent}max_concurrency: 1,\n"
+        f"{indent}steps{match.group('tail')}"
+    )
+
+generated, adjacent_count = adjacent.subn(add_adjacent_default, generated)
+if adjacent_count == 0:
+    raise SystemExit('expected at least one historical name/steps WorkflowSpec literal')
+p.write_text(generated)
+print(f'patched {adjacent_count} adjacent historical WorkflowSpec literal(s)')
