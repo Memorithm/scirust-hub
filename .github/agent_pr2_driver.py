@@ -18,8 +18,21 @@ if text.count(old) != 1:
     raise SystemExit(f'expected one import patch stanza, found {text.count(old)}')
 text = text.replace(old, new, 1)
 
-old = '''    ''' + '"""    let recovered_cancellations = orchestrator.recover_workflow_cancellations()?;\\n    if recovered_cancellations > 0 {\\n        tracing::info!(recovered_cancellations, \\\"reconciled workflow cancellations after restart\\\");\\n    }\\n\\n    tracing::info!("""' + ''','''
-new = '''    ''' + '"""    let recovered_cancellations = orchestrator.recover_workflow_cancellations()?;\\n    if recovered_cancellations > 0 {\\n        tracing::info!(\\n            recovered_cancellations,\\n            \\\"reconciled workflow cancellations after restart\\\"\\n        );\\n    }\\n\\n    tracing::info!("""' + ''','''
+old = '''    \'\'\'    let recovered_cancellations = orchestrator.recover_workflow_cancellations()?;
+    if recovered_cancellations > 0 {
+        tracing::info!(recovered_cancellations, "reconciled workflow cancellations after restart");
+    }
+
+    tracing::info!(\'\'\','''
+new = '''    \'\'\'    let recovered_cancellations = orchestrator.recover_workflow_cancellations()?;
+    if recovered_cancellations > 0 {
+        tracing::info!(
+            recovered_cancellations,
+            "reconciled workflow cancellations after restart"
+        );
+    }
+
+    tracing::info!(\'\'\','''
 if text.count(old) != 1:
     raise SystemExit(f'expected one daemon patch marker, found {text.count(old)}')
 text = text.replace(old, new, 1)
