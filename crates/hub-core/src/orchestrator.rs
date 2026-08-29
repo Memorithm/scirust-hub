@@ -147,6 +147,55 @@ impl Orchestrator {
     }
 
     // ------------------------------------------------------------------
+    // External artifacts
+    // ------------------------------------------------------------------
+
+    /// Stores caller-provided immutable bytes as a Hub artifact. This is the
+    /// ingress path for workflow/run inputs such as capsules, policies and
+    /// datasets. Content remains addressed by digest; the artifact id is the
+    /// provenance identity of this ingestion event.
+    pub fn ingest_artifact(
+        &self,
+        name: String,
+        media_type: String,
+        bytes: &[u8],
+    ) -> Result<crate::artifact::ArtifactMeta, CoreError> {
+        let id = ArtifactId::generate();
+        let size = u64::try_from(bytes.len()).map_err(|_| CoreError::ArtifactTooLarge {
+            artifact: id,
+            size: u64::MAX,
+            limit: self.limits.max_artifact_bytes,
+        })?;
+        if size > self.limits.max_artifact_bytes {
+            return Err(CoreError::ArtifactTooLarge {
+                artifact: id,
+                size,
+                limit: self.limits.max_artifact_bytes,
+            });
+        }
+        let digest = crate::digest::hash_bytes(crate::digest::DOMAIN_ARTIFACT_BLOB, bytes);
+        let meta = crate::artifact::ArtifactMeta {
+            id,
+            name,
+            media_type,
+            digest,
+            size,
+            created_at: self.clock.now_ms(),
+            produced_by_run: None,
+        };
+        meta.validate()?;
+        let stored = self.blobs.put(
+            bytes,
+            self.limits.max_artifact_bytes,
+            crate::digest::DOMAIN_ARTIFACT_BLOB,
+        )?;
+        debug_assert_eq!(stored, digest);
+        self.artifacts_meta.put(&meta)?;
+        info!(artifact = %meta.id, digest = %meta.digest, size = meta.size, "artifact ingested");
+        Ok(meta)
+    }
+
+    // ------------------------------------------------------------------
     // Runs
     // ------------------------------------------------------------------
 
@@ -189,6 +238,10 @@ impl Orchestrator {
                 capability: spec.capability.to_string(),
             })?
             .clone();
+
+        if spec.capability.as_str() == crate::scicapsule::CAPABILITY {
+            crate::scicapsule::validate_execution_contract(&manifest, &capability)?;
+        }
 
         // Every declared input port must be bound, and no unbound extras may
         // be smuggled in.

@@ -80,7 +80,8 @@ scicapsule create-hub-request \
   -- --example literal-argument
 ```
 
-Upload/store the capsule, policy and request as Hub artifacts, bind them to the
+Store the capsule, policy and request through Hub's bounded artifact-ingress
+endpoint (or `scirust-hub artifact put`), bind the returned artifact ids to the
 three capability inputs, and submit the run through the ordinary Hub API/CLI.
 The Hub process executor controls the outer process lifecycle and captures its
 streams/provenance. SciCapsule performs the inner canonical capsule validation,
@@ -118,3 +119,26 @@ before payload process creation.
 validates the process binding and capability contract. A breaking Hub manifest
 change or a drifting SciCapsule adapter shape therefore fails Hub CI instead of
 silently changing interoperability.
+
+
+## Artifact ingress
+
+Hub accepts external immutable input bytes at `POST /api/v1/artifacts`. The raw
+request body is bounded by Hub's configured `max_artifact_bytes`; callers must
+send `x-scirust-artifact-name` and `content-type`. The response is normal Hub
+artifact metadata. This is a generic control-plane primitive and is not coupled
+to `.scicap`.
+
+The CLI equivalent is:
+
+```text
+scirust-hub --output json artifact put demo.scicap \
+  --name demo.scicap \
+  --media-type application/vnd.scirust.scicap
+```
+
+Hub does not inspect capsule bytes on ingress. At run submission it does,
+however, fail closed if a component claiming `capsule.execute` does not match
+the published SciCapsule Hub contract `1.0.0`. Canonical capsule format/version
+rejection remains delegated to SciCapsule's own `Capsule::decode` path during
+`hub-run`.
