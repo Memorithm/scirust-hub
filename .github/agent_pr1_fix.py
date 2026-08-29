@@ -16,4 +16,17 @@ if text.count(old) != 1:
     raise SystemExit(f"expected one mk_step literal, found {text.count(old)}")
 p.write_text(text.replace(old, new, 1))
 
+p = Path("crates/hub-store-sqlite/src/lib.rs")
+text = p.read_text()
+old = """                state: RunState::Succeeded,\n                failure: None,\n            });"""
+new = """                state: RunState::Succeeded,\n                failure: None,\n                attempts: Vec::new(),\n            });"""
+if text.count(old) != 1:
+    raise SystemExit(f"expected one sqlite StepResult literal, found {text.count(old)}")
+text = text.replace(old, new, 1)
+old = """                timeout_ms: 1_000,\n                after: Vec::new(),\n            }],"""
+new = """                timeout_ms: 1_000,\n                after: Vec::new(),\n                retry: None,\n            }],"""
+if text.count(old) != 1:
+    raise SystemExit(f"expected one sqlite Step literal, found {text.count(old)}")
+p.write_text(text.replace(old, new, 1))
+
 print("PR1 compile fixes applied")
