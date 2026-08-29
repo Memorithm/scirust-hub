@@ -40,9 +40,8 @@ path.write_text(text)
 
 runpy.run_path(str(path), run_name='__main__')
 
-# Concurrent worker start order is OS-scheduled, even though ready-set
-# selection itself is lexical. Compare the admitted set instead of asserting
-# a thread scheduling order.
+# Worker start order is OS-scheduled. Ready-set selection is lexical, but tests
+# must not confuse that policy with thread execution timing.
 p = Path('crates/hub-core/tests/parallel_dag.rs')
 generated = p.read_text()
 old = '''    assert_eq!(
@@ -52,9 +51,9 @@ old = '''    assert_eq!(
 new = '''    let mut starts = executor.starts.lock().expect("starts").clone();
     starts.sort();
     assert_eq!(starts, vec!["a".to_owned(), "b".to_owned()]);'''
-if generated.count(old) != 1:
-    raise SystemExit(f'expected one parallel start-order assertion, found {generated.count(old)}')
-generated = generated.replace(old, new, 1)
+if generated.count(old) != 2:
+    raise SystemExit(f'expected two start-order assertions, found {generated.count(old)}')
+generated = generated.replace(old, new)
 p.write_text(generated)
 
 # Keep cancellation classification simple and unambiguous.
