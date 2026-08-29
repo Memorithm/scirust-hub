@@ -23,7 +23,9 @@ jobs:
         with:
           components: rustfmt, clippy
       - name: Apply implementation
-        run: python3 .github/agent_pr1.py
+        run: |
+          python3 .github/agent_pr1.py
+          python3 .github/agent_pr1_fix.py
       - name: Format
         run: cargo fmt --all
       - name: Format gate
