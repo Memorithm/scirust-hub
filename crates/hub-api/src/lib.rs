@@ -8,8 +8,8 @@
 use std::collections::BTreeMap;
 use std::sync::Arc;
 
-use axum::extract::{DefaultBodyLimit, Path, Query, State};
-use axum::http::StatusCode;
+use axum::extract::{DefaultBodyLimit, Path, Query, Request, State};
+use axum::http::{header, StatusCode};
 use axum::response::{IntoResponse, Response};
 use axum::routing::{get, post};
 use axum::{Json, Router};
@@ -57,7 +57,10 @@ pub fn router(state: HubState) -> Router {
         .route("/api/v1/workflows/{id}", get(get_workflow))
         .route("/api/v1/workflows/{id}/cancel", post(cancel_workflow))
         .route("/api/v1/workflows/{id}/executions", post(execute_workflow))
-        .route("/api/v1/artifacts", get(list_artifacts))
+        .route(
+            "/api/v1/artifacts",
+            post(upload_artifact).get(list_artifacts),
+        )
         .route("/api/v1/artifacts/{id}", get(get_artifact))
         .layer(DefaultBodyLimit::max(manifest_limit))
         .with_state(state)
@@ -309,6 +312,48 @@ async fn execute_run(
     let orch = state.orchestrator.clone();
     match joined(tokio::task::spawn_blocking(move || orch.execute_run(run_id)).await) {
         Ok(record) => Json(proto::RunDto::from(&record)).into_response(),
+        Err(response) => response,
+    }
+}
+
+async fn upload_artifact(State(state): State<HubState>, request: Request) -> Response {
+    let name = match request
+        .headers()
+        .get("x-scirust-artifact-name")
+        .and_then(|value| value.to_str().ok())
+    {
+        Some(value) if !value.is_empty() => value.to_owned(),
+        _ => return bad_request("missing or invalid x-scirust-artifact-name header"),
+    };
+    let media_type = match request
+        .headers()
+        .get(header::CONTENT_TYPE)
+        .and_then(|value| value.to_str().ok())
+    {
+        Some(value) if !value.is_empty() => value.to_owned(),
+        _ => return bad_request("missing or invalid content-type header"),
+    };
+    let limit =
+        usize::try_from(state.orchestrator.limits().max_artifact_bytes).unwrap_or(usize::MAX);
+    let bytes = match axum::body::to_bytes(request.into_body(), limit).await {
+        Ok(bytes) => bytes.to_vec(),
+        Err(error) => {
+            return error_response(
+                StatusCode::PAYLOAD_TOO_LARGE,
+                proto::ErrorCode::Validation,
+                format!("artifact body exceeds configured limit: {error}"),
+            );
+        }
+    };
+    let orch = state.orchestrator.clone();
+    match joined(
+        tokio::task::spawn_blocking(move || orch.ingest_artifact(name, media_type, &bytes)).await,
+    ) {
+        Ok(meta) => {
+            let mut response = Json(proto::ArtifactDto::from(&meta)).into_response();
+            *response.status_mut() = StatusCode::CREATED;
+            response
+        }
         Err(response) => response,
     }
 }
@@ -723,6 +768,51 @@ mod tests {
                 }}
             }}"#
         )
+    }
+
+    #[tokio::test]
+    async fn raw_artifact_upload_round_trips_exact_bytes() {
+        let (state, _clock, _dir) = test_state();
+        let app = router(state);
+        let payload = vec![0, 1, 2, 0xff, b'x'];
+        let request = Request::builder()
+            .method("POST")
+            .uri("/api/v1/artifacts")
+            .header("x-scirust-artifact-name", "capsule-input")
+            .header("content-type", "application/octet-stream")
+            .body(Body::from(payload.clone()))
+            .expect("req");
+        let (status, body) = send(app.clone(), request).await;
+        assert_eq!(status, StatusCode::CREATED, "{body}");
+        assert_eq!(body["name"], "capsule-input");
+        assert_eq!(body["size"], payload.len());
+        assert!(body["produced_by_run"].is_null());
+        let id = body["id"].as_str().expect("id");
+
+        let response = app
+            .oneshot(
+                Request::builder()
+                    .uri(format!("/api/v1/artifacts/{id}?include=content"))
+                    .body(Body::empty())
+                    .expect("req"),
+            )
+            .await
+            .expect("response");
+        assert_eq!(response.status(), StatusCode::NOT_ACCEPTABLE);
+    }
+
+    #[tokio::test]
+    async fn artifact_upload_requires_explicit_metadata_headers() {
+        let (state, _clock, _dir) = test_state();
+        let app = router(state);
+        let request = Request::builder()
+            .method("POST")
+            .uri("/api/v1/artifacts")
+            .body(Body::from("bytes"))
+            .expect("req");
+        let (status, body) = send(app, request).await;
+        assert_eq!(status, StatusCode::BAD_REQUEST);
+        assert_eq!(body["error"]["code"], "bad_request");
     }
 
     #[tokio::test]

@@ -27,6 +27,7 @@ pub mod limits;
 pub mod memory;
 pub mod orchestrator;
 pub mod run;
+pub mod scicapsule;
 pub mod store;
 pub mod version;
 pub mod workflow;

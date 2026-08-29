@@ -98,3 +98,31 @@ fn scicapsule_generated_manifest_is_a_valid_hub_v1_process_contract() {
         serde_json::from_slice(&canonical).expect("reparse canonical manifest JSON");
     assert_eq!(reparsed, manifest);
 }
+
+#[test]
+fn scicapsule_execution_contract_rejects_future_version_until_supported() {
+    let mut manifest: ComponentManifest = serde_json::from_str(SCICAPSULE_MANIFEST).unwrap();
+    let name = CapabilityName::parse("capsule.execute").unwrap();
+    let capability = manifest
+        .capabilities
+        .iter_mut()
+        .find(|capability| capability.name == name)
+        .unwrap();
+    capability.contract_version = hub_core::Version::parse("2.0.0").unwrap();
+    let capability = manifest.capability(&name).unwrap();
+    let error = hub_core::scicapsule::validate_execution_contract(&manifest, capability)
+        .expect_err("future contract must fail closed");
+    assert!(error.to_string().contains("supported version is 1.0.0"));
+}
+
+#[test]
+fn scicapsule_execution_contract_rejects_drifted_process_binding() {
+    let mut manifest: ComponentManifest = serde_json::from_str(SCICAPSULE_MANIFEST).unwrap();
+    let Some(ExecutionBinding::Process(process)) = manifest.execution.as_mut() else {
+        panic!("process binding expected");
+    };
+    process.args.push("--unexpected".into());
+    let name = CapabilityName::parse("capsule.execute").unwrap();
+    let capability = manifest.capability(&name).unwrap();
+    assert!(hub_core::scicapsule::validate_execution_contract(&manifest, capability).is_err());
+}

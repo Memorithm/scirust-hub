@@ -70,7 +70,7 @@ An in-process demo pipeline (no daemon needed):
 ```bash
 cargo run -p scirust-hubd --example demo_pipeline
 
-# multi-step workflows chain artifacts between runs (sequential, fail-fast):
+# multi-step workflows chain artifacts between runs (bounded parallel, fail-fast):
 cargo run -p scirust-hub -- workflow submit examples/workflow.json
 cargo run -p scirust-hub -- workflow run <workflow-uuid>
 ```
@@ -161,9 +161,8 @@ Hub-native domain parsing and validation.
   special Hub capsule backend; Hub intentionally does not parse `.scicap`.
 - Only declared outputs and captured streams are tracked; undeclared files
   written into the working directory are ignored.
-- Workflow execution is sequential and fail-fast (ADR-0006); parallel
-  scheduling, retries and distributed execution do not exist yet. Workflow
-  cancellation is not wired to running steps.
+- Workflow execution supports bounded parallelism, retries and active cancellation;
+  distributed executor placement does not exist yet.
 - No authentication/TLS: bind to localhost until that lands.
 
 Licensing: this repository currently has **no license file**; licensing is an

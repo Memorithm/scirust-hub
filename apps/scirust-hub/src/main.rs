@@ -120,6 +120,17 @@ enum RunCommand {
 
 #[derive(Debug, Subcommand)]
 enum ArtifactCommand {
+    /// Store immutable bytes as a Hub input artifact.
+    Put {
+        /// File to upload (`-` for stdin).
+        path: String,
+        /// Provenance label. Defaults to the file name for regular files.
+        #[arg(long)]
+        name: Option<String>,
+        /// Media type recorded in Hub metadata.
+        #[arg(long, default_value = "application/octet-stream")]
+        media_type: String,
+    },
     Inspect {
         id: String,
         /// Also fetch inline text content when available.
@@ -176,7 +187,15 @@ fn dispatch(args: &Args) -> Result<(), CliError> {
             })
         }
         Command::Component(ComponentCommand::Register { path }) => {
-            let body = read_manifest(path)?;
+            let manifest_or_request = read_manifest(path)?;
+            let body = if manifest_or_request.get("manifest").is_some() {
+                manifest_or_request
+            } else {
+                serde_json::json!({
+                    "schema_version": 1,
+                    "manifest": manifest_or_request,
+                })
+            };
             let response = send_json(ureq::post(&url_of(args, "/api/v1/components")), body)?;
             emit(args, &response, |v| {
                 println!("component {}: {}", v["component"]["id"], v["status"]);
@@ -456,6 +475,40 @@ fn dispatch(args: &Args) -> Result<(), CliError> {
                 }
             })
         }
+        Command::Artifact(ArtifactCommand::Put {
+            path,
+            name,
+            media_type,
+        }) => {
+            let bytes = read_artifact_bytes(path)?;
+            let artifact_name = match name {
+                Some(name) => name.clone(),
+                None if path == "-" => {
+                    return Err(CliError::Usage(
+                        "artifact put from stdin requires --name".into(),
+                    ));
+                }
+                None => std::path::Path::new(path)
+                    .file_name()
+                    .and_then(|value| value.to_str())
+                    .filter(|value| !value.is_empty())
+                    .ok_or_else(|| {
+                        CliError::Usage("cannot derive artifact name; use --name".into())
+                    })?
+                    .to_owned(),
+            };
+            let response = send_artifact(
+                &url_of(args, "/api/v1/artifacts"),
+                &artifact_name,
+                media_type,
+                &bytes,
+            )?;
+            emit(args, &response, |v| {
+                println!("artifact {}: {}", v["id"], v["name"]);
+                println!("digest: {}", v["digest"]);
+                println!("size:   {}", v["size"]);
+            })
+        }
         Command::Artifact(ArtifactCommand::Inspect { id, content }) => {
             let suffix = if *content { "?include=content" } else { "" };
             let response = get(url_of(args, &format!("/api/v1/artifacts/{id}{suffix}")))?;
@@ -503,6 +556,19 @@ fn read_manifest(path: &str) -> Result<Value, CliError> {
         .map_err(|e| CliError::Usage(format!("manifest is not valid JSON: {e}")))
 }
 
+#[allow(clippy::result_large_err)]
+fn read_artifact_bytes(path: &str) -> Result<Vec<u8>, CliError> {
+    if path == "-" {
+        let mut bytes = Vec::new();
+        std::io::stdin()
+            .read_to_end(&mut bytes)
+            .map_err(|e| CliError::Usage(format!("reading stdin: {e}")))?;
+        Ok(bytes)
+    } else {
+        std::fs::read(path).map_err(|e| CliError::Usage(format!("reading {path:?}: {e}")))
+    }
+}
+
 fn url_of(args: &Args, path: &str) -> String {
     format!("{}{path}", args.url)
 }
@@ -539,6 +605,22 @@ fn get(path_url: String) -> Result<Value, CliError> {
 fn post_empty(path_url: String) -> Result<Value, CliError> {
     ureq::post(&path_url)
         .call()
+        .map_err(request_error)?
+        .into_json()
+        .map_err(|e| CliError::BadResponse(format!("decoding body: {e}")))
+}
+
+#[allow(clippy::result_large_err)] // CliError keeps full API context
+fn send_artifact(
+    path_url: &str,
+    name: &str,
+    media_type: &str,
+    bytes: &[u8],
+) -> Result<Value, CliError> {
+    ureq::post(path_url)
+        .set("x-scirust-artifact-name", name)
+        .set("content-type", media_type)
+        .send_bytes(bytes)
         .map_err(request_error)?
         .into_json()
         .map_err(|e| CliError::BadResponse(format!("decoding body: {e}")))
