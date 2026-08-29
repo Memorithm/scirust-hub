@@ -1,0 +1,57 @@
+name: Agent PR3 SciCapsule execution
+
+on:
+  push:
+    branches: [work/scicapsule-execution]
+
+permissions:
+  contents: write
+
+env:
+  CARGO_INCREMENTAL: 0
+  CARGO_TERM_COLOR: always
+
+jobs:
+  apply-and-verify:
+    if: github.actor != 'github-actions[bot]'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+        with:
+          fetch-depth: 0
+      - uses: dtolnay/rust-toolchain@4360b52568e2003a75bf9bc1d59f33a8e3fc893c
+        with:
+          components: rustfmt, clippy
+      - name: Apply implementation
+        run: |
+          python3 .github/agent_pr3.py
+          chmod +x scripts/test-scicapsule-hub-v1.sh
+      - name: Format
+        run: cargo fmt --all
+      - name: Format gate
+        run: cargo fmt --all -- --check
+      - name: Clippy gate
+        run: cargo clippy --workspace --all-targets --all-features --locked -- -D warnings
+      - name: Test gate
+        run: cargo test --workspace --all-features --locked
+      - name: Build gate
+        run: cargo build --workspace --all-targets --locked
+      - name: Doc gate
+        run: RUSTDOCFLAGS='-D warnings' cargo doc --workspace --no-deps --locked
+      - name: Build pinned SciCapsule contract peer
+        run: |
+          SCICAPSULE_SRC="$RUNNER_TEMP/SciCapsule"
+          git clone https://github.com/Memorithm/SciCapsule.git "$SCICAPSULE_SRC"
+          git -C "$SCICAPSULE_SRC" checkout 1da433862c6551a998e7e239b830dc978af5abc4
+          cargo build --manifest-path "$SCICAPSULE_SRC/Cargo.toml" --locked
+          echo "SCICAPSULE_BIN=$SCICAPSULE_SRC/target/debug/scicapsule" >> "$GITHUB_ENV"
+      - name: Real SciCapsule Hub v1 end-to-end
+        run: scripts/test-scicapsule-hub-v1.sh
+      - name: Commit verified implementation
+        run: |
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git add crates apps docs scripts README.md Cargo.toml Cargo.lock
+          git diff --cached --quiet && { echo 'no source changes'; exit 1; }
+          git commit -m 'feat: execute verified SciCapsule Hub v1 contracts'
+          git push origin HEAD:work/scicapsule-execution
