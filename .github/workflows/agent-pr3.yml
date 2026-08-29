@@ -24,7 +24,7 @@ jobs:
           components: rustfmt, clippy
       - name: Apply implementation
         run: |
-          python3 .github/agent_pr3.py
+          python3 .github/agent_pr3_driver.py
           chmod +x scripts/test-scicapsule-hub-v1.sh
       - name: Format
         run: cargo fmt --all
