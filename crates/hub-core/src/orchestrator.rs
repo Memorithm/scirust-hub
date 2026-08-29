@@ -5,9 +5,9 @@
 //! `spawn_blocking`. All decisions are made here so executors and backends
 //! stay dumb.
 
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 use std::path::PathBuf;
-use std::sync::{Arc, Mutex};
+use std::sync::{mpsc, Arc, Mutex};
 
 use tracing::{info, instrument, warn};
 
@@ -47,7 +47,7 @@ pub struct Orchestrator {
     workdir_root: PathBuf,
     active_cancels: Mutex<BTreeMap<RunId, CancelToken>>,
     active_workflow_cancels: Mutex<BTreeMap<WorkflowId, CancelToken>>,
-    active_workflow_runs: Mutex<BTreeMap<WorkflowId, RunId>>,
+    active_workflow_runs: Mutex<BTreeMap<WorkflowId, BTreeSet<RunId>>>,
 }
 
 impl Orchestrator {
@@ -930,46 +930,193 @@ impl Orchestrator {
         record.transition(crate::workflow::WorkflowState::Running, started_at)?;
         self.workflows.put(&record)?;
 
-        let order = record.spec.topo_keys()?;
-        for key in &order {
-            self.refresh_cancel_intent(&mut record)?;
-            if token.is_cancelled() || record.cancel_requested_at.is_some() {
-                return self.finish_workflow_cancelled(
-                    &mut record,
-                    "workflow cancellation requested".into(),
-                );
-            }
+        let spec = record.spec.clone();
+        let concurrency = spec.concurrency_limit();
+        let dependencies = spec.dependencies();
+        let shared_record = Mutex::new(record);
+        let mut pending: BTreeSet<String> =
+            spec.steps.iter().map(|step| step.key.clone()).collect();
+        let mut completed = BTreeSet::new();
+        let mut in_flight = BTreeSet::new();
+        let mut first_failure: Option<String> = None;
+        let mut cancellation_reason: Option<String> = None;
+        let (tx, rx) = mpsc::channel::<(String, Result<ParallelStepTerminal, CoreError>)>();
 
-            let Some(step) = record.spec.steps.iter().find(|s| &s.key == key).cloned() else {
-                return self.finish_workflow_failed(
-                    &mut record,
-                    format!("step {key:?} disappeared from validated workflow"),
-                );
-            };
-
-            let resolved = match self.resolve_workflow_inputs(&record, &step)? {
-                Ok(resolved) => resolved,
-                Err(message) => return self.finish_workflow_failed(&mut record, message),
-            };
-            let run_spec = crate::workflow::WorkflowSpec::step_run_spec(&step, &resolved);
-            let max_attempts = step.retry.as_ref().map_or(1, |policy| policy.max_attempts);
-            let mut attempt_number = 1u32;
-
+        std::thread::scope(|scope| -> Result<(), CoreError> {
             loop {
-                self.refresh_cancel_intent(&mut record)?;
-                if token.is_cancelled() || record.cancel_requested_at.is_some() {
-                    return self.finish_workflow_cancelled(
-                        &mut record,
-                        "workflow cancellation requested".into(),
-                    );
+                let persisted_cancel = {
+                    let mut current = lock_workflow_record(&shared_record)?;
+                    self.refresh_cancel_intent(&mut current)?;
+                    current.cancel_requested_at.is_some()
+                };
+                if persisted_cancel {
+                    token.cancel();
+                    cancellation_reason
+                        .get_or_insert_with(|| "workflow cancellation requested".into());
+                    self.cancel_active_workflow_runs(workflow_id)?;
                 }
 
-                let submitted = match self.submit_run(run_spec.clone()) {
-                    Ok(submitted) => submitted,
-                    Err(error) => {
-                        return self.finish_workflow_failed(&mut record, error.to_string())
+                while first_failure.is_none()
+                    && cancellation_reason.is_none()
+                    && !token.is_cancelled()
+                    && in_flight.len() < concurrency
+                {
+                    let next = pending
+                        .iter()
+                        .find(|key| {
+                            dependencies
+                                .get(*key)
+                                .is_some_and(|deps| deps.iter().all(|dep| completed.contains(dep)))
+                        })
+                        .cloned();
+                    let Some(key) = next else {
+                        break;
+                    };
+                    let Some(step) = spec.steps.iter().find(|step| step.key == key).cloned() else {
+                        first_failure =
+                            Some(format!("step {key:?} disappeared from validated workflow"));
+                        break;
+                    };
+                    let resolved = {
+                        let current = lock_workflow_record(&shared_record)?;
+                        self.resolve_workflow_inputs(&current, &step)?
+                    };
+                    let resolved = match resolved {
+                        Ok(resolved) => resolved,
+                        Err(message) => {
+                            first_failure = Some(message);
+                            break;
+                        }
+                    };
+
+                    pending.remove(&key);
+                    in_flight.insert(key.clone());
+                    let sender = tx.clone();
+                    let worker_key = key.clone();
+                    let worker_token = token.clone();
+                    let shared = &shared_record;
+                    scope.spawn(move || {
+                        let result = self.execute_parallel_step(
+                            workflow_id,
+                            &step,
+                            resolved,
+                            &worker_token,
+                            shared,
+                        );
+                        let _ = sender.send((worker_key, result));
+                    });
+                }
+
+                if first_failure.is_some() {
+                    token.cancel();
+                    self.cancel_active_workflow_runs(workflow_id)?;
+                } else if cancellation_reason.is_some() || token.is_cancelled() {
+                    self.cancel_active_workflow_runs(workflow_id)?;
+                }
+
+                if in_flight.is_empty() {
+                    if pending.is_empty()
+                        || first_failure.is_some()
+                        || cancellation_reason.is_some()
+                        || token.is_cancelled()
+                    {
+                        break;
                     }
-                };
+                    return Err(CoreError::Storage(
+                        "workflow scheduler stalled with no ready or in-flight step".into(),
+                    ));
+                }
+
+                let (key, result) = rx.recv().map_err(|_| {
+                    CoreError::Storage("workflow scheduler completion channel closed".into())
+                })?;
+                in_flight.remove(&key);
+                match result {
+                    Ok(ParallelStepTerminal::Succeeded) => {
+                        completed.insert(key);
+                    }
+                    Ok(ParallelStepTerminal::Failed(message)) => {
+                        if first_failure.is_none() {
+                            first_failure = Some(message);
+                            token.cancel();
+                            self.cancel_active_workflow_runs(workflow_id)?;
+                        }
+                    }
+                    Ok(ParallelStepTerminal::Cancelled(message)) => {
+                        // A sibling cancelled by fail-fast must not overwrite
+                        // the original failure. Otherwise cancellation is the
+                        // workflow's terminal cause.
+                        if first_failure.is_none() && cancellation_reason.is_none() {
+                            cancellation_reason = Some(message);
+                            token.cancel();
+                            self.cancel_active_workflow_runs(workflow_id)?;
+                        }
+                    }
+                    Err(error) => {
+                        if first_failure.is_none() {
+                            first_failure = Some(error.to_string());
+                            token.cancel();
+                            self.cancel_active_workflow_runs(workflow_id)?;
+                        }
+                    }
+                }
+            }
+            Ok(())
+        })?;
+
+        let mut record = shared_record.into_inner().map_err(|_| {
+            CoreError::Storage("workflow record lock poisoned after scheduler completion".into())
+        })?;
+        self.refresh_cancel_intent(&mut record)?;
+        if record.cancel_requested_at.is_some() || cancellation_reason.is_some() {
+            return self.finish_workflow_cancelled(
+                &mut record,
+                cancellation_reason.unwrap_or_else(|| "workflow cancellation requested".into()),
+            );
+        }
+        if let Some(message) = first_failure {
+            return self.finish_workflow_failed(&mut record, message);
+        }
+        if completed.len() != spec.steps.len() {
+            return self.finish_workflow_failed(
+                &mut record,
+                format!(
+                    "workflow scheduler completed {} of {} steps",
+                    completed.len(),
+                    spec.steps.len()
+                ),
+            );
+        }
+
+        let now = self.clock.now_ms();
+        record.transition(crate::workflow::WorkflowState::Succeeded, now)?;
+        self.workflows.put(&record)?;
+        info!(workflow = %workflow_id, concurrency, "workflow succeeded");
+        Ok(record)
+    }
+
+    fn execute_parallel_step(
+        &self,
+        workflow_id: WorkflowId,
+        step: &crate::workflow::Step,
+        resolved: BTreeMap<String, ArtifactId>,
+        token: &CancelToken,
+        shared_record: &Mutex<crate::workflow::WorkflowRecord>,
+    ) -> Result<ParallelStepTerminal, CoreError> {
+        let run_spec = crate::workflow::WorkflowSpec::step_run_spec(step, &resolved);
+        let max_attempts = step.retry.as_ref().map_or(1, |policy| policy.max_attempts);
+        let mut attempt_number = 1u32;
+
+        loop {
+            if token.is_cancelled() || self.workflow_cancel_requested(workflow_id)? {
+                return Ok(ParallelStepTerminal::Cancelled(
+                    "workflow cancellation requested".into(),
+                ));
+            }
+
+            let submitted = self.submit_run(run_spec.clone())?;
+            {
+                let mut record = lock_workflow_record(shared_record)?;
                 let attempt = crate::workflow::StepAttempt {
                     id: AttemptId::generate(),
                     number: attempt_number,
@@ -980,116 +1127,153 @@ impl Orchestrator {
                     failure_category: None,
                     failure: None,
                 };
-                Self::record_attempt(&mut record, key, attempt);
+                Self::record_attempt(&mut record, &step.key, attempt);
                 self.workflows.put(&record)?;
+            }
 
-                self.active_workflow_runs
-                    .lock()
-                    .map_err(|_| {
-                        CoreError::Storage("active workflow run map lock poisoned".into())
-                    })?
-                    .insert(workflow_id, submitted.id);
+            self.register_active_workflow_run(workflow_id, submitted.id)?;
+            if token.is_cancelled() || self.workflow_cancel_requested(workflow_id)? {
+                let _ = self.cancel_run(submitted.id)?;
+            }
 
-                // Close the race between persisting the queued attempt and
-                // publishing it as the active run.
-                self.refresh_cancel_intent(&mut record)?;
-                if token.is_cancelled() || record.cancel_requested_at.is_some() {
-                    let _ = self.cancel_run(submitted.id);
+            let executed = self.execute_run(submitted.id);
+            self.unregister_active_workflow_run(workflow_id, submitted.id)?;
+
+            let finished = match executed {
+                Ok(finished) => finished,
+                Err(error) => {
+                    let current_run = self.runs.get(&submitted.id)?;
+                    let mut record = lock_workflow_record(shared_record)?;
+                    Self::finish_recorded_attempt(
+                        &mut record,
+                        &step.key,
+                        submitted.id,
+                        current_run.as_ref(),
+                        Some(crate::workflow::AttemptFailureCategory::ExecutionError),
+                        Some(error.to_string()),
+                    );
+                    self.workflows.put(&record)?;
+                    return Err(error);
                 }
+            };
 
-                let executed = self.execute_run(submitted.id);
-                self.active_workflow_runs
-                    .lock()
-                    .map_err(|_| {
-                        CoreError::Storage("active workflow run map lock poisoned".into())
-                    })?
-                    .remove(&workflow_id);
-
-                let finished = match executed {
-                    Ok(finished) => finished,
-                    Err(error) => {
-                        let category = crate::workflow::AttemptFailureCategory::ExecutionError;
-                        Self::finish_recorded_attempt(
-                            &mut record,
-                            key,
-                            submitted.id,
-                            self.runs.get(&submitted.id)?.as_ref(),
-                            Some(category),
-                            Some(error.to_string()),
-                        );
-                        self.workflows.put(&record)?;
-                        return self.finish_workflow_failed(&mut record, error.to_string());
-                    }
-                };
-
-                let category = classify_attempt_failure(&finished);
-                let failure = finished
-                    .outcome
-                    .as_ref()
-                    .and_then(|outcome| outcome.failure.clone());
+            let category = classify_attempt_failure(&finished);
+            let failure = finished
+                .outcome
+                .as_ref()
+                .and_then(|outcome| outcome.failure.clone());
+            {
+                let mut record = lock_workflow_record(shared_record)?;
                 Self::finish_recorded_attempt(
                     &mut record,
-                    key,
+                    &step.key,
                     submitted.id,
                     Some(&finished),
                     category,
                     failure.clone(),
                 );
                 self.workflows.put(&record)?;
+            }
 
-                self.refresh_cancel_intent(&mut record)?;
-                if token.is_cancelled()
-                    || record.cancel_requested_at.is_some()
-                    || finished.state == RunState::Cancelled
-                {
-                    return self.finish_workflow_cancelled(
-                        &mut record,
-                        failure.unwrap_or_else(|| "workflow cancellation requested".into()),
-                    );
-                }
-                if finished.state == RunState::Succeeded {
-                    break;
-                }
+            if self.workflow_cancel_requested(workflow_id)? || finished.state == RunState::Cancelled
+            {
+                return Ok(ParallelStepTerminal::Cancelled(
+                    failure.unwrap_or_else(|| "workflow cancellation requested".into()),
+                ));
+            }
+            if finished.state == RunState::Succeeded {
+                return Ok(ParallelStepTerminal::Succeeded);
+            }
 
-                let observed =
-                    category.unwrap_or(crate::workflow::AttemptFailureCategory::ExecutionError);
-                let retry = step
-                    .retry
-                    .as_ref()
-                    .is_some_and(|policy| attempt_number < max_attempts && policy.allows(observed));
-                if !retry {
-                    let message = format!(
-                        "step {key:?} attempt {attempt_number} ended in state {}{}",
-                        finished.state,
-                        failure
-                            .as_ref()
-                            .map(|value| format!(": {value}"))
-                            .unwrap_or_default()
-                    );
-                    return self.finish_workflow_failed(&mut record, message);
-                }
+            let observed =
+                category.unwrap_or(crate::workflow::AttemptFailureCategory::ExecutionError);
+            let retry = step
+                .retry
+                .as_ref()
+                .is_some_and(|policy| attempt_number < max_attempts && policy.allows(observed));
+            if !retry {
+                return Ok(ParallelStepTerminal::Failed(format!(
+                    "step {:?} attempt {attempt_number} ended in state {}{}",
+                    step.key,
+                    finished.state,
+                    failure
+                        .as_ref()
+                        .map(|value| format!(": {value}"))
+                        .unwrap_or_default()
+                )));
+            }
 
-                let backoff_ms = step
-                    .retry
-                    .as_ref()
-                    .and_then(|policy| policy.backoff_ms)
-                    .unwrap_or(0);
-                if !self.wait_retry_backoff(workflow_id, token, backoff_ms)? {
-                    self.refresh_cancel_intent(&mut record)?;
-                    return self.finish_workflow_cancelled(
-                        &mut record,
-                        "workflow cancellation requested during retry backoff".into(),
-                    );
-                }
-                attempt_number += 1;
+            let backoff_ms = step
+                .retry
+                .as_ref()
+                .and_then(|policy| policy.backoff_ms)
+                .unwrap_or(0);
+            if !self.wait_retry_backoff(workflow_id, token, backoff_ms)? {
+                return Ok(ParallelStepTerminal::Cancelled(
+                    "workflow cancellation requested during retry backoff".into(),
+                ));
+            }
+            attempt_number += 1;
+        }
+    }
+
+    fn workflow_cancel_requested(&self, workflow_id: WorkflowId) -> Result<bool, CoreError> {
+        Ok(self
+            .workflows
+            .get(&workflow_id)?
+            .is_some_and(|record| record.cancel_requested_at.is_some()))
+    }
+
+    fn register_active_workflow_run(
+        &self,
+        workflow_id: WorkflowId,
+        run_id: RunId,
+    ) -> Result<(), CoreError> {
+        self.active_workflow_runs
+            .lock()
+            .map_err(|_| CoreError::Storage("active workflow run map lock poisoned".into()))?
+            .entry(workflow_id)
+            .or_default()
+            .insert(run_id);
+        Ok(())
+    }
+
+    fn unregister_active_workflow_run(
+        &self,
+        workflow_id: WorkflowId,
+        run_id: RunId,
+    ) -> Result<(), CoreError> {
+        let mut active = self
+            .active_workflow_runs
+            .lock()
+            .map_err(|_| CoreError::Storage("active workflow run map lock poisoned".into()))?;
+        let empty = if let Some(runs) = active.get_mut(&workflow_id) {
+            runs.remove(&run_id);
+            runs.is_empty()
+        } else {
+            false
+        };
+        if empty {
+            active.remove(&workflow_id);
+        }
+        Ok(())
+    }
+
+    fn cancel_active_workflow_runs(&self, workflow_id: WorkflowId) -> Result<usize, CoreError> {
+        let runs = self
+            .active_workflow_runs
+            .lock()
+            .map_err(|_| CoreError::Storage("active workflow run map lock poisoned".into()))?
+            .get(&workflow_id)
+            .cloned()
+            .unwrap_or_default();
+        let mut signalled = 0usize;
+        for run_id in runs {
+            if self.cancel_run(run_id)? {
+                signalled += 1;
             }
         }
-
-        let now = self.clock.now_ms();
-        record.transition(crate::workflow::WorkflowState::Succeeded, now)?;
-        self.workflows.put(&record)?;
-        info!(workflow = %workflow_id, "workflow succeeded");
-        Ok(record)
+        Ok(signalled)
     }
 
     fn resolve_workflow_inputs(
@@ -1160,6 +1344,7 @@ impl Orchestrator {
                 failure: attempt.failure.clone(),
                 attempts: vec![attempt],
             });
+            record.steps.sort_by(|left, right| left.key.cmp(&right.key));
         }
     }
 
@@ -1296,18 +1481,10 @@ impl Orchestrator {
             token.cancel();
         }
 
-        let active_run = self
-            .active_workflow_runs
-            .lock()
-            .map_err(|_| CoreError::Storage("active workflow run map lock poisoned".into()))?
-            .get(&workflow_id)
-            .copied();
-        if let Some(run_id) = active_run {
-            let _ = self.cancel_run(run_id)?;
-        }
+        let signalled_runs = self.cancel_active_workflow_runs(workflow_id)?;
 
         if active_token.is_none() {
-            if let Some(run_id) = latest_nonterminal_attempt_run(&record, self)? {
+            for run_id in nonterminal_attempt_runs(&record, self)? {
                 let _ = self.cancel_run(run_id)?;
             }
             record = self
@@ -1318,7 +1495,7 @@ impl Orchestrator {
                 .finish_workflow_cancelled(&mut record, "workflow cancellation requested".into())
                 .map(|_| false);
         }
-        Ok(true)
+        Ok(active_token.is_some() || signalled_runs > 0)
     }
 
     /// Reconciles cancellation intent left behind by a daemon restart. Any
@@ -1330,13 +1507,59 @@ impl Orchestrator {
             if record.state.is_terminal() || record.cancel_requested_at.is_none() {
                 continue;
             }
-            if let Some(run_id) = latest_nonterminal_attempt_run(&record, self)? {
+            for run_id in nonterminal_attempt_runs(&record, self)? {
                 let _ = self.cancel_run(run_id)?;
             }
             self.finish_workflow_cancelled(
                 &mut record,
                 "workflow cancellation recovered after restart".into(),
             )?;
+            recovered += 1;
+        }
+        Ok(recovered)
+    }
+
+    /// Reconciles workflows left `running` by a daemon crash. Local process
+    /// attempts cannot be reattached safely after restart, so Hub fails them
+    /// closed instead of replaying side effects. Completed attempts remain
+    /// untouched and fully queryable.
+    pub fn recover_interrupted_workflows(&self) -> Result<usize, CoreError> {
+        let mut recovered = 0usize;
+        for mut record in self.workflows.list()? {
+            if record.state != crate::workflow::WorkflowState::Running
+                || record.cancel_requested_at.is_some()
+            {
+                continue;
+            }
+            let message =
+                "workflow execution interrupted by daemon restart; local attempts are not replayed automatically"
+                    .to_owned();
+            let now = self.clock.now_ms();
+            for result in &mut record.steps {
+                for attempt in &mut result.attempts {
+                    let Some(mut run) = self.runs.get(&attempt.run)? else {
+                        continue;
+                    };
+                    if run.state.is_terminal() {
+                        continue;
+                    }
+                    run.transition(RunState::Failed, now)?;
+                    self.runs.put(&run)?;
+                    attempt.state = RunState::Failed;
+                    attempt.finished_at = Some(now);
+                    attempt.failure_category =
+                        Some(crate::workflow::AttemptFailureCategory::ExecutionError);
+                    attempt.failure = Some(message.clone());
+                    if result.run == attempt.run {
+                        result.state = RunState::Failed;
+                        result.failure = Some(message.clone());
+                    }
+                }
+            }
+            record.transition(crate::workflow::WorkflowState::Failed, now)?;
+            record.failure = Some(message.clone());
+            self.workflows.put(&record)?;
+            warn!(workflow = %record.id, %message, "recovered interrupted workflow");
             recovered += 1;
         }
         Ok(recovered)
@@ -1444,22 +1667,37 @@ fn classify_attempt_failure(run: &RunRecord) -> Option<crate::workflow::AttemptF
     Some(crate::workflow::AttemptFailureCategory::ExecutionError)
 }
 
-fn latest_nonterminal_attempt_run(
+fn nonterminal_attempt_runs(
     record: &crate::workflow::WorkflowRecord,
     orchestrator: &Orchestrator,
-) -> Result<Option<RunId>, CoreError> {
-    for result in record.steps.iter().rev() {
-        for attempt in result.attempts.iter().rev() {
+) -> Result<BTreeSet<RunId>, CoreError> {
+    let mut runs = BTreeSet::new();
+    for result in &record.steps {
+        for attempt in &result.attempts {
             if orchestrator
                 .runs
                 .get(&attempt.run)?
                 .is_some_and(|run| !run.state.is_terminal())
             {
-                return Ok(Some(attempt.run));
+                runs.insert(attempt.run);
             }
         }
     }
-    Ok(None)
+    Ok(runs)
+}
+
+enum ParallelStepTerminal {
+    Succeeded,
+    Failed(String),
+    Cancelled(String),
+}
+
+fn lock_workflow_record(
+    record: &Mutex<crate::workflow::WorkflowRecord>,
+) -> Result<std::sync::MutexGuard<'_, crate::workflow::WorkflowRecord>, CoreError> {
+    record
+        .lock()
+        .map_err(|_| CoreError::Storage("workflow record lock poisoned".into()))
 }
 
 #[cfg(test)]
@@ -2184,6 +2422,7 @@ mod tests {
         let spec = WorkflowSpec {
             schema_version: WORKFLOW_SCHEMA_VERSION,
             name: "wf".into(),
+            max_concurrency: 1,
             steps: vec![
                 mk_step("a", Vec::new(), BTreeMap::new()),
                 mk_step("a", Vec::new(), BTreeMap::new()),
@@ -2198,6 +2437,7 @@ mod tests {
         let spec = WorkflowSpec {
             schema_version: WORKFLOW_SCHEMA_VERSION,
             name: "wf".into(),
+            max_concurrency: 1,
             steps: vec![mk_step("a", vec!["ghost".into()], BTreeMap::new())],
         };
         assert!(matches!(
@@ -2225,6 +2465,7 @@ mod tests {
         let spec = WorkflowSpec {
             schema_version: WORKFLOW_SCHEMA_VERSION,
             name: "wf".into(),
+            max_concurrency: 1,
             steps: vec![
                 mk_step("a", Vec::new(), inputs_a),
                 mk_step("b", Vec::new(), inputs_b),
@@ -2245,6 +2486,7 @@ mod tests {
         let spec = WorkflowSpec {
             schema_version: WORKFLOW_SCHEMA_VERSION,
             name: "wf".into(),
+            max_concurrency: 1,
             steps: vec![mk_step("a", Vec::new(), self_inputs)],
         };
         assert!(
@@ -2256,6 +2498,7 @@ mod tests {
         let spec = WorkflowSpec {
             schema_version: 9,
             name: "wf".into(),
+            max_concurrency: 1,
             steps: vec![mk_step("a", Vec::new(), BTreeMap::new())],
         };
         assert!(spec.validate().is_err());
@@ -2323,6 +2566,7 @@ mod tests {
         let spec = crate::workflow::WorkflowSpec {
             schema_version: crate::workflow::WORKFLOW_SCHEMA_VERSION,
             name: "chain".into(),
+            max_concurrency: 1,
             steps,
         };
         // Deterministic topological order puts emit before store.

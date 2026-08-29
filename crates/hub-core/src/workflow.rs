@@ -1,10 +1,9 @@
 //! Workflow specifications and records: multiple steps executed in
 //! dependency order.
 //!
-//! Scope honesty (see ADR-0006): scheduling is still **sequential,
-//! single-node** in this module revision. Retries and workflow cancellation
-//! are explicit and persisted; parallel and distributed scheduling remain
-//! separate later layers.
+//! Scope honesty (see ADR-0006): scheduling is bounded-parallel on one
+//! Hub node. Ready nodes are selected deterministically; retries and
+//! cancellation remain persisted. Executor location is still local here.
 
 use std::collections::{BTreeMap, BTreeSet};
 
@@ -22,7 +21,10 @@ pub const WORKFLOW_SCHEMA_VERSION: u16 = 1;
 
 /// Version of the workflow model itself, stamped into every record so
 /// stored provenance can be interpreted years later.
-pub const WORKFLOW_MODEL_VERSION: &str = "1.1.0";
+pub const WORKFLOW_MODEL_VERSION: &str = "1.2.0";
+
+/// Hard safety bound for one workflow scheduler.
+pub const MAX_WORKFLOW_CONCURRENCY: u16 = 64;
 
 /// Where a step's input comes from.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
@@ -143,7 +145,15 @@ pub struct WorkflowSpec {
     pub schema_version: u16,
     /// Human-readable label (not an identifier).
     pub name: String,
+    /// Maximum concurrently active DAG nodes. Missing in older JSON means 1,
+    /// preserving the former sequential behaviour.
+    #[serde(default = "default_workflow_concurrency")]
+    pub max_concurrency: u16,
     pub steps: Vec<Step>,
+}
+
+const fn default_workflow_concurrency() -> u16 {
+    1
 }
 
 impl WorkflowSpec {
@@ -164,6 +174,11 @@ impl WorkflowSpec {
             return Err(CoreError::InvalidRunSpec(
                 "workflow name must be 1..=128 characters".into(),
             ));
+        }
+        if self.max_concurrency == 0 || self.max_concurrency > MAX_WORKFLOW_CONCURRENCY {
+            return Err(CoreError::InvalidRunSpec(format!(
+                "workflow max_concurrency must be 1..={MAX_WORKFLOW_CONCURRENCY}"
+            )));
         }
         let limits = DagLimits::default();
         if self.steps.len() > limits.max_nodes {
@@ -257,6 +272,31 @@ impl WorkflowSpec {
         dag.topological_order()
             .map(|_| ())
             .map_err(|e| CoreError::InvalidRunSpec(e.to_string()))
+    }
+
+    /// Effective bounded parallelism for the scheduler.
+    #[must_use]
+    pub const fn concurrency_limit(&self) -> usize {
+        self.max_concurrency as usize
+    }
+
+    /// Direct dependency set for each step, combining explicit `after`
+    /// barriers and data-flow dependencies. Keys and dependency sets are
+    /// ordered, which makes the scheduler's ready-set choice deterministic.
+    #[must_use]
+    pub fn dependencies(&self) -> BTreeMap<String, BTreeSet<String>> {
+        self.steps
+            .iter()
+            .map(|step| {
+                let mut deps: BTreeSet<String> = step.after.iter().cloned().collect();
+                for source in step.inputs.values() {
+                    if let InputSource::FromStep { key, .. } = source {
+                        deps.insert(key.clone());
+                    }
+                }
+                (step.key.clone(), deps)
+            })
+            .collect()
     }
 
     /// Deterministic execution order.
