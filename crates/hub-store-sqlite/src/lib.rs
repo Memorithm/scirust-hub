@@ -796,6 +796,7 @@ mod tests {
         hub_core::workflow::WorkflowSpec {
             schema_version: hub_core::workflow::WORKFLOW_SCHEMA_VERSION,
             name: "chain".into(),
+            max_concurrency: 1,
             steps: vec![hub_core::workflow::Step {
                 key: "emit".into(),
                 component,

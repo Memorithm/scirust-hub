@@ -205,6 +205,7 @@ fn submit(fixture: &Fixture, retry: Option<RetryPolicy>) -> hub_core::WorkflowRe
         .submit_workflow(WorkflowSpec {
             schema_version: WORKFLOW_SCHEMA_VERSION,
             name: "policy-test".into(),
+            max_concurrency: 1,
             steps: vec![step(fixture.component, retry)],
         })
         .expect("submit workflow")
@@ -338,6 +339,7 @@ fn retry_policy_requires_explicit_retryable_categories() {
     let result = fixture.orch.submit_workflow(WorkflowSpec {
         schema_version: WORKFLOW_SCHEMA_VERSION,
         name: "invalid-policy".into(),
+        max_concurrency: 1,
         steps: vec![step(fixture.component, Some(invalid))],
     });
     assert!(result.is_err());

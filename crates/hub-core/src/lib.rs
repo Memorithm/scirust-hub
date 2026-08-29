@@ -55,5 +55,5 @@ pub use run::{
 pub use version::Version;
 pub use workflow::{
     AttemptFailureCategory, InputSource, RetryPolicy, Step, StepAttempt, StepResult,
-    WorkflowRecord, WorkflowSpec, WorkflowState, WORKFLOW_SCHEMA_VERSION,
+    WorkflowRecord, WorkflowSpec, WorkflowState, MAX_WORKFLOW_CONCURRENCY, WORKFLOW_SCHEMA_VERSION,
 };

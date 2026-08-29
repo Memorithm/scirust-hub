@@ -176,6 +176,13 @@ fn run(args: Args) -> Result<(), DaemonError> {
             "reconciled workflow cancellations after restart"
         );
     }
+    let recovered_interruptions = orchestrator.recover_interrupted_workflows()?;
+    if recovered_interruptions > 0 {
+        tracing::warn!(
+            recovered_interruptions,
+            "failed closed workflows interrupted by the previous daemon lifetime"
+        );
+    }
 
     tracing::info!(
         %listen,
