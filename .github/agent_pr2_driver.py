@@ -40,6 +40,30 @@ path.write_text(text)
 
 runpy.run_path(str(path), run_name='__main__')
 
+p = Path('crates/hub-core/src/orchestrator.rs')
+generated = p.read_text()
+old = '''#[cfg(test)]
+mod tests {#[cfg(test)]
+mod tests {'''
+new = '''#[cfg(test)]
+mod tests {'''
+if generated.count(old) != 1:
+    raise SystemExit(f'expected one duplicated test module marker, found {generated.count(old)}')
+generated = generated.replace(old, new, 1)
+
+# Keep cancellation classification simple and unambiguous.
+old = '''            if self.workflow_cancel_requested(workflow_id)?
+                || (token.is_cancelled() && finished.state == RunState::Cancelled)
+                || finished.state == RunState::Cancelled
+            {'''
+new = '''            if self.workflow_cancel_requested(workflow_id)?
+                || finished.state == RunState::Cancelled
+            {'''
+if generated.count(old) != 1:
+    raise SystemExit(f'expected one cancellation condition, found {generated.count(old)}')
+generated = generated.replace(old, new, 1)
+p.write_text(generated)
+
 # Worker start order is OS-scheduled. Ready-set selection is lexical, but tests
 # must not confuse that policy with thread execution timing.
 p = Path('crates/hub-core/tests/parallel_dag.rs')
@@ -53,19 +77,4 @@ new = '''    let mut starts = executor.starts.lock().expect("starts").clone();
     assert_eq!(starts, vec!["a".to_owned(), "b".to_owned()]);'''
 if generated.count(old) != 2:
     raise SystemExit(f'expected two start-order assertions, found {generated.count(old)}')
-generated = generated.replace(old, new)
-p.write_text(generated)
-
-# Keep cancellation classification simple and unambiguous.
-p = Path('crates/hub-core/src/orchestrator.rs')
-generated = p.read_text()
-old = '''            if self.workflow_cancel_requested(workflow_id)?
-                || (token.is_cancelled() && finished.state == RunState::Cancelled)
-                || finished.state == RunState::Cancelled
-            {'''
-new = '''            if self.workflow_cancel_requested(workflow_id)?
-                || finished.state == RunState::Cancelled
-            {'''
-if generated.count(old) != 1:
-    raise SystemExit(f'expected one cancellation condition, found {generated.count(old)}')
-p.write_text(generated.replace(old, new, 1))
+p.write_text(generated.replace(old, new))
