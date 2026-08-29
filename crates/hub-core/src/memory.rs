@@ -221,8 +221,29 @@ pub struct InMemoryWorkflows(Mutex<WorkflowsInner>);
 impl WorkflowRepository for InMemoryWorkflows {
     fn put(&self, record: &crate::workflow::WorkflowRecord) -> Result<(), CoreError> {
         let mut inner = self.0.lock().map_err(poison)?;
-        inner.records.insert(record.id, record.clone());
+        let mut stored = record.clone();
+        if let Some(existing) = inner.records.get(&record.id) {
+            if stored.cancel_requested_at.is_none() {
+                stored.cancel_requested_at = existing.cancel_requested_at;
+            }
+        }
+        inner.records.insert(record.id, stored);
         Ok(())
+    }
+
+    fn request_cancel(
+        &self,
+        id: &crate::id::WorkflowId,
+        at: crate::clock::UnixMillis,
+    ) -> Result<Option<crate::workflow::WorkflowRecord>, CoreError> {
+        let mut inner = self.0.lock().map_err(poison)?;
+        let Some(record) = inner.records.get_mut(id) else {
+            return Ok(None);
+        };
+        if !record.state.is_terminal() {
+            record.cancel_requested_at.get_or_insert(at);
+        }
+        Ok(Some(record.clone()))
     }
 
     fn get(

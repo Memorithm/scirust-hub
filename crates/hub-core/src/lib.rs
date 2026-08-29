@@ -42,7 +42,7 @@ pub use dag::{Dag, DagLimits};
 pub use digest::ContentDigest;
 pub use error::{CoreError, ExecutorFailure};
 pub use exec::{CancelToken, ExecutionOutcome, ExecutionRequest, Executor};
-pub use id::{ArtifactId, ComponentId, RunId, WorkflowId};
+pub use id::{ArtifactId, AttemptId, ComponentId, RunId, WorkflowId};
 pub use limits::Limits;
 pub use memory::{
     FileSystemArtifactStore, InMemoryArtifactMeta, InMemoryComponents, InMemoryRuns,
@@ -54,6 +54,6 @@ pub use run::{
 };
 pub use version::Version;
 pub use workflow::{
-    InputSource, Step, StepResult, WorkflowRecord, WorkflowSpec, WorkflowState,
-    WORKFLOW_SCHEMA_VERSION,
+    AttemptFailureCategory, InputSource, RetryPolicy, Step, StepAttempt, StepResult,
+    WorkflowRecord, WorkflowSpec, WorkflowState, WORKFLOW_SCHEMA_VERSION,
 };

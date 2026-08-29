@@ -16,7 +16,7 @@ use crate::clock::{Clock, UnixMillis};
 use crate::component::{ComponentManifest, ExecutionBinding};
 use crate::error::CoreError;
 use crate::exec::{CancelToken, ExecutionOutcome, ExecutionRequest, Executor};
-use crate::id::{ArtifactId, ComponentId, RunId};
+use crate::id::{ArtifactId, AttemptId, ComponentId, RunId, WorkflowId};
 use crate::limits::Limits;
 use crate::memory::FileSystemArtifactStore;
 use crate::run::{OutputRef, RunOutcome, RunRecord, RunSpec, RunState};
@@ -46,6 +46,8 @@ pub struct Orchestrator {
     limits: Limits,
     workdir_root: PathBuf,
     active_cancels: Mutex<BTreeMap<RunId, CancelToken>>,
+    active_workflow_cancels: Mutex<BTreeMap<WorkflowId, CancelToken>>,
+    active_workflow_runs: Mutex<BTreeMap<WorkflowId, RunId>>,
 }
 
 impl Orchestrator {
@@ -75,6 +77,8 @@ impl Orchestrator {
             limits,
             workdir_root: workdir_root.into(),
             active_cancels: Mutex::new(BTreeMap::new()),
+            active_workflow_cancels: Mutex::new(BTreeMap::new()),
+            active_workflow_runs: Mutex::new(BTreeMap::new()),
         }
     }
 
@@ -850,21 +854,61 @@ impl Orchestrator {
         Ok(record)
     }
 
-    /// Executes a created workflow sequentially in dependency order
-    /// (fail-fast). Blocking by design; see module docs.
-    ///
-    /// Step inputs referencing other steps resolve to that step's recorded
-    /// output artifact (matched by output label such as `stdout` or
-    /// `file:<name>`).
+    /// Executes a created workflow in deterministic dependency order. A step
+    /// may perform multiple attempts only when it carries an explicit retry
+    /// policy. Workflow cancellation intent is persisted before any active
+    /// run is signalled.
     ///
     /// # Errors
     /// [`CoreError::WorkflowNotFound`] / [`CoreError::WorkflowNotExecutable`]
-    /// / storage failures. Per-step problems become a `failed` workflow
-    /// record, not an error return.
+    /// / storage failures. Per-step execution failures become terminal
+    /// workflow records rather than escaping as scheduler errors.
     #[instrument(skip_all, fields(workflow = %workflow_id))]
     pub fn execute_workflow(
         &self,
-        workflow_id: crate::id::WorkflowId,
+        workflow_id: WorkflowId,
+    ) -> Result<crate::workflow::WorkflowRecord, CoreError> {
+        let token = CancelToken::new();
+        {
+            use std::collections::btree_map::Entry;
+            let mut active = self.active_workflow_cancels.lock().map_err(|_| {
+                CoreError::Storage("workflow cancellation map lock poisoned".into())
+            })?;
+            match active.entry(workflow_id) {
+                Entry::Occupied(_) => {
+                    let current = self
+                        .workflows
+                        .get(&workflow_id)?
+                        .map_or(crate::workflow::WorkflowState::Running, |record| {
+                            record.state
+                        });
+                    return Err(CoreError::WorkflowNotExecutable {
+                        workflow: workflow_id,
+                        current,
+                    });
+                }
+                Entry::Vacant(slot) => {
+                    slot.insert(token.clone());
+                }
+            }
+        }
+
+        let result = self.execute_workflow_inner(workflow_id, &token);
+        self.active_workflow_runs
+            .lock()
+            .map_err(|_| CoreError::Storage("active workflow run map lock poisoned".into()))?
+            .remove(&workflow_id);
+        self.active_workflow_cancels
+            .lock()
+            .map_err(|_| CoreError::Storage("workflow cancellation map lock poisoned".into()))?
+            .remove(&workflow_id);
+        result
+    }
+
+    fn execute_workflow_inner(
+        &self,
+        workflow_id: WorkflowId,
+        token: &CancelToken,
     ) -> Result<crate::workflow::WorkflowRecord, CoreError> {
         let mut record = self
             .workflows
@@ -876,6 +920,11 @@ impl Orchestrator {
                 current: record.state,
             });
         }
+        self.refresh_cancel_intent(&mut record)?;
+        if token.is_cancelled() || record.cancel_requested_at.is_some() {
+            return self
+                .finish_workflow_cancelled(&mut record, "cancelled before execution".into());
+        }
 
         let started_at = self.clock.now_ms();
         record.transition(crate::workflow::WorkflowState::Running, started_at)?;
@@ -883,100 +932,157 @@ impl Orchestrator {
 
         let order = record.spec.topo_keys()?;
         for key in &order {
-            let Some(step) = record.spec.steps.iter().find(|s| &s.key == key).cloned() else {
-                break; // cannot happen; keys originate from the same spec
-            };
-
-            // Resolve every input source to an existing artifact id.
-            let mut resolved: BTreeMap<String, ArtifactId> = BTreeMap::new();
-            let mut resolution_failure: Option<String> = None;
-            for (input_name, source) in &step.inputs {
-                match source {
-                    crate::workflow::InputSource::Artifact { artifact } => {
-                        match self.artifacts_meta.get(artifact)? {
-                            Some(_) => {
-                                resolved.insert(input_name.clone(), *artifact);
-                            }
-                            None => {
-                                resolution_failure = Some(format!(
-                                    "step {key:?} input {input_name:?}: artifact {} not found",
-                                    artifact
-                                ));
-                                break;
-                            }
-                        }
-                    }
-                    crate::workflow::InputSource::FromStep { key: dep, output } => {
-                        let produced = record
-                            .steps
-                            .iter()
-                            .find(|sr| &sr.key == dep)
-                            .map(|sr| sr.run);
-                        let Some(dep_run) = produced else {
-                            resolution_failure = Some(format!(
-                                "step {key:?} input {input_name:?}: dependency {dep:?} has not run"
-                            ));
-                            break;
-                        };
-                        let dep_record = self.runs.get(&dep_run)?;
-                        let artifact = dep_record.as_ref().and_then(|r| {
-                            r.outcome.as_ref().and_then(|o| {
-                                o.outputs
-                                    .iter()
-                                    .find(|out| &out.name == output)
-                                    .map(|out| out.artifact)
-                            })
-                        });
-                        match artifact {
-                            Some(aid) => {
-                                resolved.insert(input_name.clone(), aid);
-                            }
-                            None => {
-                                resolution_failure = Some(format!(
-                                    "step {key:?} input {input_name:?}: step {dep:?} produced no output named {output:?}"
-                                ));
-                                break;
-                            }
-                        }
-                    }
-                }
-            }
-
-            if let Some(message) = resolution_failure {
-                return self.finish_workflow_failed(&mut record, message);
-            }
-
-            let run_spec = crate::workflow::WorkflowSpec::step_run_spec(&step, &resolved);
-            let step_outcome = match self.submit_run(run_spec).and_then(|submitted| {
-                let id = submitted.id;
-                self.execute_run(id)
-            }) {
-                Ok(finished) => finished,
-                Err(e) => {
-                    return self.finish_workflow_failed(&mut record, e.to_string());
-                }
-            };
-
-            let failure = step_outcome
-                .outcome
-                .as_ref()
-                .and_then(|o| o.failure.clone());
-            let state = step_outcome.state;
-            record.steps.push(crate::workflow::StepResult {
-                key: key.clone(),
-                run: step_outcome.id,
-                state,
-                failure: failure.clone(),
-            });
-
-            if state != RunState::Succeeded {
-                let message = format!(
-                    "step {key:?} ended in state {state}{}",
-                    failure.map(|f| format!(": {f}")).unwrap_or_default()
+            self.refresh_cancel_intent(&mut record)?;
+            if token.is_cancelled() || record.cancel_requested_at.is_some() {
+                return self.finish_workflow_cancelled(
+                    &mut record,
+                    "workflow cancellation requested".into(),
                 );
-                return self.finish_workflow_failed(&mut record, message);
             }
-            self.workflows.put(&record)?;
+
+            let Some(step) = record.spec.steps.iter().find(|s| &s.key == key).cloned() else {
+                return self.finish_workflow_failed(
+                    &mut record,
+                    format!("step {key:?} disappeared from validated workflow"),
+                );
+            };
+
+            let resolved = match self.resolve_workflow_inputs(&record, &step)? {
+                Ok(resolved) => resolved,
+                Err(message) => return self.finish_workflow_failed(&mut record, message),
+            };
+            let run_spec = crate::workflow::WorkflowSpec::step_run_spec(&step, &resolved);
+            let max_attempts = step.retry.as_ref().map_or(1, |policy| policy.max_attempts);
+            let mut attempt_number = 1u32;
+
+            loop {
+                self.refresh_cancel_intent(&mut record)?;
+                if token.is_cancelled() || record.cancel_requested_at.is_some() {
+                    return self.finish_workflow_cancelled(
+                        &mut record,
+                        "workflow cancellation requested".into(),
+                    );
+                }
+
+                let submitted = match self.submit_run(run_spec.clone()) {
+                    Ok(submitted) => submitted,
+                    Err(error) => {
+                        return self.finish_workflow_failed(&mut record, error.to_string())
+                    }
+                };
+                let attempt = crate::workflow::StepAttempt {
+                    id: AttemptId::generate(),
+                    number: attempt_number,
+                    run: submitted.id,
+                    state: submitted.state,
+                    started_at: submitted.started_at,
+                    finished_at: submitted.finished_at,
+                    failure_category: None,
+                    failure: None,
+                };
+                Self::record_attempt(&mut record, key, attempt);
+                self.workflows.put(&record)?;
+
+                self.active_workflow_runs
+                    .lock()
+                    .map_err(|_| {
+                        CoreError::Storage("active workflow run map lock poisoned".into())
+                    })?
+                    .insert(workflow_id, submitted.id);
+
+                // Close the race between persisting the queued attempt and
+                // publishing it as the active run.
+                self.refresh_cancel_intent(&mut record)?;
+                if token.is_cancelled() || record.cancel_requested_at.is_some() {
+                    let _ = self.cancel_run(submitted.id);
+                }
+
+                let executed = self.execute_run(submitted.id);
+                self.active_workflow_runs
+                    .lock()
+                    .map_err(|_| {
+                        CoreError::Storage("active workflow run map lock poisoned".into())
+                    })?
+                    .remove(&workflow_id);
+
+                let finished = match executed {
+                    Ok(finished) => finished,
+                    Err(error) => {
+                        let category = crate::workflow::AttemptFailureCategory::ExecutionError;
+                        Self::finish_recorded_attempt(
+                            &mut record,
+                            key,
+                            submitted.id,
+                            self.runs.get(&submitted.id)?.as_ref(),
+                            Some(category),
+                            Some(error.to_string()),
+                        );
+                        self.workflows.put(&record)?;
+                        return self.finish_workflow_failed(&mut record, error.to_string());
+                    }
+                };
+
+                let category = classify_attempt_failure(&finished);
+                let failure = finished
+                    .outcome
+                    .as_ref()
+                    .and_then(|outcome| outcome.failure.clone());
+                Self::finish_recorded_attempt(
+                    &mut record,
+                    key,
+                    submitted.id,
+                    Some(&finished),
+                    category,
+                    failure.clone(),
+                );
+                self.workflows.put(&record)?;
+
+                self.refresh_cancel_intent(&mut record)?;
+                if token.is_cancelled()
+                    || record.cancel_requested_at.is_some()
+                    || finished.state == RunState::Cancelled
+                {
+                    return self.finish_workflow_cancelled(
+                        &mut record,
+                        failure.unwrap_or_else(|| "workflow cancellation requested".into()),
+                    );
+                }
+                if finished.state == RunState::Succeeded {
+                    break;
+                }
+
+                let observed =
+                    category.unwrap_or(crate::workflow::AttemptFailureCategory::ExecutionError);
+                let retry = step
+                    .retry
+                    .as_ref()
+                    .is_some_and(|policy| attempt_number < max_attempts && policy.allows(observed));
+                if !retry {
+                    let message = format!(
+                        "step {key:?} attempt {attempt_number} ended in state {}{}",
+                        finished.state,
+                        failure
+                            .as_ref()
+                            .map(|value| format!(": {value}"))
+                            .unwrap_or_default()
+                    );
+                    return self.finish_workflow_failed(&mut record, message);
+                }
+
+                let backoff_ms = step
+                    .retry
+                    .as_ref()
+                    .and_then(|policy| policy.backoff_ms)
+                    .unwrap_or(0);
+                if !self.wait_retry_backoff(workflow_id, token, backoff_ms)? {
+                    self.refresh_cancel_intent(&mut record)?;
+                    return self.finish_workflow_cancelled(
+                        &mut record,
+                        "workflow cancellation requested during retry backoff".into(),
+                    );
+                }
+                attempt_number += 1;
+            }
         }
 
         let now = self.clock.now_ms();
@@ -986,17 +1092,254 @@ impl Orchestrator {
         Ok(record)
     }
 
+    fn resolve_workflow_inputs(
+        &self,
+        record: &crate::workflow::WorkflowRecord,
+        step: &crate::workflow::Step,
+    ) -> Result<Result<BTreeMap<String, ArtifactId>, String>, CoreError> {
+        let mut resolved = BTreeMap::new();
+        for (input_name, source) in &step.inputs {
+            match source {
+                crate::workflow::InputSource::Artifact { artifact } => {
+                    if self.artifacts_meta.get(artifact)?.is_some() {
+                        resolved.insert(input_name.clone(), *artifact);
+                    } else {
+                        return Ok(Err(format!(
+                            "step {:?} input {input_name:?}: artifact {} not found",
+                            step.key, artifact
+                        )));
+                    }
+                }
+                crate::workflow::InputSource::FromStep { key: dep, output } => {
+                    let produced = record.steps.iter().find(|result| &result.key == dep);
+                    let Some(dep_run) = produced.map(|result| result.run) else {
+                        return Ok(Err(format!(
+                            "step {:?} input {input_name:?}: dependency {dep:?} has not run",
+                            step.key
+                        )));
+                    };
+                    let dep_record = self.runs.get(&dep_run)?;
+                    let artifact = dep_record.as_ref().and_then(|run| {
+                        run.outcome.as_ref().and_then(|outcome| {
+                            outcome
+                                .outputs
+                                .iter()
+                                .find(|candidate| &candidate.name == output)
+                                .map(|candidate| candidate.artifact)
+                        })
+                    });
+                    if let Some(artifact) = artifact {
+                        resolved.insert(input_name.clone(), artifact);
+                    } else {
+                        return Ok(Err(format!(
+                            "step {:?} input {input_name:?}: step {dep:?} produced no output named {output:?}",
+                            step.key
+                        )));
+                    }
+                }
+            }
+        }
+        Ok(Ok(resolved))
+    }
+
+    fn record_attempt(
+        record: &mut crate::workflow::WorkflowRecord,
+        key: &str,
+        attempt: crate::workflow::StepAttempt,
+    ) {
+        if let Some(result) = record.steps.iter_mut().find(|result| result.key == key) {
+            result.run = attempt.run;
+            result.state = attempt.state;
+            result.failure = attempt.failure.clone();
+            result.attempts.push(attempt);
+        } else {
+            record.steps.push(crate::workflow::StepResult {
+                key: key.to_owned(),
+                run: attempt.run,
+                state: attempt.state,
+                failure: attempt.failure.clone(),
+                attempts: vec![attempt],
+            });
+        }
+    }
+
+    fn finish_recorded_attempt(
+        record: &mut crate::workflow::WorkflowRecord,
+        key: &str,
+        run_id: RunId,
+        run: Option<&RunRecord>,
+        category: Option<crate::workflow::AttemptFailureCategory>,
+        failure: Option<String>,
+    ) {
+        let Some(result) = record.steps.iter_mut().find(|result| result.key == key) else {
+            return;
+        };
+        let state = run.map_or(RunState::Failed, |run| run.state);
+        result.run = run_id;
+        result.state = state;
+        result.failure = failure.clone();
+        if let Some(attempt) = result
+            .attempts
+            .iter_mut()
+            .find(|attempt| attempt.run == run_id)
+        {
+            attempt.state = state;
+            attempt.started_at = run.and_then(|run| run.started_at);
+            attempt.finished_at = run.and_then(|run| run.finished_at);
+            attempt.failure_category = category;
+            attempt.failure = failure;
+        }
+    }
+
+    fn refresh_cancel_intent(
+        &self,
+        record: &mut crate::workflow::WorkflowRecord,
+    ) -> Result<(), CoreError> {
+        if let Some(persisted) = self.workflows.get(&record.id)? {
+            if record.cancel_requested_at.is_none() {
+                record.cancel_requested_at = persisted.cancel_requested_at;
+            }
+        }
+        Ok(())
+    }
+
+    fn wait_retry_backoff(
+        &self,
+        workflow_id: WorkflowId,
+        token: &CancelToken,
+        backoff_ms: u64,
+    ) -> Result<bool, CoreError> {
+        if backoff_ms == 0 {
+            return Ok(!token.is_cancelled()
+                && self
+                    .workflows
+                    .get(&workflow_id)?
+                    .is_some_and(|record| record.cancel_requested_at.is_none()));
+        }
+        let started = std::time::Instant::now();
+        let delay = std::time::Duration::from_millis(backoff_ms);
+        loop {
+            if token.is_cancelled()
+                || self
+                    .workflows
+                    .get(&workflow_id)?
+                    .is_some_and(|record| record.cancel_requested_at.is_some())
+            {
+                return Ok(false);
+            }
+            let elapsed = started.elapsed();
+            if elapsed >= delay {
+                return Ok(true);
+            }
+            std::thread::sleep((delay - elapsed).min(std::time::Duration::from_millis(25)));
+        }
+    }
+
     fn finish_workflow_failed(
         &self,
         record: &mut crate::workflow::WorkflowRecord,
         message: String,
     ) -> Result<crate::workflow::WorkflowRecord, CoreError> {
+        self.refresh_cancel_intent(record)?;
+        if record.cancel_requested_at.is_some() {
+            return self.finish_workflow_cancelled(record, message);
+        }
         let now = self.clock.now_ms();
         record.transition(crate::workflow::WorkflowState::Failed, now)?;
         record.failure = Some(message.clone());
         self.workflows.put(record)?;
         warn!(workflow = %record.id, %message, "workflow failed");
         Ok(record.clone())
+    }
+
+    fn finish_workflow_cancelled(
+        &self,
+        record: &mut crate::workflow::WorkflowRecord,
+        message: String,
+    ) -> Result<crate::workflow::WorkflowRecord, CoreError> {
+        self.refresh_cancel_intent(record)?;
+        record
+            .cancel_requested_at
+            .get_or_insert_with(|| self.clock.now_ms());
+        if !record.state.is_terminal() {
+            record.transition(
+                crate::workflow::WorkflowState::Cancelled,
+                self.clock.now_ms(),
+            )?;
+        }
+        record.failure = Some(message.clone());
+        self.workflows.put(record)?;
+        info!(workflow = %record.id, %message, "workflow cancelled");
+        Ok(record.clone())
+    }
+
+    /// Persists workflow cancellation intent before signalling the currently
+    /// running attempt. Returns whether a live workflow execution was
+    /// signalled in this process.
+    pub fn cancel_workflow(&self, workflow_id: WorkflowId) -> Result<bool, CoreError> {
+        let now = self.clock.now_ms();
+        let mut record = self
+            .workflows
+            .request_cancel(&workflow_id, now)?
+            .ok_or(CoreError::WorkflowNotFound(workflow_id))?;
+        if record.state.is_terminal() {
+            return Ok(false);
+        }
+
+        let active_token = self
+            .active_workflow_cancels
+            .lock()
+            .map_err(|_| CoreError::Storage("workflow cancellation map lock poisoned".into()))?
+            .get(&workflow_id)
+            .cloned();
+        if let Some(token) = &active_token {
+            token.cancel();
+        }
+
+        let active_run = self
+            .active_workflow_runs
+            .lock()
+            .map_err(|_| CoreError::Storage("active workflow run map lock poisoned".into()))?
+            .get(&workflow_id)
+            .copied();
+        if let Some(run_id) = active_run {
+            let _ = self.cancel_run(run_id)?;
+        }
+
+        if active_token.is_none() {
+            if let Some(run_id) = latest_nonterminal_attempt_run(&record, self)? {
+                let _ = self.cancel_run(run_id)?;
+            }
+            record = self
+                .workflows
+                .get(&workflow_id)?
+                .ok_or(CoreError::WorkflowNotFound(workflow_id))?;
+            return self
+                .finish_workflow_cancelled(&mut record, "workflow cancellation requested".into())
+                .map(|_| false);
+        }
+        Ok(true)
+    }
+
+    /// Reconciles cancellation intent left behind by a daemon restart. Any
+    /// recorded non-terminal attempt is terminalized before the workflow.
+    /// Returns the number of workflows reconciled.
+    pub fn recover_workflow_cancellations(&self) -> Result<usize, CoreError> {
+        let mut recovered = 0usize;
+        for mut record in self.workflows.list()? {
+            if record.state.is_terminal() || record.cancel_requested_at.is_none() {
+                continue;
+            }
+            if let Some(run_id) = latest_nonterminal_attempt_run(&record, self)? {
+                let _ = self.cancel_run(run_id)?;
+            }
+            self.finish_workflow_cancelled(
+                &mut record,
+                "workflow cancellation recovered after restart".into(),
+            )?;
+            recovered += 1;
+        }
+        Ok(recovered)
     }
 
     /// Reproduces a recorded run: re-submits its exact stored spec (same
@@ -1063,6 +1406,60 @@ impl Orchestrator {
     pub fn workflows(&self) -> Vec<crate::workflow::WorkflowRecord> {
         self.workflows.list().unwrap_or_default()
     }
+}
+
+fn classify_attempt_failure(run: &RunRecord) -> Option<crate::workflow::AttemptFailureCategory> {
+    if run.state == RunState::Succeeded {
+        return None;
+    }
+    let Some(outcome) = &run.outcome else {
+        return Some(crate::workflow::AttemptFailureCategory::ExecutionError);
+    };
+    if run.state == RunState::Cancelled || outcome.cancelled {
+        return Some(crate::workflow::AttemptFailureCategory::Cancelled);
+    }
+    if outcome.timed_out {
+        return Some(crate::workflow::AttemptFailureCategory::TimedOut);
+    }
+    if outcome
+        .failure
+        .as_deref()
+        .is_some_and(|failure| failure.starts_with("failed to start:"))
+    {
+        return Some(crate::workflow::AttemptFailureCategory::StartFailure);
+    }
+    if outcome
+        .failure
+        .as_deref()
+        .is_some_and(|failure| failure.starts_with("required output(s) not produced:"))
+    {
+        return Some(crate::workflow::AttemptFailureCategory::MissingRequiredOutput);
+    }
+    if outcome.exit_code.is_some_and(|code| code != 0) {
+        return Some(crate::workflow::AttemptFailureCategory::NonZeroExit);
+    }
+    if outcome.signal.is_some() {
+        return Some(crate::workflow::AttemptFailureCategory::Signaled);
+    }
+    Some(crate::workflow::AttemptFailureCategory::ExecutionError)
+}
+
+fn latest_nonterminal_attempt_run(
+    record: &crate::workflow::WorkflowRecord,
+    orchestrator: &Orchestrator,
+) -> Result<Option<RunId>, CoreError> {
+    for result in record.steps.iter().rev() {
+        for attempt in result.attempts.iter().rev() {
+            if orchestrator
+                .runs
+                .get(&attempt.run)?
+                .is_some_and(|run| !run.state.is_terminal())
+            {
+                return Ok(Some(attempt.run));
+            }
+        }
+    }
+    Ok(None)
 }
 
 #[cfg(test)]
@@ -1780,6 +2177,7 @@ mod tests {
             inputs,
             timeout_ms: 1_000,
             after,
+            retry: None,
         };
 
         // Duplicate keys.
@@ -1909,6 +2307,7 @@ mod tests {
                 inputs: BTreeMap::new(),
                 timeout_ms: 1_000,
                 after: Vec::new(),
+                retry: None,
             },
             Step {
                 key: "store".into(),
@@ -1918,6 +2317,7 @@ mod tests {
                 inputs: copy_inputs,
                 timeout_ms: 1_000,
                 after: Vec::new(),
+                retry: None,
             },
         ];
         let spec = crate::workflow::WorkflowSpec {

@@ -1,10 +1,10 @@
 //! Workflow specifications and records: multiple steps executed in
 //! dependency order.
 //!
-//! Scope honesty (see ADR-0006): this is **sequential, single-node**
-//! orchestration. Steps run one at a time in topological order; a failed or
-//! cancelled step fails the workflow immediately (fail-fast). No parallel
-//! scheduling, retries or distribution yet.
+//! Scope honesty (see ADR-0006): scheduling is still **sequential,
+//! single-node** in this module revision. Retries and workflow cancellation
+//! are explicit and persisted; parallel and distributed scheduling remain
+//! separate later layers.
 
 use std::collections::{BTreeMap, BTreeSet};
 
@@ -22,7 +22,7 @@ pub const WORKFLOW_SCHEMA_VERSION: u16 = 1;
 
 /// Version of the workflow model itself, stamped into every record so
 /// stored provenance can be interpreted years later.
-pub const WORKFLOW_MODEL_VERSION: &str = "1.0.0";
+pub const WORKFLOW_MODEL_VERSION: &str = "1.1.0";
 
 /// Where a step's input comes from.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
@@ -43,6 +43,78 @@ impl std::fmt::Display for InputSource {
     }
 }
 
+/// Stable categories used by retry policy and attempt provenance.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum AttemptFailureCategory {
+    TimedOut,
+    StartFailure,
+    NonZeroExit,
+    Signaled,
+    MissingRequiredOutput,
+    /// Explicit cancellation is terminal and is never retryable.
+    Cancelled,
+    /// Hub/executor/storage errors are not safely replayable automatically.
+    ExecutionError,
+}
+
+impl AttemptFailureCategory {
+    #[must_use]
+    pub const fn may_retry(self) -> bool {
+        !matches!(self, Self::Cancelled | Self::ExecutionError)
+    }
+}
+
+/// Explicit per-step retry policy. No policy means exactly one attempt,
+/// preserving the pre-retry semantics.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub struct RetryPolicy {
+    /// Total attempts including the first execution.
+    pub max_attempts: u32,
+    /// Fixed delay between attempts. `None` and `Some(0)` both mean no delay.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub backoff_ms: Option<u64>,
+    /// Only these observed failure categories may be retried.
+    #[serde(default, skip_serializing_if = "BTreeSet::is_empty")]
+    pub retry_on: BTreeSet<AttemptFailureCategory>,
+}
+
+impl RetryPolicy {
+    pub const MAX_ATTEMPTS: u32 = 32;
+    pub const MAX_BACKOFF_MS: u64 = 3_600_000;
+
+    fn validate(&self, key: &str) -> Result<(), CoreError> {
+        if self.max_attempts == 0 || self.max_attempts > Self::MAX_ATTEMPTS {
+            return Err(CoreError::InvalidRunSpec(format!(
+                "step {key:?} retry max_attempts must be 1..={}",
+                Self::MAX_ATTEMPTS
+            )));
+        }
+        if self.backoff_ms.unwrap_or(0) > Self::MAX_BACKOFF_MS {
+            return Err(CoreError::InvalidRunSpec(format!(
+                "step {key:?} retry backoff_ms exceeds {}",
+                Self::MAX_BACKOFF_MS
+            )));
+        }
+        if self.max_attempts > 1 && self.retry_on.is_empty() {
+            return Err(CoreError::InvalidRunSpec(format!(
+                "step {key:?} retry_on must be non-empty when max_attempts > 1"
+            )));
+        }
+        if let Some(category) = self.retry_on.iter().find(|category| !category.may_retry()) {
+            return Err(CoreError::InvalidRunSpec(format!(
+                "step {key:?} failure category {category:?} is not retryable"
+            )));
+        }
+        Ok(())
+    }
+
+    #[must_use]
+    pub fn allows(&self, category: AttemptFailureCategory) -> bool {
+        category.may_retry() && self.retry_on.contains(&category)
+    }
+}
+
 /// One unit of work inside a workflow.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub struct Step {
@@ -60,6 +132,9 @@ pub struct Step {
     pub timeout_ms: u64,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub after: Vec<String>,
+    /// Optional explicit retry policy. Omitted = one attempt, no retry.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub retry: Option<RetryPolicy>,
 }
 
 /// A validated multi-step specification.
@@ -119,6 +194,9 @@ impl WorkflowSpec {
                     "step {:?} timeout_ms must be at least 1",
                     step.key
                 )));
+            }
+            if let Some(retry) = &step.retry {
+                retry.validate(&step.key)?;
             }
             for dep in &step.after {
                 if dep == &step.key {
@@ -262,7 +340,26 @@ fn validate_output_ref_name(output: &str) -> Result<(), CoreError> {
     }
 }
 
-/// Outcome of one executed step.
+/// Persisted provenance for one concrete attempt of a workflow step.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub struct StepAttempt {
+    pub id: crate::id::AttemptId,
+    /// One-based attempt number within the step.
+    pub number: u32,
+    pub run: RunId,
+    pub state: crate::run::RunState,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub started_at: Option<crate::clock::UnixMillis>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub finished_at: Option<crate::clock::UnixMillis>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub failure_category: Option<AttemptFailureCategory>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub failure: Option<String>,
+}
+
+/// Outcome of one workflow step. `run/state/failure` mirror the latest
+/// attempt for backwards-compatible readers; `attempts` is authoritative.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub struct StepResult {
     pub key: String,
@@ -270,6 +367,8 @@ pub struct StepResult {
     pub state: crate::run::RunState,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub failure: Option<String>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub attempts: Vec<StepAttempt>,
 }
 
 /// Lifecycle of a workflow (mirrors run states but without queued phase:
@@ -322,6 +421,10 @@ pub struct WorkflowRecord {
     pub started_at: Option<crate::clock::UnixMillis>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub finished_at: Option<crate::clock::UnixMillis>,
+    /// Monotonic persisted cancellation intent. Once set it must never be
+    /// cleared by a concurrent scheduler write.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub cancel_requested_at: Option<crate::clock::UnixMillis>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub steps: Vec<StepResult>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -347,6 +450,7 @@ impl WorkflowRecord {
             created_at: now,
             started_at: None,
             finished_at: None,
+            cancel_requested_at: None,
             steps: Vec::new(),
             failure: None,
         })

@@ -55,6 +55,7 @@ pub fn router(state: HubState) -> Router {
             post(submit_workflow).get(list_workflows),
         )
         .route("/api/v1/workflows/{id}", get(get_workflow))
+        .route("/api/v1/workflows/{id}/cancel", post(cancel_workflow))
         .route("/api/v1/workflows/{id}/executions", post(execute_workflow))
         .route("/api/v1/artifacts", get(list_artifacts))
         .route("/api/v1/artifacts/{id}", get(get_artifact))
@@ -430,8 +431,22 @@ async fn get_workflow(State(state): State<HubState>, Path(id): Path<String>) -> 
     }
 }
 
-/// Executes a created workflow sequentially; returns the final record with
-/// per-step provenance.
+async fn cancel_workflow(State(state): State<HubState>, Path(id): Path<String>) -> Response {
+    let Some(parsed) = typed_id::<hub_core::WorkflowId>(&id) else {
+        return not_found("workflow", &id);
+    };
+    let orch = state.orchestrator.clone();
+    match joined(tokio::task::spawn_blocking(move || orch.cancel_workflow(parsed)).await) {
+        Ok(signalled) => Json(proto::CancelWorkflowResponse {
+            workflow_id: parsed,
+            signalled_active_execution: signalled,
+        })
+        .into_response(),
+        Err(response) => response,
+    }
+}
+
+/// Executes a created workflow and waits for its terminal record.
 async fn execute_workflow(State(state): State<HubState>, Path(id): Path<String>) -> Response {
     let Some(parsed) = typed_id::<hub_core::WorkflowId>(&id) else {
         return not_found("workflow", &id);
