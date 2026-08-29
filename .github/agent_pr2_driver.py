@@ -1,4 +1,5 @@
 from pathlib import Path
+import re
 import runpy
 
 path = Path('.github/agent_pr2.py')
@@ -78,3 +79,45 @@ new = '''    let mut starts = executor.starts.lock().expect("starts").clone();
 if generated.count(old) != 2:
     raise SystemExit(f'expected two start-order assertions, found {generated.count(old)}')
 p.write_text(generated.replace(old, new))
+
+# WorkflowSpec gained an additive max_concurrency field. Cover every existing
+# Rust literal that predates the field, not only the new integration tests.
+def add_default_concurrency(path: Path) -> int:
+    source = path.read_text()
+    cursor = 0
+    changed = 0
+    while True:
+        start = source.find('WorkflowSpec {', cursor)
+        if start < 0:
+            break
+        steps = re.search(r'\n(?P<indent>[ \t]*)steps:', source[start:])
+        if steps is None:
+            cursor = start + len('WorkflowSpec {')
+            continue
+        steps_pos = start + steps.start()
+        header = source[start:steps_pos]
+        if 'max_concurrency:' not in header:
+            names = list(re.finditer(r'(?m)^(?P<indent>[ \t]*)name:[^\n]*$', header))
+            if not names:
+                raise SystemExit(f'{path}: WorkflowSpec literal without name before steps')
+            name = names[-1]
+            insert_at = start + name.end()
+            indent = name.group('indent')
+            source = (
+                source[:insert_at]
+                + f'\n{indent}max_concurrency: 1,'
+                + source[insert_at:]
+            )
+            changed += 1
+            cursor = insert_at + len(indent) + 24
+        else:
+            cursor = steps_pos + 1
+    if changed:
+        path.write_text(source)
+    return changed
+
+patched_literals = 0
+for root in (Path('crates'), Path('apps')):
+    for rust_file in root.rglob('*.rs'):
+        patched_literals += add_default_concurrency(rust_file)
+print(f'patched {patched_literals} legacy WorkflowSpec literal(s)')
