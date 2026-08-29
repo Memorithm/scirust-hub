@@ -398,6 +398,8 @@ pub struct WorkflowDto {
     pub started_at: Option<u64>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub finished_at: Option<u64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub cancel_requested_at: Option<u64>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub steps: Vec<StepResultDto>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -411,6 +413,30 @@ pub struct StepResultDto {
     pub state: RunState,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub failure: Option<String>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub attempts: Vec<StepAttemptDto>,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub struct StepAttemptDto {
+    pub id: hub_core::AttemptId,
+    pub number: u32,
+    pub run: RunId,
+    pub state: RunState,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub started_at: Option<u64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub finished_at: Option<u64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub failure_category: Option<hub_core::AttemptFailureCategory>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub failure: Option<String>,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub struct CancelWorkflowResponse {
+    pub workflow_id: hub_core::WorkflowId,
+    pub signalled_active_execution: bool,
 }
 
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
@@ -428,6 +454,7 @@ impl From<&hub_core::WorkflowRecord> for WorkflowDto {
             created_at: w.created_at,
             started_at: w.started_at,
             finished_at: w.finished_at,
+            cancel_requested_at: w.cancel_requested_at,
             steps: w
                 .steps
                 .iter()
@@ -436,6 +463,20 @@ impl From<&hub_core::WorkflowRecord> for WorkflowDto {
                     run: sr.run,
                     state: sr.state,
                     failure: sr.failure.clone(),
+                    attempts: sr
+                        .attempts
+                        .iter()
+                        .map(|attempt| StepAttemptDto {
+                            id: attempt.id,
+                            number: attempt.number,
+                            run: attempt.run,
+                            state: attempt.state,
+                            started_at: attempt.started_at,
+                            finished_at: attempt.finished_at,
+                            failure_category: attempt.failure_category,
+                            failure: attempt.failure.clone(),
+                        })
+                        .collect(),
                 })
                 .collect(),
             failure: w.failure.clone(),

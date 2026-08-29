@@ -73,9 +73,21 @@ pub trait ArtifactMetadataRepository: Send + Sync {
 
 /// Repository of workflow records.
 pub trait WorkflowRepository: Send + Sync {
+    /// Stores a workflow snapshot. Implementations must preserve an already
+    /// persisted `cancel_requested_at` when a stale writer supplies `None`.
     /// # Errors
     /// Backend failures only.
     fn put(&self, record: &crate::workflow::WorkflowRecord) -> Result<(), CoreError>;
+
+    /// Atomically records cancellation intent and returns the resulting
+    /// record. The timestamp is monotonic: repeated requests keep the first.
+    /// # Errors
+    /// Backend failures only.
+    fn request_cancel(
+        &self,
+        id: &crate::id::WorkflowId,
+        at: crate::clock::UnixMillis,
+    ) -> Result<Option<crate::workflow::WorkflowRecord>, CoreError>;
 
     /// # Errors
     /// Backend failures only.

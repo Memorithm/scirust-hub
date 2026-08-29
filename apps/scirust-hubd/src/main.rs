@@ -169,6 +169,14 @@ fn run(args: Args) -> Result<(), DaemonError> {
         }
     };
 
+    let recovered_cancellations = orchestrator.recover_workflow_cancellations()?;
+    if recovered_cancellations > 0 {
+        tracing::info!(
+            recovered_cancellations,
+            "reconciled workflow cancellations after restart"
+        );
+    }
+
     tracing::info!(
         %listen,
         data_dir = %args.data_dir.display(),

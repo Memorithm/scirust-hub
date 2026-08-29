@@ -68,6 +68,10 @@ uuid_id! {
     RunId
 }
 uuid_id! {
+    /// Identity of one workflow step attempt. A retry gets a fresh id.
+    AttemptId
+}
+uuid_id! {
     /// Handle to artifact metadata; contents live in the artifact store.
     ArtifactId
 }

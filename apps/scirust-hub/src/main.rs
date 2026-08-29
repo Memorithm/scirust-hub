@@ -54,8 +54,12 @@ enum WorkflowCommand {
         /// Path to the workflow spec (`-` for stdin).
         path: String,
     },
-    /// Execute a created workflow sequentially and wait.
+    /// Execute a created workflow and wait.
     Run {
+        id: String,
+    },
+    /// Persist cancellation intent and stop the active attempt, if any.
+    Cancel {
         id: String,
     },
     List,
@@ -408,6 +412,15 @@ fn dispatch(args: &Args) -> Result<(), CliError> {
                 if let Some(f) = v["failure"].as_str() {
                     println!("failure: {f}");
                 }
+            })
+        }
+        Command::Workflow(WorkflowCommand::Cancel { id }) => {
+            let response = post_empty(url_of(args, &format!("/api/v1/workflows/{id}/cancel")))?;
+            emit(args, &response, |v| {
+                println!(
+                    "workflow {}: signalled_active_execution={}",
+                    v["workflow_id"], v["signalled_active_execution"]
+                );
             })
         }
         Command::Workflow(WorkflowCommand::List) => {

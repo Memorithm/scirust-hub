@@ -397,9 +397,27 @@ impl ArtifactMetadataRepository for SqliteStore {
 
 impl WorkflowRepository for SqliteStore {
     fn put(&self, record: &hub_core::workflow::WorkflowRecord) -> Result<(), CoreError> {
-        let json = serde_json::to_string(record)
-            .map_err(|e| CoreError::Storage(format!("serializing workflow: {e}")))?;
         let conn = self.lock()?;
+        let existing_json: Option<String> = conn
+            .query_row(
+                "SELECT record_json FROM workflows WHERE id = ?1",
+                rusqlite::params![record.id.to_string()],
+                |row| row.get(0),
+            )
+            .optional()
+            .map_err(storage("loading workflow before upsert"))?;
+        let mut stored = record.clone();
+        if let Some(existing_json) = existing_json {
+            let existing: hub_core::workflow::WorkflowRecord = serde_json::from_str(&existing_json)
+                .map_err(|e| {
+                    CoreError::Storage(format!("stored workflow failed to deserialize: {e}"))
+                })?;
+            if stored.cancel_requested_at.is_none() {
+                stored.cancel_requested_at = existing.cancel_requested_at;
+            }
+        }
+        let json = serde_json::to_string(&stored)
+            .map_err(|e| CoreError::Storage(format!("serializing workflow: {e}")))?;
         conn.execute(
             "INSERT INTO workflows (id, created_at, state, record_json)
              VALUES (?1, ?2, ?3, ?4)
@@ -407,14 +425,48 @@ impl WorkflowRepository for SqliteStore {
                 state = excluded.state,
                 record_json = excluded.record_json",
             rusqlite::params![
-                record.id.to_string(),
-                record.created_at,
-                format!("{:?}", record.state),
+                stored.id.to_string(),
+                stored.created_at,
+                format!("{:?}", stored.state),
                 json
             ],
         )
         .map_err(storage("upserting workflow"))?;
         Ok(())
+    }
+
+    fn request_cancel(
+        &self,
+        id: &hub_core::WorkflowId,
+        at: hub_core::clock::UnixMillis,
+    ) -> Result<Option<hub_core::workflow::WorkflowRecord>, CoreError> {
+        let conn = self.lock()?;
+        let json: Option<String> = conn
+            .query_row(
+                "SELECT record_json FROM workflows WHERE id = ?1",
+                rusqlite::params![id.to_string()],
+                |row| row.get(0),
+            )
+            .optional()
+            .map_err(storage("loading workflow for cancellation"))?;
+        let Some(json) = json else {
+            return Ok(None);
+        };
+        let mut record: hub_core::workflow::WorkflowRecord =
+            serde_json::from_str(&json).map_err(|e| {
+                CoreError::Storage(format!("stored workflow failed to deserialize: {e}"))
+            })?;
+        if !record.state.is_terminal() && record.cancel_requested_at.is_none() {
+            record.cancel_requested_at = Some(at);
+            let updated = serde_json::to_string(&record)
+                .map_err(|e| CoreError::Storage(format!("serializing workflow: {e}")))?;
+            conn.execute(
+                "UPDATE workflows SET record_json = ?2 WHERE id = ?1",
+                rusqlite::params![id.to_string(), updated],
+            )
+            .map_err(storage("persisting workflow cancellation"))?;
+        }
+        Ok(Some(record))
     }
 
     fn get(
@@ -721,6 +773,7 @@ mod tests {
                 run: RunId::generate(),
                 state: RunState::Succeeded,
                 failure: None,
+                attempts: Vec::new(),
             });
             WorkflowRepository::put(&store, &record).expect("put");
         }
@@ -751,6 +804,7 @@ mod tests {
                 inputs: BTreeMap::new(),
                 timeout_ms: 1_000,
                 after: Vec::new(),
+                retry: None,
             }],
         }
     }
