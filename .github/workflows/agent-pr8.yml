@@ -25,6 +25,7 @@ jobs:
       - name: Apply implementation
         run: |
           python3 .github/agent_pr8_fix1.py
+          python3 .github/agent_pr8_fix2.py
           python3 .github/agent_pr8.py
       - name: Check
         run: cargo check --workspace
