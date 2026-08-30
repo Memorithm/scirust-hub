@@ -9,24 +9,56 @@ use std::collections::BTreeMap;
 use std::sync::Arc;
 
 use axum::extract::{DefaultBodyLimit, Path, Query, Request, State};
-use axum::http::{header, StatusCode};
+use axum::http::{header, HeaderValue, StatusCode};
+use axum::middleware::{self, Next};
 use axum::response::{IntoResponse, Response};
 use axum::routing::{get, post};
 use axum::{Json, Router};
 use hub_core::error::CoreError;
 use hub_core::{ArtifactId, ComponentId, ComponentManifest, Orchestrator, RunSpec};
 use hub_protocol as proto;
+use sha2::{Digest, Sha256};
 
 /// Shared application state.
 #[derive(Clone)]
 pub struct HubState {
     pub orchestrator: Arc<Orchestrator>,
+    api_bearer_sha256: Option<[u8; 32]>,
 }
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct EmptyBearerToken;
+
+impl std::fmt::Display for EmptyBearerToken {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str("API bearer token must not be empty")
+    }
+}
+
+impl std::error::Error for EmptyBearerToken {}
 
 impl HubState {
     #[must_use]
     pub fn new(orchestrator: Arc<Orchestrator>) -> Self {
-        Self { orchestrator }
+        Self {
+            orchestrator,
+            api_bearer_sha256: None,
+        }
+    }
+
+    /// Enables bearer authentication for all `/api/v1/*` routes. Only a
+    /// SHA-256 verifier is retained in shared state; the plaintext token is
+    /// discarded after construction.
+    ///
+    /// # Errors
+    /// [`EmptyBearerToken`] when an empty token is supplied.
+    pub fn with_bearer_token(mut self, token: impl AsRef<str>) -> Result<Self, EmptyBearerToken> {
+        let token = token.as_ref();
+        if token.is_empty() {
+            return Err(EmptyBearerToken);
+        }
+        self.api_bearer_sha256 = Some(Sha256::digest(token.as_bytes()).into());
+        Ok(self)
     }
 }
 
@@ -36,9 +68,7 @@ const INLINE_CONTENT_LIMIT: u64 = 64 * 1024;
 /// Builds the full router (health + versioned API).
 pub fn router(state: HubState) -> Router {
     let manifest_limit = state.orchestrator.limits().max_manifest_bytes;
-    Router::new()
-        .route("/health", get(health))
-        .route("/ready", get(ready))
+    let api = Router::new()
         .route(
             "/api/v1/components",
             post(register_component).get(list_components),
@@ -62,8 +92,55 @@ pub fn router(state: HubState) -> Router {
             post(upload_artifact).get(list_artifacts),
         )
         .route("/api/v1/artifacts/{id}", get(get_artifact))
+        .route_layer(middleware::from_fn_with_state(
+            state.clone(),
+            require_api_bearer,
+        ));
+
+    Router::new()
+        .route("/health", get(health))
+        .route("/ready", get(ready))
+        .merge(api)
         .layer(DefaultBodyLimit::max(manifest_limit))
         .with_state(state)
+}
+
+async fn require_api_bearer(
+    State(state): State<HubState>,
+    request: Request,
+    next: Next,
+) -> Response {
+    let Some(expected) = state.api_bearer_sha256 else {
+        return next.run(request).await;
+    };
+    let supplied = request
+        .headers()
+        .get(header::AUTHORIZATION)
+        .and_then(|value| value.to_str().ok())
+        .and_then(|value| value.strip_prefix("Bearer "))
+        .filter(|value| !value.is_empty())
+        .map(|token| <[u8; 32]>::from(Sha256::digest(token.as_bytes())));
+    if supplied.is_some_and(|actual| digest_eq(&expected, &actual)) {
+        return next.run(request).await;
+    }
+
+    let mut response = error_response(
+        StatusCode::UNAUTHORIZED,
+        proto::ErrorCode::Unauthorized,
+        "bearer authentication required",
+    );
+    response
+        .headers_mut()
+        .insert(header::WWW_AUTHENTICATE, HeaderValue::from_static("Bearer"));
+    response
+}
+
+fn digest_eq(left: &[u8; 32], right: &[u8; 32]) -> bool {
+    let mut difference = 0u8;
+    for (&a, &b) in left.iter().zip(right.iter()) {
+        difference |= a ^ b;
+    }
+    difference == 0
 }
 
 // ----------------------------------------------------------------------
@@ -813,6 +890,63 @@ mod tests {
         let (status, body) = send(app, request).await;
         assert_eq!(status, StatusCode::BAD_REQUEST);
         assert_eq!(body["error"]["code"], "bad_request");
+    }
+
+    #[tokio::test]
+    async fn bearer_auth_protects_api_but_not_health_endpoints() {
+        let (state, _clock, _dir) = test_state();
+        let state = state.with_bearer_token("control-secret").expect("token");
+        let app = router(state);
+
+        let (status, body) = send(
+            app.clone(),
+            Request::builder()
+                .uri("/api/v1/components")
+                .body(Body::empty())
+                .expect("req"),
+        )
+        .await;
+        assert_eq!(status, StatusCode::UNAUTHORIZED);
+        assert_eq!(body["error"]["code"], "unauthorized");
+
+        let (status, body) = send(
+            app.clone(),
+            Request::builder()
+                .uri("/api/v1/components")
+                .header("authorization", "Bearer wrong-secret")
+                .body(Body::empty())
+                .expect("req"),
+        )
+        .await;
+        assert_eq!(status, StatusCode::UNAUTHORIZED);
+        assert_eq!(body["error"]["code"], "unauthorized");
+
+        let (status, body) = send(
+            app.clone(),
+            Request::builder()
+                .uri("/api/v1/components")
+                .header("authorization", "Bearer control-secret")
+                .body(Body::empty())
+                .expect("req"),
+        )
+        .await;
+        assert_eq!(status, StatusCode::OK, "{body}");
+
+        let (status, _) = send(
+            app,
+            Request::builder()
+                .uri("/health")
+                .body(Body::empty())
+                .expect("req"),
+        )
+        .await;
+        assert_eq!(status, StatusCode::OK);
+    }
+
+    #[test]
+    fn empty_bearer_token_is_rejected() {
+        let (state, _clock, _dir) = test_state();
+        assert!(state.with_bearer_token("").is_err());
     }
 
     #[tokio::test]

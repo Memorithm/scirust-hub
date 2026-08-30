@@ -444,6 +444,7 @@ dependencies = [
  "hub-core",
  "hub-protocol",
  "serde_json",
+ "sha2",
  "tokio",
  "tower",
  "tracing",
