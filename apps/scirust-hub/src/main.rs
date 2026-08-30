@@ -45,6 +45,21 @@ enum Command {
     Artifact(ArtifactCommand),
     #[command(subcommand)]
     Workflow(WorkflowCommand),
+    #[command(subcommand)]
+    Event(EventCommand),
+}
+
+#[derive(Debug, Subcommand)]
+enum EventCommand {
+    /// Read the append-only lifecycle chronology using a sequence cursor.
+    List {
+        /// Return events with sequence strictly greater than this cursor.
+        #[arg(long, default_value_t = 0)]
+        after: u64,
+        /// Page size (1..=1000).
+        #[arg(long, default_value_t = 100)]
+        limit: u32,
+    },
 }
 
 #[derive(Debug, Subcommand)]
@@ -473,6 +488,29 @@ fn dispatch(args: &Args) -> Result<(), CliError> {
                             .unwrap_or_default()
                     );
                 }
+            })
+        }
+        Command::Event(EventCommand::List { after, limit }) => {
+            let response = get(url_of(
+                args,
+                &format!("/api/v1/events?after={after}&limit={limit}"),
+            ))?;
+            emit(args, &response, |v| {
+                let events = v["events"].as_array().cloned().unwrap_or_default();
+                if events.is_empty() {
+                    println!("no lifecycle events after {after}");
+                }
+                for event in events {
+                    println!(
+                        "#{}  {}  {}  {}:{}",
+                        event["sequence"],
+                        event["recorded_at"],
+                        event["kind"].as_str().unwrap_or("?"),
+                        event["entity_type"].as_str().unwrap_or("?"),
+                        event["entity_id"].as_str().unwrap_or("?"),
+                    );
+                }
+                println!("next_after: {}", v["next_after"]);
             })
         }
         Command::Artifact(ArtifactCommand::Put {

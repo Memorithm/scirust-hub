@@ -15,7 +15,10 @@ use axum::response::{IntoResponse, Response};
 use axum::routing::{get, post};
 use axum::{Json, Router};
 use hub_core::error::CoreError;
-use hub_core::{ArtifactId, ComponentId, ComponentManifest, Orchestrator, RunSpec};
+use hub_core::{
+    ArtifactId, ComponentId, ComponentManifest, InMemoryLifecycleEvents, LifecycleEventRepository,
+    Orchestrator, RunSpec,
+};
 use hub_protocol as proto;
 use sha2::{Digest, Sha256};
 
@@ -23,6 +26,7 @@ use sha2::{Digest, Sha256};
 #[derive(Clone)]
 pub struct HubState {
     pub orchestrator: Arc<Orchestrator>,
+    events: Arc<dyn LifecycleEventRepository>,
     api_bearer_sha256: Option<[u8; 32]>,
 }
 
@@ -42,8 +46,15 @@ impl HubState {
     pub fn new(orchestrator: Arc<Orchestrator>) -> Self {
         Self {
             orchestrator,
+            events: Arc::new(InMemoryLifecycleEvents::default()),
             api_bearer_sha256: None,
         }
+    }
+
+    #[must_use]
+    pub fn with_event_repository(mut self, events: Arc<dyn LifecycleEventRepository>) -> Self {
+        self.events = events;
+        self
     }
 
     /// Enables bearer authentication for all `/api/v1/*` routes. Only a
@@ -92,6 +103,7 @@ pub fn router(state: HubState) -> Router {
             post(upload_artifact).get(list_artifacts),
         )
         .route("/api/v1/artifacts/{id}", get(get_artifact))
+        .route("/api/v1/events", get(list_lifecycle_events))
         .route_layer(middleware::from_fn_with_state(
             state.clone(),
             require_api_bearer,
@@ -581,6 +593,45 @@ async fn execute_workflow(State(state): State<HubState>, Path(id): Path<String>)
     }
 }
 
+async fn list_lifecycle_events(
+    State(state): State<HubState>,
+    Query(query): Query<BTreeMap<String, String>>,
+) -> Response {
+    let after = match query.get("after") {
+        Some(raw) => match raw.parse::<u64>() {
+            Ok(value) => value,
+            Err(_) => {
+                return bad_request("event query parameter 'after' must be an unsigned integer")
+            }
+        },
+        None => 0,
+    };
+    let limit = match query.get("limit") {
+        Some(raw) => match raw.parse::<u32>() {
+            Ok(value) => value,
+            Err(_) => {
+                return bad_request("event query parameter 'limit' must be an unsigned integer")
+            }
+        },
+        None => hub_core::DEFAULT_EVENT_PAGE,
+    };
+    if let Err(error) = hub_core::event::validate_event_page_limit(limit) {
+        return core_error(error);
+    }
+    let events = state.events.clone();
+    match joined(tokio::task::spawn_blocking(move || events.list_after(after, limit)).await) {
+        Ok(events) => {
+            let next_after = events.last().map_or(after, |event| event.sequence);
+            Json(proto::LifecycleEventListResponse {
+                events: events.iter().map(proto::LifecycleEventDto::from).collect(),
+                next_after,
+            })
+            .into_response()
+        }
+        Err(response) => response,
+    }
+}
+
 // ----------------------------------------------------------------------
 // Plumbing
 // ----------------------------------------------------------------------
@@ -890,6 +941,57 @@ mod tests {
         let (status, body) = send(app, request).await;
         assert_eq!(status, StatusCode::BAD_REQUEST);
         assert_eq!(body["error"]["code"], "bad_request");
+    }
+
+    #[tokio::test]
+    async fn lifecycle_events_endpoint_is_cursor_paginated() {
+        let (state, _clock, _dir) = test_state();
+        let events = Arc::new(InMemoryLifecycleEvents::default());
+        for sequence_hint in [10u64, 20, 30] {
+            events
+                .record(hub_core::NewLifecycleEvent::new(
+                    sequence_hint,
+                    hub_core::LifecycleEventKind::RunCreated,
+                    hub_core::LifecycleEntityType::Run,
+                    format!("run-{sequence_hint}"),
+                    BTreeMap::new(),
+                ))
+                .unwrap();
+        }
+        let app = router(state.with_event_repository(events));
+        let (status, first) = send(
+            app.clone(),
+            Request::builder()
+                .uri("/api/v1/events?after=0&limit=2")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await;
+        assert_eq!(status, StatusCode::OK, "{first}");
+        assert_eq!(first["events"].as_array().unwrap().len(), 2);
+        assert_eq!(first["next_after"], 2);
+
+        let (status, second) = send(
+            app.clone(),
+            Request::builder()
+                .uri("/api/v1/events?after=2&limit=2")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await;
+        assert_eq!(status, StatusCode::OK, "{second}");
+        assert_eq!(second["events"].as_array().unwrap().len(), 1);
+        assert_eq!(second["next_after"], 3);
+
+        let (status, error) = send(
+            app,
+            Request::builder()
+                .uri("/api/v1/events?limit=0")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await;
+        assert_eq!(status, StatusCode::UNPROCESSABLE_ENTITY, "{error}");
     }
 
     #[tokio::test]

@@ -191,6 +191,15 @@ impl McpAdapter {
             "hub.get_workflow" => require_id(arg("id"))
                 .map_err(String::from)
                 .and_then(|id| self.hub.get_json(&format!("/api/v1/workflows/{id}"))),
+            "hub.list_events" => {
+                let after = arguments.get("after").and_then(Value::as_u64).unwrap_or(0);
+                let limit = arguments
+                    .get("limit")
+                    .and_then(Value::as_u64)
+                    .unwrap_or(100);
+                self.hub
+                    .get_json(&format!("/api/v1/events?after={after}&limit={limit}"))
+            }
             "hub.list_artifacts" => self.hub.get_json("/api/v1/artifacts"),
             "hub.get_artifact" => {
                 let suffix = if arguments
@@ -277,6 +286,14 @@ impl McpAdapter {
                 "name": "hub.get_workflow",
                 "description": "Fetch one workflow record with per-step results",
                 "inputSchema": schema(json!({ "id": { "type": "string" } }), vec!["id"]),
+            }),
+            json!({
+                "name": "hub.list_events",
+                "description": "Read the Hub append-only lifecycle event stream using a sequence cursor",
+                "inputSchema": schema(json!({
+                    "after": { "type": "integer", "minimum": 0 },
+                    "limit": { "type": "integer", "minimum": 1, "maximum": 1000 }
+                }), vec![]),
             }),
             json!({
                 "name": "hub.list_artifacts",

@@ -24,6 +24,11 @@ use std::sync::Mutex;
 use hub_core::artifact::ArtifactMeta;
 use hub_core::component::ComponentManifest;
 use hub_core::error::CoreError;
+use hub_core::event::{
+    artifact_recorded_event, component_registered_event, derive_run_events, derive_workflow_events,
+    workflow_cancel_requested_event, LifecycleEntityType, LifecycleEvent, LifecycleEventKind,
+    LifecycleEventRepository, NewLifecycleEvent,
+};
 use hub_core::run::RunRecord;
 use hub_core::store::{
     ArtifactMetadataRepository, ComponentRepository, RunRepository, WorkflowRepository,
@@ -63,6 +68,17 @@ const MIGRATIONS: &[&str] = &[
         record_json TEXT    NOT NULL
     );
     CREATE INDEX idx_workflows_created ON workflows (created_at);",
+    // v3: append-only operational lifecycle chronology.
+    "CREATE TABLE lifecycle_events (
+        sequence        INTEGER PRIMARY KEY AUTOINCREMENT,
+        recorded_at     INTEGER NOT NULL,
+        kind            TEXT    NOT NULL,
+        entity_type     TEXT    NOT NULL,
+        entity_id       TEXT    NOT NULL,
+        attributes_json TEXT    NOT NULL
+    );
+    CREATE INDEX idx_lifecycle_events_entity
+        ON lifecycle_events (entity_type, entity_id, sequence);",
 ];
 
 /// SQLite-backed implementation of all three metadata repository ports.
@@ -173,6 +189,54 @@ fn storage(context: &'static str) -> impl Fn(rusqlite::Error) -> CoreError {
     move |e| CoreError::Storage(format!("{context}: {e}"))
 }
 
+fn storage_now_ms() -> u64 {
+    u64::try_from(now_ms()).unwrap_or(0)
+}
+
+fn append_event_tx(
+    tx: &rusqlite::Transaction<'_>,
+    event: &NewLifecycleEvent,
+) -> Result<LifecycleEvent, CoreError> {
+    let attributes_json = serde_json::to_string(&event.attributes)
+        .map_err(|e| CoreError::Storage(format!("serializing lifecycle event: {e}")))?;
+    tx.execute(
+        "INSERT INTO lifecycle_events
+         (recorded_at, kind, entity_type, entity_id, attributes_json)
+         VALUES (?1, ?2, ?3, ?4, ?5)",
+        rusqlite::params![
+            event.recorded_at,
+            event.kind.as_str(),
+            event.entity_type.as_str(),
+            event.entity_id,
+            attributes_json,
+        ],
+    )
+    .map_err(storage("appending lifecycle event"))?;
+    let sequence = u64::try_from(tx.last_insert_rowid())
+        .map_err(|_| CoreError::Storage("invalid lifecycle event sequence".into()))?;
+    Ok(LifecycleEvent {
+        sequence,
+        recorded_at: event.recorded_at,
+        kind: event.kind,
+        entity_type: event.entity_type,
+        entity_id: event.entity_id.clone(),
+        attributes: event.attributes.clone(),
+    })
+}
+
+fn decode_event_row(
+    row: &rusqlite::Row<'_>,
+) -> rusqlite::Result<(i64, i64, String, String, String, String)> {
+    Ok((
+        row.get(0)?,
+        row.get(1)?,
+        row.get(2)?,
+        row.get(3)?,
+        row.get(4)?,
+        row.get(5)?,
+    ))
+}
+
 impl ComponentRepository for SqliteStore {
     fn put(&self, manifest: &ComponentManifest) -> Result<bool, CoreError> {
         let new_digest = manifest.content_digest()?;
@@ -215,6 +279,7 @@ impl ComponentRepository for SqliteStore {
             ],
         )
         .map_err(storage("inserting component"))?;
+        append_event_tx(&tx, &component_registered_event(manifest, storage_now_ms()))?;
         tx.commit().map_err(storage("committing registration"))?;
         Ok(true)
     }
@@ -265,8 +330,27 @@ impl RunRepository for SqliteStore {
     fn put(&self, record: &RunRecord) -> Result<(), CoreError> {
         let json = serde_json::to_string(record)
             .map_err(|e| CoreError::Storage(format!("serializing run record: {e}")))?;
-        let conn = self.lock()?;
-        conn.execute(
+        let mut conn = self.lock()?;
+        let tx = conn
+            .transaction()
+            .map_err(storage("beginning run upsert"))?;
+        let previous_json: Option<String> = tx
+            .query_row(
+                "SELECT record_json FROM runs WHERE id = ?1",
+                rusqlite::params![record.id.to_string()],
+                |row| row.get(0),
+            )
+            .optional()
+            .map_err(storage("loading run before upsert"))?;
+        let previous = previous_json
+            .map(|value| {
+                serde_json::from_str::<RunRecord>(&value).map_err(|e| {
+                    CoreError::Storage(format!("stored run failed to deserialize: {e}"))
+                })
+            })
+            .transpose()?;
+
+        tx.execute(
             "INSERT INTO runs (id, created_at, final_state, record_json)
              VALUES (?1, ?2, ?3, ?4)
              ON CONFLICT(id) DO UPDATE SET
@@ -280,6 +364,10 @@ impl RunRepository for SqliteStore {
             ],
         )
         .map_err(storage("upserting run"))?;
+        for event in derive_run_events(previous.as_ref(), record) {
+            append_event_tx(&tx, &event)?;
+        }
+        tx.commit().map_err(storage("committing run upsert"))?;
         Ok(())
     }
 
@@ -324,10 +412,11 @@ impl ArtifactMetadataRepository for SqliteStore {
         meta.validate()?;
         let json = serde_json::to_string(meta)
             .map_err(|e| CoreError::Storage(format!("serializing artifact meta: {e}")))?;
-        let conn = self.lock()?;
-        // Metadata rows are immutable once written (digest-addressed blobs);
-        // a conflicting re-put is rejected rather than silently overwritten.
-        let existing: Option<String> = conn
+        let mut conn = self.lock()?;
+        let tx = conn
+            .transaction()
+            .map_err(storage("beginning artifact insert"))?;
+        let existing: Option<String> = tx
             .query_row(
                 "SELECT digest FROM artifact_meta WHERE id = ?1",
                 rusqlite::params![meta.id.to_string()],
@@ -342,7 +431,7 @@ impl ArtifactMetadataRepository for SqliteStore {
                 meta.id
             ))),
             None => {
-                conn.execute(
+                tx.execute(
                     "INSERT INTO artifact_meta (id, digest, created_at, meta_json)
                      VALUES (?1, ?2, ?3, ?4)",
                     rusqlite::params![
@@ -353,6 +442,8 @@ impl ArtifactMetadataRepository for SqliteStore {
                     ],
                 )
                 .map_err(storage("inserting artifact meta"))?;
+                append_event_tx(&tx, &artifact_recorded_event(meta))?;
+                tx.commit().map_err(storage("committing artifact insert"))?;
                 Ok(())
             }
         }
@@ -397,8 +488,11 @@ impl ArtifactMetadataRepository for SqliteStore {
 
 impl WorkflowRepository for SqliteStore {
     fn put(&self, record: &hub_core::workflow::WorkflowRecord) -> Result<(), CoreError> {
-        let conn = self.lock()?;
-        let existing_json: Option<String> = conn
+        let mut conn = self.lock()?;
+        let tx = conn
+            .transaction()
+            .map_err(storage("beginning workflow upsert"))?;
+        let existing_json: Option<String> = tx
             .query_row(
                 "SELECT record_json FROM workflows WHERE id = ?1",
                 rusqlite::params![record.id.to_string()],
@@ -406,19 +500,23 @@ impl WorkflowRepository for SqliteStore {
             )
             .optional()
             .map_err(storage("loading workflow before upsert"))?;
-        let mut stored = record.clone();
-        if let Some(existing_json) = existing_json {
-            let existing: hub_core::workflow::WorkflowRecord = serde_json::from_str(&existing_json)
-                .map_err(|e| {
+        let previous = existing_json
+            .as_deref()
+            .map(|json| {
+                serde_json::from_str::<hub_core::workflow::WorkflowRecord>(json).map_err(|e| {
                     CoreError::Storage(format!("stored workflow failed to deserialize: {e}"))
-                })?;
-            if stored.cancel_requested_at.is_none() {
+                })
+            })
+            .transpose()?;
+        let mut stored = record.clone();
+        if stored.cancel_requested_at.is_none() {
+            if let Some(existing) = &previous {
                 stored.cancel_requested_at = existing.cancel_requested_at;
             }
         }
         let json = serde_json::to_string(&stored)
             .map_err(|e| CoreError::Storage(format!("serializing workflow: {e}")))?;
-        conn.execute(
+        tx.execute(
             "INSERT INTO workflows (id, created_at, state, record_json)
              VALUES (?1, ?2, ?3, ?4)
              ON CONFLICT(id) DO UPDATE SET
@@ -432,6 +530,10 @@ impl WorkflowRepository for SqliteStore {
             ],
         )
         .map_err(storage("upserting workflow"))?;
+        for event in derive_workflow_events(previous.as_ref(), &stored, storage_now_ms()) {
+            append_event_tx(&tx, &event)?;
+        }
+        tx.commit().map_err(storage("committing workflow upsert"))?;
         Ok(())
     }
 
@@ -440,8 +542,11 @@ impl WorkflowRepository for SqliteStore {
         id: &hub_core::WorkflowId,
         at: hub_core::clock::UnixMillis,
     ) -> Result<Option<hub_core::workflow::WorkflowRecord>, CoreError> {
-        let conn = self.lock()?;
-        let json: Option<String> = conn
+        let mut conn = self.lock()?;
+        let tx = conn
+            .transaction()
+            .map_err(storage("beginning workflow cancellation"))?;
+        let json: Option<String> = tx
             .query_row(
                 "SELECT record_json FROM workflows WHERE id = ?1",
                 rusqlite::params![id.to_string()],
@@ -460,12 +565,15 @@ impl WorkflowRepository for SqliteStore {
             record.cancel_requested_at = Some(at);
             let updated = serde_json::to_string(&record)
                 .map_err(|e| CoreError::Storage(format!("serializing workflow: {e}")))?;
-            conn.execute(
+            tx.execute(
                 "UPDATE workflows SET record_json = ?2 WHERE id = ?1",
                 rusqlite::params![id.to_string(), updated],
             )
             .map_err(storage("persisting workflow cancellation"))?;
+            append_event_tx(&tx, &workflow_cancel_requested_event(id.to_string(), at))?;
         }
+        tx.commit()
+            .map_err(storage("committing workflow cancellation"))?;
         Ok(Some(record))
     }
 
@@ -506,6 +614,58 @@ impl WorkflowRepository for SqliteStore {
             })?);
         }
         Ok(out)
+    }
+}
+
+impl LifecycleEventRepository for SqliteStore {
+    fn list_after(
+        &self,
+        after_sequence: u64,
+        limit: u32,
+    ) -> Result<Vec<LifecycleEvent>, CoreError> {
+        hub_core::event::validate_event_page_limit(limit)?;
+        let conn = self.lock()?;
+        let mut stmt = conn
+            .prepare(
+                "SELECT sequence, recorded_at, kind, entity_type, entity_id, attributes_json
+                 FROM lifecycle_events
+                 WHERE sequence > ?1
+                 ORDER BY sequence
+                 LIMIT ?2",
+            )
+            .map_err(storage("preparing lifecycle event query"))?;
+        let rows = stmt
+            .query_map(rusqlite::params![after_sequence, limit], decode_event_row)
+            .map_err(storage("querying lifecycle events"))?;
+        let mut events = Vec::new();
+        for row in rows {
+            let (sequence, recorded_at, kind, entity_type, entity_id, attributes_json) =
+                row.map_err(storage("reading lifecycle event row"))?;
+            let sequence = u64::try_from(sequence)
+                .map_err(|_| CoreError::Storage("negative lifecycle event sequence".into()))?;
+            let recorded_at = u64::try_from(recorded_at)
+                .map_err(|_| CoreError::Storage("negative lifecycle event timestamp".into()))?;
+            let kind = LifecycleEventKind::parse(&kind).ok_or_else(|| {
+                CoreError::Storage(format!("unknown lifecycle event kind {kind:?}"))
+            })?;
+            let entity_type = LifecycleEntityType::parse(&entity_type).ok_or_else(|| {
+                CoreError::Storage(format!("unknown lifecycle entity type {entity_type:?}"))
+            })?;
+            let attributes = serde_json::from_str(&attributes_json).map_err(|e| {
+                CoreError::Storage(format!(
+                    "stored lifecycle attributes failed to deserialize: {e}"
+                ))
+            })?;
+            events.push(LifecycleEvent {
+                sequence,
+                recorded_at,
+                kind,
+                entity_type,
+                entity_id,
+                attributes,
+            });
+        }
+        Ok(events)
     }
 }
 
@@ -717,6 +877,49 @@ mod tests {
                 .expect("missing")
                 .is_none()
         );
+    }
+
+    #[test]
+    fn lifecycle_events_are_cursor_ordered_idempotent_and_durable() {
+        let dir = std::env::temp_dir().join(format!("hub-sqlite-events-{}", uuid::Uuid::new_v4()));
+        let db = dir.join("hub.db");
+        let component_id = ComponentId::generate();
+        let run_id;
+        {
+            let store = SqliteStore::open(&db).expect("open");
+            let item = manifest(component_id, "1.0.0", "/bin/true");
+            assert!(ComponentRepository::put(&store, &item).expect("component"));
+            assert!(!ComponentRepository::put(&store, &item).expect("replay"));
+
+            let mut run = run_record(100);
+            run_id = run.id;
+            run.transition(RunState::Validated, 101).unwrap();
+            run.transition(RunState::Queued, 102).unwrap();
+            RunRepository::put(&store, &run).expect("queued run");
+            let first = LifecycleEventRepository::list_after(&store, 0, 2).unwrap();
+            assert_eq!(first.len(), 2);
+            assert_eq!(first[0].sequence, 1);
+            assert_eq!(first[0].kind, LifecycleEventKind::ComponentRegistered);
+            assert_eq!(first[1].kind, LifecycleEventKind::RunCreated);
+        }
+
+        let store = SqliteStore::open(&db).expect("reopen");
+        let events = LifecycleEventRepository::list_after(&store, 0, 100).unwrap();
+        assert_eq!(events.len(), 4, "component + run created + two transitions");
+        assert!(events
+            .windows(2)
+            .all(|pair| pair[0].sequence < pair[1].sequence));
+        assert_eq!(events.last().unwrap().attributes["to"], "queued");
+        assert!(events
+            .iter()
+            .any(|event| event.entity_id == run_id.to_string()));
+        assert!(
+            LifecycleEventRepository::list_after(&store, events.last().unwrap().sequence, 10)
+                .unwrap()
+                .is_empty()
+        );
+        drop(store);
+        let _ = std::fs::remove_dir_all(dir);
     }
 
     #[test]

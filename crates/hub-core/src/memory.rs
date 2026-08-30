@@ -11,6 +11,11 @@ use crate::artifact::ArtifactMeta;
 use crate::component::ComponentManifest;
 use crate::digest::ContentDigest;
 use crate::error::CoreError;
+use crate::event::{
+    artifact_recorded_event, component_registered_event, derive_run_events, derive_workflow_events,
+    wall_clock_ms, workflow_cancel_requested_event, InMemoryLifecycleEvents, LifecycleEvent,
+    LifecycleEventRepository,
+};
 use crate::id::{ArtifactId, ComponentId, RunId};
 use crate::run::RunRecord;
 use crate::store::{
@@ -259,6 +264,130 @@ impl WorkflowRepository for InMemoryWorkflows {
         let mut rows: Vec<&crate::workflow::WorkflowRecord> = inner.records.values().collect();
         rows.sort_by_key(|r| (r.created_at, r.id));
         Ok(rows.into_iter().cloned().collect())
+    }
+}
+
+/// Composite in-memory backend used by the daemon's ephemeral mode. It keeps
+/// the four metadata repositories and lifecycle chronology coupled behind one
+/// object, mirroring the durable SQLite adapter's port surface.
+#[derive(Debug, Default)]
+pub struct InMemoryHubStore {
+    components: InMemoryComponents,
+    runs: InMemoryRuns,
+    artifacts: InMemoryArtifactMeta,
+    workflows: InMemoryWorkflows,
+    events: InMemoryLifecycleEvents,
+}
+
+impl ComponentRepository for InMemoryHubStore {
+    fn put(&self, manifest: &ComponentManifest) -> Result<bool, CoreError> {
+        let inserted = ComponentRepository::put(&self.components, manifest)?;
+        if inserted {
+            self.events
+                .record(component_registered_event(manifest, wall_clock_ms()))?;
+        }
+        Ok(inserted)
+    }
+
+    fn latest(&self, id: &ComponentId) -> Result<Option<ComponentManifest>, CoreError> {
+        ComponentRepository::latest(&self.components, id)
+    }
+
+    fn list(&self) -> Result<Vec<ComponentManifest>, CoreError> {
+        ComponentRepository::list(&self.components)
+    }
+}
+
+impl RunRepository for InMemoryHubStore {
+    fn put(&self, record: &RunRecord) -> Result<(), CoreError> {
+        let previous = RunRepository::get(&self.runs, &record.id)?;
+        RunRepository::put(&self.runs, record)?;
+        for event in derive_run_events(previous.as_ref(), record) {
+            self.events.record(event)?;
+        }
+        Ok(())
+    }
+
+    fn get(&self, id: &RunId) -> Result<Option<RunRecord>, CoreError> {
+        RunRepository::get(&self.runs, id)
+    }
+
+    fn list(&self) -> Result<Vec<RunRecord>, CoreError> {
+        RunRepository::list(&self.runs)
+    }
+}
+
+impl ArtifactMetadataRepository for InMemoryHubStore {
+    fn put(&self, meta: &ArtifactMeta) -> Result<(), CoreError> {
+        let existed = ArtifactMetadataRepository::get(&self.artifacts, &meta.id)?.is_some();
+        ArtifactMetadataRepository::put(&self.artifacts, meta)?;
+        if !existed {
+            self.events.record(artifact_recorded_event(meta))?;
+        }
+        Ok(())
+    }
+
+    fn get(&self, id: &ArtifactId) -> Result<Option<ArtifactMeta>, CoreError> {
+        ArtifactMetadataRepository::get(&self.artifacts, id)
+    }
+
+    fn list(&self) -> Result<Vec<ArtifactMeta>, CoreError> {
+        ArtifactMetadataRepository::list(&self.artifacts)
+    }
+}
+
+impl WorkflowRepository for InMemoryHubStore {
+    fn put(&self, record: &crate::workflow::WorkflowRecord) -> Result<(), CoreError> {
+        let previous = WorkflowRepository::get(&self.workflows, &record.id)?;
+        WorkflowRepository::put(&self.workflows, record)?;
+        let stored = WorkflowRepository::get(&self.workflows, &record.id)?
+            .ok_or_else(|| CoreError::Storage("workflow disappeared after in-memory put".into()))?;
+        for event in derive_workflow_events(previous.as_ref(), &stored, wall_clock_ms()) {
+            self.events.record(event)?;
+        }
+        Ok(())
+    }
+
+    fn request_cancel(
+        &self,
+        id: &crate::id::WorkflowId,
+        at: crate::clock::UnixMillis,
+    ) -> Result<Option<crate::workflow::WorkflowRecord>, CoreError> {
+        let previous = WorkflowRepository::get(&self.workflows, id)?;
+        let updated = WorkflowRepository::request_cancel(&self.workflows, id, at)?;
+        if previous
+            .and_then(|record| record.cancel_requested_at)
+            .is_none()
+            && updated
+                .as_ref()
+                .and_then(|record| record.cancel_requested_at)
+                .is_some()
+        {
+            self.events
+                .record(workflow_cancel_requested_event(id.to_string(), at))?;
+        }
+        Ok(updated)
+    }
+
+    fn get(
+        &self,
+        id: &crate::id::WorkflowId,
+    ) -> Result<Option<crate::workflow::WorkflowRecord>, CoreError> {
+        WorkflowRepository::get(&self.workflows, id)
+    }
+
+    fn list(&self) -> Result<Vec<crate::workflow::WorkflowRecord>, CoreError> {
+        WorkflowRepository::list(&self.workflows)
+    }
+}
+
+impl LifecycleEventRepository for InMemoryHubStore {
+    fn list_after(
+        &self,
+        after_sequence: u64,
+        limit: u32,
+    ) -> Result<Vec<LifecycleEvent>, CoreError> {
+        self.events.list_after(after_sequence, limit)
     }
 }
 
