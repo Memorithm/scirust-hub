@@ -466,7 +466,14 @@ dependencies = [
 name = "hub-executor"
 version = "0.2.0"
 dependencies = [
+ "axum",
  "hub-core",
+ "hub-protocol",
+ "serde",
+ "serde_json",
+ "tokio",
+ "ureq",
+ "uuid",
 ]
 
 [[package]]
@@ -906,6 +913,16 @@ dependencies = [
  "serde_json",
  "thiserror",
  "ureq",
+]
+
+[[package]]
+name = "scirust-hub-worker"
+version = "0.2.0"
+dependencies = [
+ "clap",
+ "hub-executor",
+ "thiserror",
+ "tokio",
 ]
 
 [[package]]

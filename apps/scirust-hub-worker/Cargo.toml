@@ -1,0 +1,21 @@
+[package]
+name = "scirust-hub-worker"
+description = "Authenticated remote execution worker for SciRust Hub"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+publish.workspace = true
+repository.workspace = true
+
+[dependencies]
+hub-executor = { workspace = true }
+tokio = { workspace = true }
+clap = { workspace = true }
+thiserror = { workspace = true }
+
+[lints]
+workspace = true
+
+[[bin]]
+name = "scirust-hub-worker"
+path = "src/main.rs"

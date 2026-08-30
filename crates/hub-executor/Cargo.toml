@@ -9,6 +9,13 @@ repository.workspace = true
 
 [dependencies]
 hub-core = { workspace = true }
+hub-protocol = { workspace = true }
+serde = { workspace = true }
+serde_json = { workspace = true }
+uuid = { workspace = true }
+axum = { workspace = true }
+tokio = { workspace = true }
+ureq = { workspace = true }
 
 [lints]
 workspace = true

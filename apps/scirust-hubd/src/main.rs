@@ -15,6 +15,7 @@ use std::sync::Arc;
 use clap::Parser;
 use hub_api::HubState;
 use hub_core::clock::SystemClock;
+use hub_core::exec::Executor;
 use hub_core::limits::Limits;
 use hub_core::memory::{
     FileSystemArtifactStore, InMemoryArtifactMeta, InMemoryComponents, InMemoryRuns,
@@ -24,7 +25,7 @@ use hub_core::store::{
     ArtifactMetadataRepository, ComponentRepository, RunRepository, WorkflowRepository,
 };
 use hub_core::Orchestrator;
-use hub_executor::ProcessExecutor;
+use hub_executor::{ProcessExecutor, RemoteExecutor};
 use hub_store_sqlite::SqliteStore;
 
 /// Default TCP listen address.
@@ -53,6 +54,24 @@ struct Args {
         default_value_t = StoreBackend::Sqlite
     )]
     store: StoreBackend,
+    /// Execution backend. Remote mode requires worker URL + bearer token.
+    #[arg(
+        long,
+        env = "SCIRUST_HUB_EXECUTOR",
+        value_enum,
+        default_value_t = ExecutorBackend::Process
+    )]
+    executor: ExecutorBackend,
+    #[arg(long, env = "SCIRUST_HUB_REMOTE_WORKER_URL")]
+    remote_worker_url: Option<String>,
+    #[arg(long, env = "SCIRUST_HUB_REMOTE_WORKER_TOKEN")]
+    remote_worker_token: Option<String>,
+}
+
+#[derive(Debug, Clone, Copy, clap::ValueEnum)]
+enum ExecutorBackend {
+    Process,
+    Remote,
 }
 
 #[derive(Debug, Clone, Copy, clap::ValueEnum)]
@@ -77,6 +96,8 @@ enum DaemonError {
     Serve(std::io::Error),
     #[error("opening persistent store: {0}")]
     Store(String),
+    #[error("invalid execution configuration: {0}")]
+    ExecutorConfig(String),
 }
 
 impl From<hub_core::CoreError> for DaemonError {
@@ -101,6 +122,7 @@ fn build_orchestrator(
     artifacts_meta: Arc<dyn ArtifactMetadataRepository>,
     workflows: Arc<dyn WorkflowRepository>,
     blob_store: FileSystemArtifactStore,
+    executor: Arc<dyn Executor>,
     workdir_root: PathBuf,
 ) -> Arc<Orchestrator> {
     Arc::new(Orchestrator::new(
@@ -110,7 +132,7 @@ fn build_orchestrator(
         artifacts_meta,
         workflows,
         blob_store,
-        Arc::new(ProcessExecutor::new()),
+        executor,
         Limits::default(),
         workdir_root,
     ))
@@ -140,8 +162,25 @@ fn run(args: Args) -> Result<(), DaemonError> {
         source,
     })?;
 
-    // One store instance serves all three repository ports; `Arc` is
-    // coerced separately per port.
+    let executor: Arc<dyn Executor> = match args.executor {
+        ExecutorBackend::Process => Arc::new(ProcessExecutor::new()),
+        ExecutorBackend::Remote => {
+            let url = args.remote_worker_url.ok_or_else(|| {
+                DaemonError::ExecutorConfig(
+                    "--remote-worker-url is required with --executor remote".into(),
+                )
+            })?;
+            let token = args.remote_worker_token.ok_or_else(|| {
+                DaemonError::ExecutorConfig(
+                    "--remote-worker-token is required with --executor remote".into(),
+                )
+            })?;
+            Arc::new(RemoteExecutor::new(url, token).map_err(DaemonError::ExecutorConfig)?)
+        }
+    };
+
+    // One store instance serves all repository ports; `Arc` is coerced
+    // separately per port.
     let orchestrator = match args.store {
         StoreBackend::Sqlite => {
             let db = args.data_dir.join("hub.db");
@@ -153,6 +192,7 @@ fn run(args: Args) -> Result<(), DaemonError> {
                 store.clone(),
                 store,
                 blob_store,
+                executor.clone(),
                 workdir_root,
             )
         }
@@ -164,6 +204,7 @@ fn run(args: Args) -> Result<(), DaemonError> {
                 Arc::new(InMemoryArtifactMeta::default()),
                 Arc::new(InMemoryWorkflows::default()),
                 blob_store,
+                executor.clone(),
                 workdir_root,
             )
         }

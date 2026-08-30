@@ -5,6 +5,12 @@
 //!   explicitly constructed environment. **This is resource control, not a
 //!   security sandbox**: children run with the Hub's OS privileges.
 //! - [`MockExecutor`]: scripted deterministic outcomes for tests.
+//! - [`RemoteExecutor`]: authenticated lease-based execution on a worker.
+
+pub mod remote;
+pub mod worker;
+
+pub use remote::RemoteExecutor;
 
 use std::collections::VecDeque;
 use std::io::Read;

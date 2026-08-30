@@ -9,6 +9,7 @@ members = [
     "crates/hub-api",
     "apps/scirust-hub",
     "apps/scirust-hubd",
+    "apps/scirust-hub-worker",
 ]
 
 [workspace.package]

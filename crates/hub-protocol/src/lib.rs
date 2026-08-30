@@ -13,6 +13,8 @@
 //!   emitted as errors; writers stamp the current version.
 //! - Errors always use [`ErrorEnvelope`], never bare strings.
 
+pub mod distributed;
+
 use std::collections::BTreeMap;
 
 use serde::{Deserialize, Serialize};
