@@ -83,9 +83,12 @@ cargo run -p scirust-hub -- run list
 ```
 
 A non-loopback Hub bind is refused unless `SCIRUST_HUB_TOKEN` is configured.
-The daemon still speaks HTTP rather than native TLS; production exposure must
-therefore terminate TLS at a trusted reverse proxy, service mesh or tunnel.
-`/health` and `/ready` intentionally remain unauthenticated supervisor probes.
+Native HTTPS is opt-in: provide both `SCIRUST_HUB_TLS_CERT` and
+`SCIRUST_HUB_TLS_KEY` (PEM certificate chain + private key), or the matching
+`--tls-cert`/`--tls-key` flags. Supplying only one fails closed. HTTP remains the
+loopback-compatible default. TLS protects transport but does not replace bearer
+authentication. `/health` and `/ready` intentionally remain unauthenticated
+supervisor probes.
 
 ## Remote execution
 
@@ -101,20 +104,27 @@ routine command history:
 ```bash
 # worker host
 export SCIRUST_HUB_WORKER_TOKEN='replace-with-a-worker-secret'
+# Optional native HTTPS on the worker:
+# export SCIRUST_HUB_WORKER_TLS_CERT='/etc/scirust/worker-cert.pem'
+# export SCIRUST_HUB_WORKER_TLS_KEY='/etc/scirust/worker-key.pem'
 cargo run -p scirust-hub-worker -- \
   --listen 127.0.0.1:8488 \
   --data-dir ./worker-data
 
-# Hub host
+# Hub host (use https:// when worker TLS is enabled)
 export SCIRUST_HUB_REMOTE_WORKER_URL='http://127.0.0.1:8488'
 export SCIRUST_HUB_REMOTE_WORKER_TOKEN="$SCIRUST_HUB_WORKER_TOKEN"
 cargo run -p scirust-hubd -- --executor remote --data-dir ./hub-data
 ```
 
 The worker bearer token is a separate trust boundary from
-`SCIRUST_HUB_TOKEN`. Plain HTTP does not protect either credential on an
-untrusted network; use a trusted private/tunneled/TLS boundary for remote
-traffic. A single configured URL retains the original direct `RemoteExecutor`.
+`SCIRUST_HUB_TOKEN`. The worker can serve native HTTPS when both
+`SCIRUST_HUB_WORKER_TLS_CERT` and `SCIRUST_HUB_WORKER_TLS_KEY` are configured.
+`RemoteExecutor` already accepts `https://` endpoints and validates them through
+its TLS client stack/system trust roots; self-signed/private CAs must therefore
+be trusted by the Hub host rather than bypassed. Plain HTTP remains suitable
+only for loopback or a trusted private/tunneled boundary. A single configured
+URL retains the original direct `RemoteExecutor`.
 Repeating `--remote-worker-url` (or comma-separating
 `SCIRUST_HUB_REMOTE_WORKER_URL`) enables a configured worker pool. The pool
 queries every worker descriptor before dispatch, skips unavailable or
@@ -268,8 +278,8 @@ RUSTDOCFLAGS='-D warnings' cargo doc --workspace --no-deps --locked
 CI additionally contains focused integration/regression coverage for daemon and
 CLI flows, crash/restart durability, SciCapsule contract execution, workflow
 cancellation/retries/parallelism, remote worker transport/idempotency/liveness,
-control-plane authentication, lifecycle-event cursor durability and
-configured multi-worker placement/identity safety.
+control-plane authentication, lifecycle-event cursor durability,
+configured multi-worker placement/identity safety and TLS configuration gates.
 
 ## Current limitations
 
@@ -280,8 +290,8 @@ configured multi-worker placement/identity safety.
   registration/expiry service or resource-aware global scheduler.
 - Bearer authentication is shared-secret authentication, not fine-grained
   authorization. There are no principals/roles yet.
-- Hub and worker do not provide native TLS/mTLS; trusted TLS/tunnel boundaries
-  are still required for untrusted networks.
+- Hub and worker provide opt-in native server TLS with PEM certificate/key
+  files, but not mTLS/client-certificate authentication or certificate hot reload.
 - Only declared outputs and captured streams are tracked; arbitrary undeclared
   files written into a workdir are ignored.
 - SciCapsule is integrated through its verified versioned process contract,

@@ -34,6 +34,7 @@ uuid = { version = "1", features = ["v4", "serde"] }
 sha2 = "0.10"
 clap = { version = "4", features = ["derive", "env"] }
 axum = { version = "0.8", default-features = false, features = ["http1", "json", "tokio", "query"] }
+axum-server = { version = "0.8", features = ["tls-rustls"] }
 tokio = { version = "1", features = ["rt-multi-thread", "net", "macros", "signal", "time"] }
 tower = { version = "0.5", features = ["util"] }
 tracing = "0.1"
