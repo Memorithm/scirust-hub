@@ -190,6 +190,7 @@ impl Executor for RemotePoolExecutor {
         };
         let backend_id = format!("remote:{worker_id}@{}", worker.endpoint());
         worker
+            .with_expected_worker_id(worker_id)
             .execute(request, cancel)
             .map(|outcome| ExecutionReport {
                 outcome,

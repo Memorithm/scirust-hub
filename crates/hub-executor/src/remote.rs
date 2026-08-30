@@ -31,6 +31,7 @@ pub struct RemoteExecutor {
     poll_interval: Duration,
     lost_after: Duration,
     max_payload_bytes: usize,
+    expected_worker_id: Option<String>,
 }
 
 impl RemoteExecutor {
@@ -53,12 +54,18 @@ impl RemoteExecutor {
             poll_interval: Duration::from_millis(DEFAULT_POLL_MS),
             lost_after: Duration::from_millis(DEFAULT_LOST_AFTER_MS),
             max_payload_bytes: DEFAULT_MAX_PAYLOAD_BYTES,
+            expected_worker_id: None,
         })
     }
 
     #[must_use]
     pub fn with_max_payload_bytes(mut self, value: usize) -> Self {
         self.max_payload_bytes = value.max(1);
+        self
+    }
+
+    pub(crate) fn with_expected_worker_id(mut self, worker_id: impl Into<String>) -> Self {
+        self.expected_worker_id = Some(worker_id.into());
         self
     }
 
@@ -71,6 +78,9 @@ impl RemoteExecutor {
             RemoteCallError::Authorization => "authorization refused".to_owned(),
             other => format!("unavailable: {other}"),
         })?;
+        if descriptor.worker_id.trim().is_empty() {
+            return Err("worker identity is empty".into());
+        }
         if descriptor.protocol_version != WORKER_PROTOCOL_VERSION {
             return Err(format!(
                 "protocol {} unsupported; expected {}",
@@ -237,6 +247,20 @@ impl Executor for RemoteExecutor {
                 );
             }
         };
+        if descriptor.worker_id.trim().is_empty() {
+            return Ok(self.remote_failure(started, "remote worker identity is empty"));
+        }
+        if let Some(expected) = &self.expected_worker_id {
+            if descriptor.worker_id != *expected {
+                return Ok(self.remote_failure(
+                    started,
+                    format!(
+                        "remote worker identity changed before lease dispatch: expected {expected:?}, found {:?}",
+                        descriptor.worker_id
+                    ),
+                ));
+            }
+        }
         if descriptor.protocol_version != WORKER_PROTOCOL_VERSION {
             return Ok(self.remote_failure(
                 started,

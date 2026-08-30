@@ -30,9 +30,12 @@ with the lowest current Hub-local in-flight count, then worker id and endpoint
 as lexical tie-breakers. The local count is only a placement hint; it is not a
 claim about global cluster load.
 
-After selection, the invocation is pinned to that endpoint and the existing
-lease protocol remains authoritative. The pool does **not** fail over an
-ambiguous lease creation or active lease to a second worker.
+After selection, the invocation is pinned to that endpoint and worker identity.
+`RemoteExecutor` re-reads the descriptor immediately before lease creation and
+requires the selected `worker_id` to remain unchanged; identity drift fails
+closed before a lease is submitted. The existing lease/status identity checks
+remain authoritative afterwards. The pool does **not** fail over an ambiguous
+lease creation or active lease to a second worker.
 
 The executor port gains an `ExecutionReport` wrapper with a default
 implementation. Placement-aware executors override it to return the concrete
