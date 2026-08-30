@@ -8,6 +8,13 @@ pre-1.0 (`0.x`), so minor bumps may contain breaking changes.
 
 ### Added
 
+- Durable append-only lifecycle event log (ADR-0012): SQLite migration v3
+  records component, artifact, run, workflow and workflow-attempt lifecycle
+  changes in the same transaction as authoritative metadata writes. Cursor
+  reads are exposed as `GET /api/v1/events?after=&limit=`, `scirust-hub event
+  list`, and read-only MCP tool `hub.list_events`; ephemeral memory mode uses
+  an equivalent composite store.
+
 - Read-only MCP adapter (`hub-mcp`, binary `scirust-hub-mcp`, ADR-0007):
   JSON-RPC 2.0 over NDJSON stdio mirroring scirust-mcp's protocol shape
   (version `2025-06-18`). Tools: hub.status, hub.list_components (with

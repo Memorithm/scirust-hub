@@ -21,6 +21,7 @@ pub mod component;
 pub mod dag;
 pub mod digest;
 pub mod error;
+pub mod event;
 pub mod exec;
 pub mod id;
 pub mod limits;
@@ -42,12 +43,16 @@ pub use component::{
 pub use dag::{Dag, DagLimits};
 pub use digest::ContentDigest;
 pub use error::{CoreError, ExecutorFailure};
+pub use event::{
+    InMemoryLifecycleEvents, LifecycleEntityType, LifecycleEvent, LifecycleEventKind,
+    LifecycleEventRepository, NewLifecycleEvent, DEFAULT_EVENT_PAGE, MAX_EVENT_PAGE,
+};
 pub use exec::{CancelToken, ExecutionOutcome, ExecutionRequest, Executor};
 pub use id::{ArtifactId, AttemptId, ComponentId, RunId, WorkflowId};
 pub use limits::Limits;
 pub use memory::{
-    FileSystemArtifactStore, InMemoryArtifactMeta, InMemoryComponents, InMemoryRuns,
-    InMemoryWorkflows,
+    FileSystemArtifactStore, InMemoryArtifactMeta, InMemoryComponents, InMemoryHubStore,
+    InMemoryRuns, InMemoryWorkflows,
 };
 pub use orchestrator::{Orchestrator, RegistrationStatus};
 pub use run::{

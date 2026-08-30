@@ -516,6 +516,42 @@ pub struct ArtifactListResponse {
 }
 
 // ----------------------------------------------------------------------
+// Lifecycle events
+// ----------------------------------------------------------------------
+
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub struct LifecycleEventDto {
+    pub sequence: u64,
+    pub recorded_at: u64,
+    pub kind: hub_core::LifecycleEventKind,
+    pub entity_type: hub_core::LifecycleEntityType,
+    pub entity_id: String,
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    pub attributes: BTreeMap<String, String>,
+}
+
+impl From<&hub_core::LifecycleEvent> for LifecycleEventDto {
+    fn from(event: &hub_core::LifecycleEvent) -> Self {
+        Self {
+            sequence: event.sequence,
+            recorded_at: event.recorded_at,
+            kind: event.kind,
+            entity_type: event.entity_type,
+            entity_id: event.entity_id.clone(),
+            attributes: event.attributes.clone(),
+        }
+    }
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub struct LifecycleEventListResponse {
+    pub events: Vec<LifecycleEventDto>,
+    /// Cursor to pass as `after` on the next request. It remains unchanged
+    /// when this page is empty.
+    pub next_after: u64,
+}
+
+// ----------------------------------------------------------------------
 // Conversions domain <-> wire
 // ----------------------------------------------------------------------
 

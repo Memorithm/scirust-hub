@@ -17,12 +17,10 @@ use hub_api::HubState;
 use hub_core::clock::SystemClock;
 use hub_core::exec::Executor;
 use hub_core::limits::Limits;
-use hub_core::memory::{
-    FileSystemArtifactStore, InMemoryArtifactMeta, InMemoryComponents, InMemoryRuns,
-    InMemoryWorkflows,
-};
+use hub_core::memory::{FileSystemArtifactStore, InMemoryHubStore};
 use hub_core::store::{
-    ArtifactMetadataRepository, ComponentRepository, RunRepository, WorkflowRepository,
+    ArtifactMetadataRepository, ComponentRepository, LifecycleEventRepository, RunRepository,
+    WorkflowRepository,
 };
 use hub_core::Orchestrator;
 use hub_executor::{ProcessExecutor, RemoteExecutor};
@@ -193,34 +191,38 @@ fn run(args: Args) -> Result<(), DaemonError> {
 
     // One store instance serves all repository ports; `Arc` is coerced
     // separately per port.
-    let orchestrator = match args.store {
-        StoreBackend::Sqlite => {
-            let db = args.data_dir.join("hub.db");
-            let store = Arc::new(SqliteStore::open(&db)?);
-            tracing::info!(db = %db.display(), "using durable sqlite stores");
-            build_orchestrator(
-                store.clone(),
-                store.clone(),
-                store.clone(),
-                store,
-                blob_store,
-                executor.clone(),
-                workdir_root,
-            )
-        }
-        StoreBackend::Memory => {
-            tracing::info!("using in-memory stores (state resets on restart)");
-            build_orchestrator(
-                Arc::new(InMemoryComponents::default()),
-                Arc::new(InMemoryRuns::default()),
-                Arc::new(InMemoryArtifactMeta::default()),
-                Arc::new(InMemoryWorkflows::default()),
-                blob_store,
-                executor.clone(),
-                workdir_root,
-            )
-        }
-    };
+    let (orchestrator, event_store): (Arc<Orchestrator>, Arc<dyn LifecycleEventRepository>) =
+        match args.store {
+            StoreBackend::Sqlite => {
+                let db = args.data_dir.join("hub.db");
+                let store = Arc::new(SqliteStore::open(&db)?);
+                tracing::info!(db = %db.display(), "using durable sqlite stores");
+                let orchestrator = build_orchestrator(
+                    store.clone(),
+                    store.clone(),
+                    store.clone(),
+                    store.clone(),
+                    blob_store,
+                    executor.clone(),
+                    workdir_root,
+                );
+                (orchestrator, store)
+            }
+            StoreBackend::Memory => {
+                tracing::info!("using in-memory stores (state resets on restart)");
+                let store = Arc::new(InMemoryHubStore::default());
+                let orchestrator = build_orchestrator(
+                    store.clone(),
+                    store.clone(),
+                    store.clone(),
+                    store.clone(),
+                    blob_store,
+                    executor.clone(),
+                    workdir_root,
+                );
+                (orchestrator, store)
+            }
+        };
 
     let recovered_cancellations = orchestrator.recover_workflow_cancellations()?;
     if recovered_cancellations > 0 {
@@ -251,7 +253,7 @@ fn run(args: Args) -> Result<(), DaemonError> {
         .map_err(DaemonError::Serve)?;
 
     runtime.block_on(async move {
-        let mut state = HubState::new(orchestrator);
+        let mut state = HubState::new(orchestrator).with_event_repository(event_store);
         if let Some(token) = api_token {
             state = state
                 .with_bearer_token(token)
