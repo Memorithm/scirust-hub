@@ -2,36 +2,38 @@
 
 **SciRust Hub is the control plane of the SciRust ecosystem**: it registers
 ecosystem components, describes what they can do, orchestrates executions,
-captures output artifacts and records execution provenance — without
-absorbing anyone's code.
+captures immutable artifacts and records execution provenance — without
+absorbing the implementation of the products it coordinates.
 
 Status: `0.2.0`. The tested control-plane slice now covers registry and
-discovery, durable SQLite-backed run/workflow records, local process execution,
-declared file artifacts, provenance, HTTP/CLI access and deterministic
-sequential workflow chaining.
+capability discovery, durable SQLite metadata, local and authenticated remote
+process execution, bounded-parallel workflows with retries/cancellation,
+SciCapsule execution through its published process contract, run reproduction,
+read-only MCP introspection, control-plane bearer authentication and a durable
+append-only lifecycle event stream.
 
 ## Why it exists
 
-The Memorithm ecosystem spans several independent products (SciRust scientific
-computing, SciCapsule capsules, Forge evolutionary search, …). Nothing tied
-them together: no central registry, no shared run semantics, no provenance.
-The Hub fills exactly that role. Ownership boundaries are documented in
+The Memorithm ecosystem spans independent products such as SciRust,
+SciCapsule and Forge. The Hub provides the shared control-plane concerns that
+should not be reimplemented inside those products: component registration,
+capability discovery, execution orchestration, immutable artifact flow and
+provenance. Ownership boundaries are documented in
 [`docs/architecture/BOUNDARIES.md`](docs/architecture/BOUNDARIES.md).
 
 ## What it does not do
 
 - It does **not** reimplement SciRust's scientific stack, tensor kernels or
   autodiff.
-- It does **not** define or parse the `.scicap` capsule format (owned by the
-  SciRust monorepo). Capsule execution is delegated to SciCapsule through the
-  verified versioned process contract described below.
-- It does **not** act as a package manager or build service for Forge or
-  anything else; Forge is an evolutionary search engine and has no HTTP
-  service to integrate with today.
+- It does **not** define or parse the `.scicap` capsule format. Canonical
+  capsule validation, trust-policy evaluation and capsule execution remain
+  owned by SciCapsule/SciRust.
+- It does **not** turn Forge into a Hub service or absorb Forge's evolutionary
+  search semantics.
 - Registering a component never executes its code.
-- The local process executor is **resource control, not a security sandbox**:
-  children run with the daemon's OS privileges under hard caps (output bytes,
-  wall-clock timeout, constructed environment).
+- Neither the local process executor nor the remote worker is an OS sandbox.
+  Child processes run with the privileges of the daemon/worker OS identity.
+- Bearer authentication is not TLS/mTLS and is not fine-grained authorization.
 
 ## Build
 
@@ -39,131 +41,226 @@ The Hub fills exactly that role. Ownership boundaries are documented in
 cargo build --workspace --all-targets --locked
 ```
 
-MSRV is Rust **1.89** (matching the SciRust ecosystem); any recent stable
-toolchain works. No system dependencies required for build or tests.
+MSRV is Rust **1.89** (matching the SciRust ecosystem); any compatible recent
+stable toolchain works. SQLite is bundled by the Rust dependency, so no system
+SQLite package is required for the normal build.
 
-## Run
+## Run locally
 
 ```bash
-# terminal 1: start the daemon (durable SQLite store by default)
-cargo run -p scirust-hubd -- --listen 127.0.0.1:8477 --data-dir ./hub-data
-# or explicitly: --store sqlite | --store memory
+# terminal 1: durable SQLite store by default
+cargo run -p scirust-hubd -- \
+  --listen 127.0.0.1:8477 \
+  --data-dir ./hub-data
 
-# terminal 2: register a component from a manifest file
+# terminal 2: register a component
 cargo run -p scirust-hub -- component register examples/component.json
 
-# discover by capability
+# discover capabilities
 cargo run -p scirust-hub -- capabilities
 
 # submit + execute a run, then inspect provenance
 cargo run -p scirust-hub -- --output json run submit \
-    --component <uuid-from-registration> \
-    --capability demo.echo \
-    --params '{"msg":"hello"}' \
-    --wait
+  --component <component-uuid> \
+  --capability demo.echo \
+  --params '{"msg":"hello"}' \
+  --wait
 cargo run -p scirust-hub -- run list
 cargo run -p scirust-hub -- artifact inspect <artifact-uuid> --content
+
+# inspect the append-only lifecycle stream
+cargo run -p scirust-hub -- event list --after 0 --limit 100
 ```
 
-An in-process demo pipeline (no daemon needed):
+Loopback operation may remain unauthenticated for local compatibility. To
+protect `/api/v1/*`, configure the same control-plane token for daemon and
+clients through the environment:
 
 ```bash
-cargo run -p scirust-hubd --example demo_pipeline
+export SCIRUST_HUB_TOKEN='replace-with-a-secret'
+cargo run -p scirust-hubd -- --listen 127.0.0.1:8477 --data-dir ./hub-data
+cargo run -p scirust-hub -- run list
+```
 
-# multi-step workflows chain artifacts between runs (bounded parallel, fail-fast):
+A non-loopback Hub bind is refused unless `SCIRUST_HUB_TOKEN` is configured.
+The daemon still speaks HTTP rather than native TLS; production exposure must
+therefore terminate TLS at a trusted reverse proxy, service mesh or tunnel.
+`/health` and `/ready` intentionally remain unauthenticated supervisor probes.
+
+## Remote execution
+
+The daemon can use the existing synchronous `Executor` boundary through an
+authenticated remote worker rather than the local `ProcessExecutor`. The
+worker transports workdir-relative directory structure and immutable file
+bytes; a shared filesystem is not assumed. Lease identity, heartbeat/liveness,
+cancellation and duplicate-attempt/result handling fail closed.
+
+Use environment variables for worker credentials rather than putting them in
+routine command history:
+
+```bash
+# worker host
+export SCIRUST_HUB_WORKER_TOKEN='replace-with-a-worker-secret'
+cargo run -p scirust-hub-worker -- \
+  --listen 127.0.0.1:8488 \
+  --data-dir ./worker-data
+
+# Hub host
+export SCIRUST_HUB_REMOTE_WORKER_URL='http://127.0.0.1:8488'
+export SCIRUST_HUB_REMOTE_WORKER_TOKEN="$SCIRUST_HUB_WORKER_TOKEN"
+cargo run -p scirust-hubd -- --executor remote --data-dir ./hub-data
+```
+
+The worker bearer token is a separate trust boundary from
+`SCIRUST_HUB_TOKEN`. Plain HTTP does not protect either credential on an
+untrusted network; use a trusted private/tunneled/TLS boundary for remote
+traffic. The current remote backend targets one configured worker endpoint; a
+multi-worker placement scheduler is not claimed.
+
+## Workflows
+
+Multi-step workflows chain exact Hub artifacts between runs. The scheduler
+supports bounded parallelism for independent DAG nodes, deterministic ready-set
+selection, fail-fast behavior, persisted cancellation intent and opt-in retry
+policies. Omitted concurrency/retry settings preserve the conservative defaults
+(one-at-a-time scheduling and one attempt).
+
+```bash
 cargo run -p scirust-hub -- workflow submit examples/workflow.json
 cargo run -p scirust-hub -- workflow run <workflow-uuid>
+cargo run -p scirust-hub -- workflow inspect <workflow-uuid>
+cargo run -p scirust-hub -- workflow cancel <workflow-uuid>
 ```
+
+Every retry receives a fresh attempt identity and a fresh run identity; attempt
+history remains in workflow provenance. Active sibling runs are cancelled when
+a parallel workflow fails fast or is cancelled. Workflows found `running`
+after a daemon restart fail closed rather than silently replaying potentially
+side-effecting work.
 
 ## Manifest format
 
 See [`examples/component.json`](examples/component.json). Key points:
 
-- `schema_version` must be `1`; unknown versions are rejected explicitly.
-- Capabilities are validated open names (`namespace.action`) with typed ports;
-  the Hub indexes whatever is truthfully declared.
-- `execution.type: "process"` declares a fixed argv binding. Placeholders
-  `{params}` (canonical JSON), `{input:<name>}` (materialized artifact path)
-  and `{output:<name>}` (declared output file path, parent directories
-  pre-created by the Hub) may occupy a whole argument each. argv goes
-  straight to the OS — there is no shell anywhere.
-- Declared `outputs` are ingested as artifacts after a clean exit
-  (`required: true` fails the run when the file was not produced; oversized
-  files fail rather than being truncated).
-- Registration is idempotent: byte-identical manifests are accepted replays;
-  different content under the same `(id, version)` is a `409 conflict`.
+- `schema_version` must be `1`; unsupported versions are rejected explicitly.
+- Capabilities use validated open names (`namespace.action`) with typed ports.
+- `execution.type: "process"` declares fixed structured argv. Placeholders
+  `{params}`, `{input:<name>}` and `{output:<name>}` occupy whole arguments;
+  argv goes directly to the OS, not through an implicit shell.
+- Declared output parent directories are pre-created. Required outputs missing
+  after a clean exit fail the run; oversized files fail rather than being
+  silently truncated.
+- Registration is idempotent for identical manifest content and rejects
+  divergent content under the same `(id, version)`.
 
 ## SciCapsule integration
 
-SciCapsule can be registered as an ordinary Hub process component with
-capability `capsule.execute@1.0.0`. The integration keeps ownership boundaries
-intact: Hub materializes immutable artifacts and orchestrates the outer process;
-SciCapsule validates the canonical capsule bytes, evaluates its explicit local
-trust policy, and performs its bounded entrypoint execution.
+SciCapsule is registered as an ordinary Hub process component with capability
+`capsule.execute@1.0.0`. Hub materializes immutable input artifacts and owns the
+outer orchestration/provenance; SciCapsule validates canonical capsule bytes,
+evaluates its explicit trust policy and performs bounded entrypoint execution.
 
-The contract uses three input artifacts:
+The v1 contract uses three inputs:
 
-- `capsule` — the canonical `.scicap` bytes;
-- `policy` — a SciCapsule trust-policy v1 document;
-- `request` — a deterministic SciCapsule Hub request containing detached
-  signatures and bounded execution options.
+- `capsule` — canonical `.scicap` bytes;
+- `policy` — SciCapsule trust-policy v1;
+- `request` — deterministic Hub request with detached signatures and bounded
+  execution options.
 
-It produces one required machine-readable `result` artifact. The generated Hub
-binding invokes an explicitly configured absolute SciCapsule executable path
-with `{input:...}` and `{output:...}` placeholders as direct argv; no shell or
-`PATH` lookup is introduced by the contract.
+It produces one required machine-readable `result` artifact. Hub has a
+fail-closed guard for the published v1 contract and rejects drifted/future
+adapter shapes it does not understand. The end-to-end regression builds and
+runs the real SciCapsule flow, including a corrupted-capsule rejection path;
+Hub still does not parse `.scicap` itself.
 
-`examples/scicapsule-component.json` is a regression fixture matching the
-manifest generated by `scicapsule hub-manifest`. Hub parses and validates that
-fixture using its real public v1 domain types in CI. Operators should generate
-their own manifest with the actual installed SciCapsule path and chosen stable
-component UUID rather than copying the fixture path literally.
+See [`docs/integrations/SCICAPSULE.md`](docs/integrations/SCICAPSULE.md).
 
-See [`docs/integrations/SCICAPSULE.md`](docs/integrations/SCICAPSULE.md) for the
-artifact flow, registration procedure, reproducibility boundary and security
-non-guarantees.
+## Run reproduction
+
+A recorded run can be reproduced as a **new** run using the exact stored spec:
+
+```bash
+cargo run -p scirust-hub -- run reproduce <run-uuid> --wait
+```
+
+Reproduction is rejected if the referenced component version has drifted or an
+input artifact is no longer present. The new record links back through
+`reproduced_from`; it never rewrites the original provenance.
+
+## Lifecycle events
+
+SQLite schema v3 records an append-only operational chronology derived from
+successful metadata mutations. Component, run, artifact and workflow event
+rows are committed in the same SQLite transaction as the authoritative
+metadata mutation that caused them. The event stream is therefore useful for
+incremental observers and future metrics, but it is **not** a replacement for
+the authoritative records.
+
+```text
+GET /api/v1/events?after=<sequence>&limit=<1..1000>
+```
+
+Results are ordered by monotonically increasing store-local `sequence` and
+return `next_after` for the next page. The read-only MCP adapter exposes the
+same chronology as `hub.list_events`.
+
+## MCP introspection
+
+`scirust-hub-mcp` is a read-only MCP server over NDJSON stdio. It reaches the
+running Hub over HTTP and exposes status, component, run, workflow, artifact
+and lifecycle-event introspection. It automatically uses `SCIRUST_HUB_TOKEN`
+when configured. Execution/submission tools remain outside MCP until an
+explicit authorization model is introduced.
 
 ## Architecture
 
 ```text
-apps/scirust-hub   CLI client        ┐
-apps/scirust-hubd  daemon            │ thin transport layer
-crates/hub-api     axum /api/v1      ┘
-crates/hub-protocol  versioned wire DTOs
-crates/hub-executor  process executor (+ mock for tests)
-crates/hub-core      domain: ids, digests, capabilities, components,
-                     runs/workflows + state machines, DAG, repository ports,
-                     in-memory stores, orchestrator
+apps/scirust-hub          CLI client
+apps/scirust-hubd         control-plane daemon
+apps/scirust-hub-worker   authenticated remote process worker
+        │
+crates/hub-api             axum /api/v1 adapter
+crates/hub-mcp             read-only MCP adapter
+crates/hub-protocol        versioned Hub/worker DTOs
+crates/hub-executor        local + remote Executor backends
+crates/hub-store-sqlite    durable metadata + lifecycle-event store
+crates/hub-core            domain, DAG/workflow scheduler, provenance,
+                           repository ports and in-memory backends
 ```
 
-Design decisions live in [`docs/adr/`](docs/adr/) (role and boundaries,
-workspace split, capability model, execution model, persistence). The
-integration model diagram is in
-[`docs/architecture/INTEGRATION_MODEL.md`](docs/architecture/INTEGRATION_MODEL.md).
+Design decisions live in [`docs/adr/`](docs/adr/). The ecosystem ownership
+model is documented under [`docs/architecture/`](docs/architecture/).
 
 ## Test
 
 ```bash
+cargo fmt --all -- --check
+cargo clippy --workspace --all-targets --all-features --locked -- -D warnings
+cargo build --workspace --all-targets --locked
 cargo test --workspace --all-features --locked
+RUSTDOCFLAGS='-D warnings' cargo doc --workspace --no-deps --locked
 ```
 
-At the workflow-orchestration merge, the suite contained **96 passing tests**.
-It covers domain state machines, digests, validation, DAG ordering, registry
-and workflow chaining; executor timeout/cancellation/truncation/env isolation;
-router behavior over the real axum stack; SQLite persistence/migrations; and
-end-to-end daemon/CLI flows with byte-exact artifact propagation. The current
-suite additionally guards the SciCapsule component-manifest contract with
-Hub-native domain parsing and validation.
+CI additionally contains focused integration/regression coverage for daemon and
+CLI flows, crash/restart durability, SciCapsule contract execution, workflow
+cancellation/retries/parallelism, remote worker transport/idempotency/liveness,
+control-plane authentication and lifecycle-event cursor durability.
 
 ## Current limitations
 
-- The SciCapsule integration is a verified process-component contract, not a
-  special Hub capsule backend; Hub intentionally does not parse `.scicap`.
-- Only declared outputs and captured streams are tracked; undeclared files
-  written into the working directory are ignored.
-- Workflow execution supports bounded parallelism, retries and active cancellation;
-  distributed executor placement does not exist yet.
-- No authentication/TLS: bind to localhost until that lands.
-
-Licensing: this repository currently has **no license file**; licensing is an
-open decision and intentionally not copied from other ecosystem repositories.
+- Process execution remains **not sandboxed**. Local and remote worker children
+  inherit the privileges available to their daemon/worker OS identity.
+- The remote executor targets one configured worker endpoint; there is no
+  multi-worker capability-aware placement scheduler yet.
+- Bearer authentication is shared-secret authentication, not fine-grained
+  authorization. There are no principals/roles yet.
+- Hub and worker do not provide native TLS/mTLS; trusted TLS/tunnel boundaries
+  are still required for untrusted networks.
+- Only declared outputs and captured streams are tracked; arbitrary undeclared
+  files written into a workdir are ignored.
+- SciCapsule is integrated through its verified versioned process contract,
+  not by moving capsule parsing/extraction into Hub.
+- The lifecycle stream exists, but an exported metrics surface has not yet
+  landed.
+- Licensing remains an explicit open repository decision; no license file is
+  currently present.
