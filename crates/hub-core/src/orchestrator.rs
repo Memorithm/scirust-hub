@@ -746,11 +746,19 @@ impl Orchestrator {
         self.runs.list().unwrap_or_default()
     }
 
-    /// All artifact metadata in deterministic `(created_at, id)` order;
-    /// empty when the metadata store errors (read-only convenience).
+    /// All artifact metadata in deterministic `(created_at, id)` order.
+    ///
+    /// # Errors
+    /// Storage failures only.
+    pub fn list_artifacts(&self) -> Result<Vec<crate::artifact::ArtifactMeta>, CoreError> {
+        self.artifacts_meta.list()
+    }
+
+    /// All artifact metadata; empty when the metadata store errors
+    /// (read-only convenience retained for existing callers).
     #[must_use]
     pub fn artifacts(&self) -> Vec<crate::artifact::ArtifactMeta> {
-        self.artifacts_meta.list().unwrap_or_default()
+        self.list_artifacts().unwrap_or_default()
     }
 
     #[must_use]
@@ -1678,9 +1686,17 @@ impl Orchestrator {
         self.workflows.get(id).ok().flatten()
     }
 
+    /// All workflows in deterministic `(created_at, id)` order.
+    ///
+    /// # Errors
+    /// Storage failures only.
+    pub fn list_workflows(&self) -> Result<Vec<crate::workflow::WorkflowRecord>, CoreError> {
+        self.workflows.list()
+    }
+
     #[must_use]
     pub fn workflows(&self) -> Vec<crate::workflow::WorkflowRecord> {
-        self.workflows.list().unwrap_or_default()
+        self.list_workflows().unwrap_or_default()
     }
 }
 

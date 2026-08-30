@@ -35,7 +35,9 @@ Merged functionality includes:
     non-loopback binds refused when authentication is absent;
 12. a durable append-only lifecycle chronology, committed transactionally with
     authoritative SQLite metadata mutations and exposed through HTTP, CLI and
-    MCP cursor reads.
+    MCP cursor reads;
+13. a low-cardinality Prometheus metrics surface derived on scrape from
+    authoritative persisted records and the event high-water mark.
 
 ## Merged PR history
 
@@ -213,18 +215,16 @@ these functional tests beyond what they directly exercise.
   workdir files are ignored.
 - MCP remains read-only; execution tools await a deliberate authorization
   model.
-- An exported metrics surface is still missing even though the durable event
-  chronology now provides a strong source for operational counters.
 - Native TLS/mTLS and principal/role authorization remain future work.
 - Repository licensing remains an explicit unresolved decision; no license
   file is present.
 
 ## Recommended next implementation
 
-Build a small operational metrics surface from authoritative Hub state and/or
-the durable lifecycle chronology without introducing a second mutable counter
-store. Prefer low-cardinality metrics (run/workflow terminal states, artifact
-counts/bytes, event high-water mark, executor/backend identity where safe) and
-avoid component/run/workflow UUID labels. The endpoint's authentication and
-information-disclosure boundary must be explicit, and metric derivation must
-remain reproducible from persisted Hub data.
+The next largest execution-scale gap is multi-worker discovery/placement. The
+current remote backend deliberately targets one configured worker endpoint.
+Any expansion should preserve the existing `Executor` authority, lease/result
+idempotency and fail-closed evidence model rather than hiding distributed state
+behind a best-effort load balancer. Capability/resource matching, worker
+registration expiry and deterministic placement evidence should be designed as
+an explicit scheduler contract before implementation.

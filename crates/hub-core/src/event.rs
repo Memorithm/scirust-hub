@@ -151,6 +151,12 @@ pub trait LifecycleEventRepository: Send + Sync {
     /// Storage failures or an invalid page limit.
     fn list_after(&self, after_sequence: u64, limit: u32)
         -> Result<Vec<LifecycleEvent>, CoreError>;
+
+    /// Highest committed event sequence, or zero when the log is empty.
+    ///
+    /// # Errors
+    /// Storage failures only.
+    fn high_water_sequence(&self) -> Result<u64, CoreError>;
 }
 
 /// Standalone in-memory event log used by tests and the ephemeral composite
@@ -209,6 +215,14 @@ impl LifecycleEventRepository for InMemoryLifecycleEvents {
             .take(limit as usize)
             .cloned()
             .collect())
+    }
+
+    fn high_water_sequence(&self) -> Result<u64, CoreError> {
+        let inner = self
+            .0
+            .lock()
+            .map_err(|_| CoreError::Storage("lifecycle event lock poisoned".into()))?;
+        Ok(inner.next_sequence)
     }
 }
 
@@ -538,6 +552,7 @@ mod tests {
         let next = store.list_after(2, 2).unwrap();
         assert_eq!(next.len(), 1);
         assert_eq!(next[0].sequence, 3);
+        assert_eq!(store.high_water_sequence().unwrap(), 3);
         assert!(store.list_after(0, 0).is_err());
     }
 }
