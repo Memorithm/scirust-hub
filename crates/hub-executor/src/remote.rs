@@ -10,7 +10,7 @@ use std::path::{Component, Path, PathBuf};
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
 use hub_core::error::ExecutorFailure;
-use hub_core::exec::{CancelToken, ExecutionOutcome, ExecutionRequest, Executor};
+use hub_core::exec::{CancelToken, ExecutionOutcome, ExecutionReport, ExecutionRequest, Executor};
 use hub_protocol::distributed::{
     LeaseCreateRequest, LeaseCreateResponse, LeaseState, LeaseStatusResponse,
     RemoteExecutionRequest, RemoteFile, WorkerDescriptor, PROCESS_EXECUTION_CAPABILITY,
@@ -31,6 +31,7 @@ pub struct RemoteExecutor {
     poll_interval: Duration,
     lost_after: Duration,
     max_payload_bytes: usize,
+    expected_worker_id: Option<String>,
 }
 
 impl RemoteExecutor {
@@ -53,6 +54,7 @@ impl RemoteExecutor {
             poll_interval: Duration::from_millis(DEFAULT_POLL_MS),
             lost_after: Duration::from_millis(DEFAULT_LOST_AFTER_MS),
             max_payload_bytes: DEFAULT_MAX_PAYLOAD_BYTES,
+            expected_worker_id: None,
         })
     }
 
@@ -60,6 +62,49 @@ impl RemoteExecutor {
     pub fn with_max_payload_bytes(mut self, value: usize) -> Self {
         self.max_payload_bytes = value.max(1);
         self
+    }
+
+    pub(crate) fn with_expected_worker_id(mut self, worker_id: impl Into<String>) -> Self {
+        self.expected_worker_id = Some(worker_id.into());
+        self
+    }
+
+    pub(crate) fn endpoint(&self) -> &str {
+        &self.endpoint
+    }
+
+    pub(crate) fn discover_eligible(&self) -> Result<WorkerDescriptor, String> {
+        let descriptor = self.describe().map_err(|error| match error {
+            RemoteCallError::Authorization => "authorization refused".to_owned(),
+            other => format!("unavailable: {other}"),
+        })?;
+        if descriptor.worker_id.trim().is_empty() {
+            return Err("worker identity is empty".into());
+        }
+        if descriptor.protocol_version != WORKER_PROTOCOL_VERSION {
+            return Err(format!(
+                "protocol {} unsupported; expected {}",
+                descriptor.protocol_version, WORKER_PROTOCOL_VERSION
+            ));
+        }
+        if !descriptor
+            .capabilities
+            .iter()
+            .any(|capability| capability == PROCESS_EXECUTION_CAPABILITY)
+        {
+            return Err(format!(
+                "worker {} lacks capability {}",
+                descriptor.worker_id, PROCESS_EXECUTION_CAPABILITY
+            ));
+        }
+        let descriptor_limit = usize::try_from(descriptor.max_payload_bytes).unwrap_or(usize::MAX);
+        if self.max_payload_bytes > descriptor_limit {
+            return Err(format!(
+                "worker payload limit {} is below configured client limit {}",
+                descriptor.max_payload_bytes, self.max_payload_bytes
+            ));
+        }
+        Ok(descriptor)
     }
 
     fn url(&self, path: &str) -> String {
@@ -181,6 +226,33 @@ impl Executor for RemoteExecutor {
         &self.backend_id
     }
 
+    fn execute_report(
+        &self,
+        request: &ExecutionRequest,
+        cancel: &CancelToken,
+    ) -> Result<ExecutionReport, ExecutorFailure> {
+        let descriptor = match self.discover_eligible() {
+            Ok(descriptor) => descriptor,
+            Err(_) => {
+                return self
+                    .execute(request, cancel)
+                    .map(|outcome| ExecutionReport {
+                        outcome,
+                        backend_id: self.backend_id.clone(),
+                    });
+            }
+        };
+        let worker_id = descriptor.worker_id;
+        let backend_id = format!("remote:{worker_id}@{}", self.endpoint);
+        self.clone()
+            .with_expected_worker_id(worker_id)
+            .execute(request, cancel)
+            .map(|outcome| ExecutionReport {
+                outcome,
+                backend_id,
+            })
+    }
+
     fn execute(
         &self,
         request: &ExecutionRequest,
@@ -202,6 +274,20 @@ impl Executor for RemoteExecutor {
                 );
             }
         };
+        if descriptor.worker_id.trim().is_empty() {
+            return Ok(self.remote_failure(started, "remote worker identity is empty"));
+        }
+        if let Some(expected) = &self.expected_worker_id {
+            if descriptor.worker_id != *expected {
+                return Ok(self.remote_failure(
+                    started,
+                    format!(
+                        "remote worker identity changed before lease dispatch: expected {expected:?}, found {:?}",
+                        descriptor.worker_id
+                    ),
+                ));
+            }
+        }
         if descriptor.protocol_version != WORKER_PROTOCOL_VERSION {
             return Ok(self.remote_failure(
                 started,

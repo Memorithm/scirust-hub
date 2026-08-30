@@ -1,7 +1,7 @@
 # Autonomous implementation report — SciRust Hub
 
 Date: 2026-08-30  
-Reconciled through: `main` @ `f7de2829af40f8f54bfc17cf5dfec573e4c3cbcf`  
+Reconciled through: configured multi-worker placement working branch based on `main` @ `9a2f12ab91af9f551f5faa4efdd9b9c468fa7d66`  
 Prepared for independent human review. Claims below are limited to merged
 repository behavior and the validation evidence recorded by the corresponding
 pull requests and GitHub Actions runs.
@@ -121,9 +121,11 @@ Worker loss, stale heartbeat, protocol/identity drift and authorization failure
 fail closed as execution failures; cancellation is forwarded to the active
 lease.
 
-This is a real remote execution substrate but **not yet a multi-worker
-capability-aware placement scheduler**. One daemon remote backend is configured
-against one worker endpoint.
+The remote substrate now also supports a configured multi-worker pool with
+pre-dispatch descriptor discovery, duplicate-identity rejection and deterministic
+Hub-local least-in-flight placement. It is **not yet a dynamic worker registry or
+resource-aware global scheduler**; configured endpoints and one shared worker
+credential remain operator supplied.
 
 ## Authentication and transport security
 
@@ -201,15 +203,17 @@ these functional tests beyond what they directly exercise.
 - Control-plane authentication is one shared bearer secret, not users/roles or
   fine-grained authorization.
 - Hub and worker do not terminate native TLS/mTLS.
-- Remote execution currently targets one configured worker endpoint; there is
-  no trusted multi-worker scheduler/placement policy.
+- Multi-worker placement uses an operator-configured endpoint pool and Hub-local
+  in-flight counts; dynamic registration, expiry and global resource accounting do
+  not exist yet.
 - Lifecycle attributes intentionally exclude token values, environment values
   and captured process payloads, but anyone authorized for `/api/v1` can read
   the lifecycle endpoint under the current coarse-grained model.
 
 ## Current functional limitations
 
-- A multi-worker registry/placement scheduler is not implemented.
+- Dynamic worker registration/expiry and resource-aware global placement are
+  not implemented; the current multi-worker pool is statically configured.
 - A container/sandbox executor is not implemented.
 - Only declared output files and captured streams are tracked; undeclared
   workdir files are ignored.
@@ -221,10 +225,10 @@ these functional tests beyond what they directly exercise.
 
 ## Recommended next implementation
 
-The next largest execution-scale gap is multi-worker discovery/placement. The
-current remote backend deliberately targets one configured worker endpoint.
-Any expansion should preserve the existing `Executor` authority, lease/result
-idempotency and fail-closed evidence model rather than hiding distributed state
-behind a best-effort load balancer. Capability/resource matching, worker
-registration expiry and deterministic placement evidence should be designed as
-an explicit scheduler contract before implementation.
+After configured multi-worker placement, the remaining execution-scale gap is
+dynamic worker registration/expiry plus resource-aware global placement. Any
+future registry must preserve the current no-ambiguous-failover rule and record
+placement evidence rather than turning worker discovery into a best-effort load
+balancer. Worker liveness leases, resource/capability labels and deterministic
+selection policy should be explicit durable contracts before automatic cluster
+membership is introduced.
