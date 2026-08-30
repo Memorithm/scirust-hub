@@ -82,6 +82,18 @@ impl ExecutionOutcome {
     }
 }
 
+/// One executor observation plus the concrete backend target that produced it.
+///
+/// Most executors use their stable [`Executor::backend_id`]. Placement-aware
+/// executors override [`Executor::execute_report`] so provenance can identify
+/// the worker chosen for one invocation without mutable global "last worker"
+/// state that would race under parallel workflows.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct ExecutionReport {
+    pub outcome: ExecutionOutcome,
+    pub backend_id: String,
+}
+
 /// A backend capable of executing [`ExecutionRequest`]s.
 pub trait Executor: Send + Sync {
     /// Stable identifier recorded in run provenance.
@@ -100,4 +112,21 @@ pub trait Executor: Send + Sync {
         request: &ExecutionRequest,
         cancel: &CancelToken,
     ) -> Result<ExecutionOutcome, ExecutorFailure>;
+
+    /// Executes one request and reports the concrete backend target used for
+    /// this invocation. Placement-aware executors override this method.
+    ///
+    /// # Errors
+    /// Same contract as [`Self::execute`].
+    fn execute_report(
+        &self,
+        request: &ExecutionRequest,
+        cancel: &CancelToken,
+    ) -> Result<ExecutionReport, ExecutorFailure> {
+        self.execute(request, cancel)
+            .map(|outcome| ExecutionReport {
+                outcome,
+                backend_id: self.backend_id().to_owned(),
+            })
+    }
 }

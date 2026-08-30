@@ -23,7 +23,7 @@ use hub_core::store::{
     WorkflowRepository,
 };
 use hub_core::Orchestrator;
-use hub_executor::{ProcessExecutor, RemoteExecutor};
+use hub_executor::{ProcessExecutor, RemoteExecutor, RemotePoolExecutor};
 use hub_store_sqlite::SqliteStore;
 
 /// Default TCP listen address.
@@ -60,8 +60,10 @@ struct Args {
         default_value_t = ExecutorBackend::Process
     )]
     executor: ExecutorBackend,
-    #[arg(long, env = "SCIRUST_HUB_REMOTE_WORKER_URL")]
-    remote_worker_url: Option<String>,
+    /// One or more worker URLs. Repeat the flag or comma-separate the
+    /// environment value to enable deterministic multi-worker placement.
+    #[arg(long, env = "SCIRUST_HUB_REMOTE_WORKER_URL", value_delimiter = ',')]
+    remote_worker_url: Vec<String>,
     #[arg(long, env = "SCIRUST_HUB_REMOTE_WORKER_TOKEN")]
     remote_worker_token: Option<String>,
 }
@@ -138,6 +140,42 @@ fn build_orchestrator(
     ))
 }
 
+fn build_executor(
+    backend: ExecutorBackend,
+    remote_worker_urls: Vec<String>,
+    remote_worker_token: Option<String>,
+) -> Result<Arc<dyn Executor>, DaemonError> {
+    match backend {
+        ExecutorBackend::Process => Ok(Arc::new(ProcessExecutor::new())),
+        ExecutorBackend::Remote => {
+            if remote_worker_urls.is_empty() {
+                return Err(DaemonError::ExecutorConfig(
+                    "at least one --remote-worker-url is required with --executor remote".into(),
+                ));
+            }
+            let token = remote_worker_token.ok_or_else(|| {
+                DaemonError::ExecutorConfig(
+                    "--remote-worker-token is required with --executor remote".into(),
+                )
+            })?;
+            if remote_worker_urls.len() == 1 {
+                let url = remote_worker_urls
+                    .into_iter()
+                    .next()
+                    .expect("checked length");
+                Ok(Arc::new(
+                    RemoteExecutor::new(url, token).map_err(DaemonError::ExecutorConfig)?,
+                ))
+            } else {
+                Ok(Arc::new(
+                    RemotePoolExecutor::new(remote_worker_urls, token)
+                        .map_err(DaemonError::ExecutorConfig)?,
+                ))
+            }
+        }
+    }
+}
+
 fn run(args: Args) -> Result<(), DaemonError> {
     init_tracing();
 
@@ -172,22 +210,11 @@ fn run(args: Args) -> Result<(), DaemonError> {
         source,
     })?;
 
-    let executor: Arc<dyn Executor> = match args.executor {
-        ExecutorBackend::Process => Arc::new(ProcessExecutor::new()),
-        ExecutorBackend::Remote => {
-            let url = args.remote_worker_url.ok_or_else(|| {
-                DaemonError::ExecutorConfig(
-                    "--remote-worker-url is required with --executor remote".into(),
-                )
-            })?;
-            let token = args.remote_worker_token.ok_or_else(|| {
-                DaemonError::ExecutorConfig(
-                    "--remote-worker-token is required with --executor remote".into(),
-                )
-            })?;
-            Arc::new(RemoteExecutor::new(url, token).map_err(DaemonError::ExecutorConfig)?)
-        }
-    };
+    let executor = build_executor(
+        args.executor,
+        args.remote_worker_url,
+        args.remote_worker_token,
+    )?;
 
     // One store instance serves all repository ports; `Arc` is coerced
     // separately per port.
@@ -319,6 +346,25 @@ fn init_tracing() {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn repeated_remote_worker_urls_select_pool_configuration() {
+        let single = build_executor(
+            ExecutorBackend::Remote,
+            vec!["http://worker-a:8488".into()],
+            Some("secret".into()),
+        )
+        .expect("single");
+        assert_eq!(single.backend_id(), "remote:http://worker-a:8488");
+
+        let pool = build_executor(
+            ExecutorBackend::Remote,
+            vec!["http://worker-a:8488".into(), "http://worker-b:8488".into()],
+            Some("secret".into()),
+        )
+        .expect("pool");
+        assert_eq!(pool.backend_id(), "remote-pool");
+    }
 
     #[test]
     fn loopback_may_remain_unauthenticated_for_local_compatibility() {
