@@ -47,6 +47,19 @@ jobs:
           }
           trap cleanup EXIT
 
+          diagnose_dead_process() {
+            local name="$1" pid="$2" out="$3" err="$4"
+            if ! kill -0 "$pid" 2>/dev/null; then
+              echo "===== ${name} exited before readiness =====" >&2
+              echo "----- stdout -----" >&2
+              cat "$out" >&2 || true
+              echo "----- stderr -----" >&2
+              cat "$err" >&2 || true
+              wait "$pid" || true
+              return 1
+            fi
+          }
+
           openssl req -x509 -newkey rsa:2048 -nodes \
             -keyout "$TMP/ca-key.pem" -out "$TMP/ca-cert.pem" \
             -subj '/CN=SciRust Hub CI Test CA' -days 1 -sha256 \
@@ -78,17 +91,23 @@ jobs:
             --data-dir "$TMP/hub-data" \
             >"$TMP/hub.out" 2>"$TMP/hub.err" &
           HUB_PID=$!
+          HUB_READY=0
           for _ in $(seq 1 50); do
+            diagnose_dead_process hub "$HUB_PID" "$TMP/hub.out" "$TMP/hub.err"
             if curl --silent --show-error --fail \
               --cacert "$TMP/ca-cert.pem" \
               https://localhost:18477/health >"$TMP/hub-health"; then
+              HUB_READY=1
               break
             fi
             sleep 0.1
           done
-          curl --silent --show-error --fail \
-            --cacert "$TMP/ca-cert.pem" \
-            https://localhost:18477/health >/dev/null
+          if [[ "$HUB_READY" != 1 ]]; then
+            echo 'Hub did not become HTTPS-ready' >&2
+            cat "$TMP/hub.out" >&2 || true
+            cat "$TMP/hub.err" >&2 || true
+            exit 1
+          fi
           if curl --silent --fail http://127.0.0.1:18477/health >/dev/null 2>&1; then
             echo 'plaintext HTTP unexpectedly succeeded against Hub TLS port' >&2
             exit 1
@@ -103,19 +122,24 @@ jobs:
             --data-dir "$TMP/worker-data" \
             >"$TMP/worker.out" 2>"$TMP/worker.err" &
           WORKER_PID=$!
+          WORKER_READY=0
           for _ in $(seq 1 50); do
+            diagnose_dead_process worker "$WORKER_PID" "$TMP/worker.out" "$TMP/worker.err"
             if curl --silent --show-error --fail \
               --cacert "$TMP/ca-cert.pem" \
               -H 'Authorization: Bearer worker-ci-secret' \
               https://localhost:18488/v1/worker >"$TMP/worker.json"; then
+              WORKER_READY=1
               break
             fi
             sleep 0.1
           done
-          curl --silent --show-error --fail \
-            --cacert "$TMP/ca-cert.pem" \
-            -H 'Authorization: Bearer worker-ci-secret' \
-            https://localhost:18488/v1/worker >/dev/null
+          if [[ "$WORKER_READY" != 1 ]]; then
+            echo 'Worker did not become HTTPS-ready' >&2
+            cat "$TMP/worker.out" >&2 || true
+            cat "$TMP/worker.err" >&2 || true
+            exit 1
+          fi
           status="$(curl --silent --output /dev/null --write-out '%{http_code}' \
             --cacert "$TMP/ca-cert.pem" https://localhost:18488/v1/worker)"
           test "$status" = '401'
@@ -130,23 +154,32 @@ jobs:
           unset HUB_PID WORKER_PID
 
           printf 'not a private key\n' > "$TMP/bad-key.pem"
-          if timeout 5s env \
-            SCIRUST_HUB_TLS_CERT="$TMP/server-cert.pem" \
+          env SCIRUST_HUB_TLS_CERT="$TMP/server-cert.pem" \
             SCIRUST_HUB_TLS_KEY="$TMP/bad-key.pem" \
             target/debug/scirust-hubd --listen 127.0.0.1:18479 --store memory \
-            --data-dir "$TMP/bad-hub" >/dev/null 2>"$TMP/bad-hub.err"; then
-            echo 'Hub accepted malformed TLS private key' >&2
+            --data-dir "$TMP/bad-hub" >/dev/null 2>"$TMP/bad-hub.err" &
+          BAD_HUB_PID=$!
+          sleep 0.5
+          if kill -0 "$BAD_HUB_PID" 2>/dev/null; then
+            kill "$BAD_HUB_PID" || true
+            echo 'Hub stayed alive with malformed TLS private key' >&2
             exit 1
           fi
-          if timeout 5s env \
-            SCIRUST_HUB_WORKER_TOKEN='worker-ci-secret' \
+          wait "$BAD_HUB_PID" && { echo 'Hub accepted malformed TLS private key' >&2; exit 1; } || true
+
+          env SCIRUST_HUB_WORKER_TOKEN='worker-ci-secret' \
             SCIRUST_HUB_WORKER_TLS_CERT="$TMP/server-cert.pem" \
             SCIRUST_HUB_WORKER_TLS_KEY="$TMP/bad-key.pem" \
             target/debug/scirust-hub-worker --listen 127.0.0.1:18489 \
-            --data-dir "$TMP/bad-worker" >/dev/null 2>"$TMP/bad-worker.err"; then
-            echo 'Worker accepted malformed TLS private key' >&2
+            --data-dir "$TMP/bad-worker" >/dev/null 2>"$TMP/bad-worker.err" &
+          BAD_WORKER_PID=$!
+          sleep 0.5
+          if kill -0 "$BAD_WORKER_PID" 2>/dev/null; then
+            kill "$BAD_WORKER_PID" || true
+            echo 'Worker stayed alive with malformed TLS private key' >&2
             exit 1
           fi
+          wait "$BAD_WORKER_PID" && { echo 'Worker accepted malformed TLS private key' >&2; exit 1; } || true
       - name: Commit lockfile update
         run: |
           git config user.name 'github-actions[bot]'
