@@ -23,7 +23,7 @@ jobs:
         with:
           components: rustfmt, clippy
       - name: Apply implementation
-        run: python3 .github/agent_pr4.py
+        run: python3 .github/agent_pr4_driver.py
       - name: Refresh lockfile for workspace member
         run: cargo check --workspace
       - name: Format
