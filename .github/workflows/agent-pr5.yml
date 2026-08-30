@@ -24,6 +24,8 @@ jobs:
           components: rustfmt, clippy
       - name: Apply implementation
         run: python3 .github/agent_pr5.py
+      - name: Refresh lockfile
+        run: cargo check --workspace
       - name: Format
         run: cargo fmt --all
       - name: Format gate
