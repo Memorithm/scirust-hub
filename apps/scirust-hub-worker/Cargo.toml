@@ -10,6 +10,8 @@ repository.workspace = true
 [dependencies]
 hub-executor = { workspace = true }
 tokio = { workspace = true }
+axum-server = { workspace = true }
+rustls = { workspace = true }
 clap = { workspace = true }
 thiserror = { workspace = true }
 

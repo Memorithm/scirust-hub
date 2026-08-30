@@ -8,6 +8,12 @@ pre-1.0 (`0.x`), so minor bumps may contain breaking changes.
 
 ### Added
 
+- Opt-in native Rustls HTTPS for both `scirust-hubd` and
+  `scirust-hub-worker`. PEM certificate and private-key paths must be configured
+  together and malformed/missing material fails startup closed. HTTP remains
+  the local-compatible default; bearer authentication remains independent and
+  mTLS/client-certificate authentication is not claimed.
+
 - Configured multi-worker remote placement: repeating `--remote-worker-url`
   (or comma-separating `SCIRUST_HUB_REMOTE_WORKER_URL`) discovers compatible
   worker descriptors before dispatch and deterministically selects the lowest

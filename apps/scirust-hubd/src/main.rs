@@ -11,6 +11,9 @@
 use std::net::SocketAddr;
 use std::path::PathBuf;
 use std::sync::Arc;
+use std::time::Duration;
+
+use axum_server::tls_rustls::RustlsConfig;
 
 use clap::Parser;
 use hub_api::HubState;
@@ -66,6 +69,12 @@ struct Args {
     remote_worker_url: Vec<String>,
     #[arg(long, env = "SCIRUST_HUB_REMOTE_WORKER_TOKEN")]
     remote_worker_token: Option<String>,
+    /// PEM certificate chain for native HTTPS. Must be set with `--tls-key`.
+    #[arg(long, env = "SCIRUST_HUB_TLS_CERT")]
+    tls_cert: Option<PathBuf>,
+    /// PEM private key for native HTTPS. Must be set with `--tls-cert`.
+    #[arg(long, env = "SCIRUST_HUB_TLS_KEY")]
+    tls_key: Option<PathBuf>,
 }
 
 #[derive(Debug, Clone, Copy, clap::ValueEnum)]
@@ -100,6 +109,8 @@ enum DaemonError {
     ExecutorConfig(String),
     #[error("invalid control-plane security configuration: {0}")]
     SecurityConfig(String),
+    #[error("invalid TLS configuration: {0}")]
+    TlsConfig(String),
 }
 
 impl From<hub_core::CoreError> for DaemonError {
@@ -176,7 +187,35 @@ fn build_executor(
     }
 }
 
+#[derive(Clone, Debug, PartialEq, Eq)]
+struct TlsFiles {
+    cert: PathBuf,
+    key: PathBuf,
+}
+
+fn tls_files(cert: Option<PathBuf>, key: Option<PathBuf>) -> Result<Option<TlsFiles>, DaemonError> {
+    match (cert, key) {
+        (None, None) => Ok(None),
+        (Some(cert), Some(key)) => Ok(Some(TlsFiles { cert, key })),
+        (Some(_), None) => Err(DaemonError::TlsConfig(
+            "--tls-cert requires --tls-key (or set both SCIRUST_HUB_TLS_CERT and SCIRUST_HUB_TLS_KEY)".into(),
+        )),
+        (None, Some(_)) => Err(DaemonError::TlsConfig(
+            "--tls-key requires --tls-cert (or set both SCIRUST_HUB_TLS_CERT and SCIRUST_HUB_TLS_KEY)".into(),
+        )),
+    }
+}
+
+fn install_rustls_crypto_provider() {
+    let _ = rustls::crypto::aws_lc_rs::default_provider().install_default();
+}
+
 fn run(args: Args) -> Result<(), DaemonError> {
+    // Cargo feature unification can make both built-in Rustls providers
+    // available through the server and HTTP-client dependency graph. Select
+    // one process-wide provider before either server or remote-client TLS can
+    // construct a Rustls config.
+    install_rustls_crypto_provider();
     init_tracing();
 
     let listen: SocketAddr = args.listen.parse().map_err(|source| DaemonError::Listen {
@@ -186,11 +225,12 @@ fn run(args: Args) -> Result<(), DaemonError> {
     let api_token = std::env::var("SCIRUST_HUB_TOKEN")
         .ok()
         .filter(|token| !token.is_empty());
+    let tls = tls_files(args.tls_cert, args.tls_key)?;
     validate_control_plane_security(listen, api_token.as_deref())?;
-    if !listen.ip().is_loopback() {
+    if !listen.ip().is_loopback() && tls.is_none() {
         tracing::warn!(
             %listen,
-            "control plane is non-loopback: bearer auth is enabled, but HTTP is plaintext; terminate TLS at a trusted boundary"
+            "control plane is non-loopback: bearer auth is enabled, but HTTP is plaintext; enable native TLS or terminate TLS at a trusted boundary"
         );
     }
 
@@ -270,6 +310,7 @@ fn run(args: Args) -> Result<(), DaemonError> {
         %listen,
         data_dir = %args.data_dir.display(),
         executor = orchestrator.executor_backend_id(),
+        transport = if tls.is_some() { "https" } else { "http" },
         "scirust-hubd starting"
     );
 
@@ -287,13 +328,32 @@ fn run(args: Args) -> Result<(), DaemonError> {
                 .map_err(|error| DaemonError::SecurityConfig(error.to_string()))?;
         }
         let app = hub_api::router(state);
-        let listener = tokio::net::TcpListener::bind(listen)
-            .await
-            .map_err(DaemonError::Serve)?;
-        axum::serve(listener, app)
-            .with_graceful_shutdown(shutdown_signal())
-            .await
-            .map_err(DaemonError::Serve)
+        if let Some(tls) = tls {
+            let config = RustlsConfig::from_pem_file(&tls.cert, &tls.key)
+                .await
+                .map_err(|error| {
+                    DaemonError::TlsConfig(format!("loading PEM certificate/private key: {error}"))
+                })?;
+            let handle = axum_server::Handle::new();
+            let shutdown_handle = handle.clone();
+            tokio::spawn(async move {
+                shutdown_signal().await;
+                shutdown_handle.graceful_shutdown(Some(Duration::from_secs(30)));
+            });
+            axum_server::bind_rustls(listen, config)
+                .handle(handle)
+                .serve(app.into_make_service())
+                .await
+                .map_err(DaemonError::Serve)
+        } else {
+            let listener = tokio::net::TcpListener::bind(listen)
+                .await
+                .map_err(DaemonError::Serve)?;
+            axum::serve(listener, app)
+                .with_graceful_shutdown(shutdown_signal())
+                .await
+                .map_err(DaemonError::Serve)
+        }
     })
 }
 
@@ -346,6 +406,28 @@ fn init_tracing() {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn rustls_crypto_provider_is_installed_explicitly() {
+        install_rustls_crypto_provider();
+        assert!(rustls::crypto::CryptoProvider::get_default().is_some());
+    }
+
+    #[test]
+    fn tls_configuration_requires_cert_and_key_together() {
+        assert!(tls_files(None, None).expect("disabled").is_none());
+        assert!(tls_files(Some("cert.pem".into()), None).is_err());
+        assert!(tls_files(None, Some("key.pem".into())).is_err());
+        assert_eq!(
+            tls_files(Some("cert.pem".into()), Some("key.pem".into()))
+                .expect("pair")
+                .expect("enabled"),
+            TlsFiles {
+                cert: "cert.pem".into(),
+                key: "key.pem".into(),
+            }
+        );
+    }
 
     #[test]
     fn repeated_remote_worker_urls_select_pool_configuration() {
