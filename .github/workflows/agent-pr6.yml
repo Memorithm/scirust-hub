@@ -23,7 +23,9 @@ jobs:
         with:
           components: rustfmt, clippy
       - name: Apply implementation
-        run: python3 .github/agent_pr6.py
+        run: |
+          python3 .github/agent_pr6.py
+          python3 .github/agent_pr6_fix1.py
       - name: Check
         run: cargo check --workspace
       - name: Format
