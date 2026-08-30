@@ -10,7 +10,7 @@ use std::path::{Component, Path, PathBuf};
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
 use hub_core::error::ExecutorFailure;
-use hub_core::exec::{CancelToken, ExecutionOutcome, ExecutionRequest, Executor};
+use hub_core::exec::{CancelToken, ExecutionOutcome, ExecutionReport, ExecutionRequest, Executor};
 use hub_protocol::distributed::{
     LeaseCreateRequest, LeaseCreateResponse, LeaseState, LeaseStatusResponse,
     RemoteExecutionRequest, RemoteFile, WorkerDescriptor, PROCESS_EXECUTION_CAPABILITY,
@@ -224,6 +224,33 @@ impl RemoteExecutor {
 impl Executor for RemoteExecutor {
     fn backend_id(&self) -> &str {
         &self.backend_id
+    }
+
+    fn execute_report(
+        &self,
+        request: &ExecutionRequest,
+        cancel: &CancelToken,
+    ) -> Result<ExecutionReport, ExecutorFailure> {
+        let descriptor = match self.discover_eligible() {
+            Ok(descriptor) => descriptor,
+            Err(_) => {
+                return self
+                    .execute(request, cancel)
+                    .map(|outcome| ExecutionReport {
+                        outcome,
+                        backend_id: self.backend_id.clone(),
+                    });
+            }
+        };
+        let worker_id = descriptor.worker_id;
+        let backend_id = format!("remote:{worker_id}@{}", self.endpoint);
+        self.clone()
+            .with_expected_worker_id(worker_id)
+            .execute(request, cancel)
+            .map(|outcome| ExecutionReport {
+                outcome,
+                backend_id,
+            })
     }
 
     fn execute(

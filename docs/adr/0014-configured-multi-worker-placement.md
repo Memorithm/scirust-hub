@@ -38,10 +38,12 @@ remain authoritative afterwards. The pool does **not** fail over an ambiguous
 lease creation or active lease to a second worker.
 
 The executor port gains an `ExecutionReport` wrapper with a default
-implementation. Placement-aware executors override it to return the concrete
-selected target. `RunOutcome.executor_backend` therefore records e.g.
-`remote:worker-a@http://...` instead of only the generic pool identity. This is
-per-invocation data, so no shared mutable "last worker" field is introduced.
+implementation. Remote executors override it to return the concrete observed
+worker target. `RunOutcome.executor_backend` therefore records e.g.
+`remote:worker-a@http://...` for both direct and pooled remote execution once a
+worker descriptor has been authenticated. Failures that occur before a worker
+can be identified retain only the configured endpoint. This is per-invocation
+data, so no shared mutable "last worker" field is introduced.
 
 ## Security and limits
 

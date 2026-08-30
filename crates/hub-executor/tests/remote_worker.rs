@@ -141,13 +141,14 @@ async fn remote_executor_transports_inputs_and_materializes_outputs() {
         .expect("remote")
         .with_max_payload_bytes(8 * 1024 * 1024);
     let local_for_run = local.clone();
-    let outcome = tokio::task::spawn_blocking(move || {
-        exec.execute(&request(local_for_run), &CancelToken::new())
+    let report = tokio::task::spawn_blocking(move || {
+        exec.execute_report(&request(local_for_run), &CancelToken::new())
     })
     .await
     .expect("join")
     .expect("executor");
-    assert!(outcome.exited_cleanly(), "{outcome:?}");
+    assert!(report.outcome.exited_cleanly(), "{:?}", report.outcome);
+    assert!(report.backend_id.contains("remote:worker-e2e@"));
     assert_eq!(
         fs::read(local.join("outputs/result")).expect("result"),
         b"remote-payload\n"
