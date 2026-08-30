@@ -14,58 +14,77 @@ pre-1.0 (`0.x`), so minor bumps may contain breaking changes.
   reads are exposed as `GET /api/v1/events?after=&limit=`, `scirust-hub event
   list`, and read-only MCP tool `hub.list_events`; ephemeral memory mode uses
   an equivalent composite store.
-
+- Control-plane bearer authentication (ADR-0011): `SCIRUST_HUB_TOKEN` protects
+  `/api/v1/*`; `/health` and `/ready` remain supervisor probes. Non-loopback
+  Hub binds fail closed without a token. CLI/MCP clients attach the token from
+  the environment. Native TLS/mTLS and fine-grained authorization remain
+  explicitly out of scope for this change.
+- Authenticated distributed executor substrate (ADR-0010): standalone
+  `scirust-hub-worker`, versioned worker protocol, `RemoteExecutor`, workdir
+  directory/file transport without a shared filesystem, lease identity,
+  heartbeat/liveness, cancellation and idempotent duplicate attempt/result
+  handling. The daemon can select local `process` or configured `remote`
+  execution; this is not yet a multi-worker placement scheduler.
+- Real SciCapsule Hub v1 execution path: fail-closed validation of the
+  published `capsule.execute@1.0.0` process contract, bounded immutable
+  external artifact ingress, raw `POST /api/v1/artifacts`, CLI `artifact put`,
+  and an end-to-end regression using real SciCapsule pack/sign/policy/request
+  tooling with both successful execution and corrupted-capsule rejection.
+  Hub continues to delegate `.scicap` parsing, trust evaluation and bounded
+  capsule execution to SciCapsule.
+- Bounded parallel DAG workflow scheduling: explicit `max_concurrency`
+  (bounded to 1..=64), deterministic ready-set admission, dependency barriers,
+  fail-fast cancellation of active siblings, and restart-safe fail-closed
+  handling of interrupted workflows. Omitted concurrency preserves the
+  one-at-a-time default.
+- Workflow cancellation and retry attempts: persisted monotonic cancellation
+  intent propagates to active runs and prevents downstream admission; retry
+  policy supports bounded attempt count, optional fixed backoff and explicit
+  retryable failure categories. Every retry receives a fresh `AttemptId` and
+  `RunId`, with ordered attempt provenance persisted in workflow records.
+- Verified SciCapsule component-contract fixture and integration documentation,
+  establishing the ownership boundary before the real execution E2E landed.
 - Read-only MCP adapter (`hub-mcp`, binary `scirust-hub-mcp`, ADR-0007):
-  JSON-RPC 2.0 over NDJSON stdio mirroring scirust-mcp's protocol shape
-  (version `2025-06-18`). Tools: hub.status, hub.list_components (with
-  capability filter), hub.get_component, hub.list_runs/get_run,
-  hub.list_workflows/get_workflow, hub.list_artifacts/get_artifact.
-  Introspection only — no execution entry points; the adapter reaches a
-  running daemon over HTTP.
-
-### Added
-
+  JSON-RPC 2.0 over NDJSON stdio following the established SciRust MCP
+  discipline. It exposes Hub status/components/runs/workflows/artifacts and now
+  lifecycle-event introspection, while submission/execution remains outside
+  MCP pending an explicit authorization model.
 - Run reproduction closing the provenance loop:
   `POST /api/v1/runs/{id}/reproduce` and `scirust-hub run reproduce <id>
   [--wait]` re-submit a recorded run's exact stored spec as a new queued run
-  linked via `reproduced_from`. Guards: the component must still be
-  registered at the same version (drift is a validation error) and every
-  input artifact must still exist. `RunRecord.reproduced_from` is additive
-  and backward-compatible with stored records.
+  linked via `reproduced_from`. Component-version drift or missing input
+  artifacts fail closed before execution.
 - Capability discovery over HTTP: `GET /api/v1/components?capability=<name>`
   filters to latest manifests declaring that capability; malformed names
   return structured validation errors.
+- Sequential workflow orchestration foundation (ADR-0006): multi-step specs
+  with unique step keys, explicit `after` dependencies and cross-step artifact
+  references; deterministic DAG execution, per-step run provenance, SQLite
+  migration v2, HTTP endpoints and CLI verbs. Later bullets above extend this
+  foundation with cancellation, retries and bounded parallel scheduling.
+- Durable persistence (`hub-store-sqlite`): component, run, artifact and
+  workflow repository ports over embedded SQLite using WAL,
+  `synchronous=FULL`, forward-only migrations, canonical JSON snapshots and
+  parameterized SQL. `sqlite` is the daemon default; `memory` remains an
+  explicit ephemeral mode. Lifecycle events extend the same store in v3.
+- Declared output-file ingestion: process bindings declare named
+  workdir-relative outputs; `{output:<name>}` placeholders resolve directly in
+  argv, required outputs are enforced, and cleanly produced files are ingested
+  as immutable artifacts.
 
-### Added
+### Changed
 
-- Sequential workflow orchestration (ADR-0006): multi-step specs with unique
-  step keys, explicit `after` dependencies and cross-step input references
-  (`from_step`); deterministic topological execution via the DAG primitive,
-  fail-fast on step failure; per-step run provenance recorded in
-  `WorkflowRecord`s; SQLite migration v2 stores them durably; HTTP endpoints
-  (`POST/GET /api/v1/workflows[/{id}|/executions]`) and CLI
-  (`workflow submit/run/list/inspect`).
-
-### Added
-
-- Durable persistence (`hub-store-sqlite`): all three repository ports over
-  one embedded SQLite database — WAL journaling with `synchronous=FULL`,
-  forward-only migrations recorded in `schema_migrations`, canonical JSON
-  storage with projected columns for ordering/lookup, parameterized SQL only.
-- Daemon `--store sqlite|memory` switch; `sqlite` is the default so daemon
-  state survives restarts (proven by a kill -9 restart e2e test).
-
-- Declared output-file ingestion: process bindings may declare `outputs`
-  (name + workdir-relative path + media type + required flag); argv gains a
-  `{output:<name>}` placeholder; the orchestrator pre-creates output parent
-  directories, ingests produced files as artifacts after clean exits, and
-  fails runs whose required outputs were not produced.
+- Public documentation is reconciled through merged PR #14 so it no longer
+  describes workflows as sequential-only, remote execution as absent, or the
+  control-plane HTTP surface as wholly unauthenticated.
 
 ### Fixed
 
-- Store-level semantics pinned by tests to match the in-memory backend
-  exactly (lexicographic component-version ordering, idempotent replay,
-  digest-carrying conflicts, immutable artifact metadata rows).
+- Store-level semantics are pinned by tests to match the in-memory backend for
+  component ordering/replay/conflicts, deterministic record ordering and
+  immutable artifact metadata.
+- Remote workdir transport explicitly preserves empty/pre-created directories,
+  discovered by the distributed end-to-end regression.
 
 ## [0.1.0] - 2026-08-25
 
@@ -84,27 +103,27 @@ Foundation: first tested vertical slice.
   digests and conflict detection, capability discovery, run submission
   validation (declared capability, input port coverage, artifact existence,
   placeholder resolution), input materialization into per-run working
-  directories, stdout/stderr capture as content-addressed artifacts, full
-  run records as provenance.
+  directories, stdout/stderr capture as content-addressed artifacts, full run
+  records as provenance.
 - Execution (`hub-executor`): `ProcessExecutor` — structured argv, no shell,
   constructed environment, per-stream output caps with truncation flags,
   wall-clock timeout via kill+reap, cooperative cancellation; and a scripted
   `MockExecutor` for deterministic tests.
 - Persistence ports plus in-memory repositories and an atomic file-backed
   content-addressed blob store.
-- Wire protocol (`hub-protocol`): versioned DTOs, tolerant reader for
-  additive evolution, structured error envelope, explicit schema-version gate.
+- Wire protocol (`hub-protocol`): versioned DTOs, tolerant reader for additive
+  evolution, structured error envelope, explicit schema-version gate.
 - HTTP API (`hub-api`, axum): `/health`, `/ready`, `/api/v1/{components,
-  capabilities,runs,executions,artifacts}` with precise status-code mapping
-  and error envelopes.
-- Binaries: `scirust-hubd` daemon (config → tracing → stores → serve →
-  graceful shutdown) and `scirust-hub` CLI client with human/JSON output.
-- End-to-end proofs over real TCP: walking skeleton through the daemon and a
-  CLI-driven two-component pipeline with byte-exact artifact propagation.
+  capabilities,runs,executions,artifacts}` with precise status-code mapping and
+  error envelopes.
+- Binaries: `scirust-hubd` daemon and `scirust-hub` CLI client.
+- End-to-end proofs over real TCP: registration, discovery, submission,
+  execution, provenance transitions and byte-exact artifact propagation.
 - CI running fmt/clippy/build/test/doc with pinned actions.
 
-### Not included (deliberately)
+### Not included at 0.1.0
 
-- Durable registries (SQLite backend deferred behind repository traits).
-- Workflow/DAG execution scheduling; remote/container/capsule executors;
-  authentication on the HTTP surface. See README limitations and ADRs.
+The initial release did not yet include durable SQLite state, workflow
+scheduling, SciCapsule execution, remote workers, MCP, control-plane
+authentication or lifecycle events. Those capabilities are described under
+`Unreleased` above as they landed after the foundation.

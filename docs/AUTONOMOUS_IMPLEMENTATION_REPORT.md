@@ -1,172 +1,230 @@
-# Autonomous implementation report — SciRust Hub foundation
+# Autonomous implementation report — SciRust Hub
 
-Date: 2026-08-25
-Reconciled through: `main` @ `4461e8701ea38d70781e76b93d814c2c988584e6`
-Prepared for independent human review. Nothing here is claimed without a
-reproducible command or GitHub evidence for the referenced revision.
+Date: 2026-08-30  
+Reconciled through: `main` @ `f7de2829af40f8f54bfc17cf5dfec573e4c3cbcf`  
+Prepared for independent human review. Claims below are limited to merged
+repository behavior and the validation evidence recorded by the corresponding
+pull requests and GitHub Actions runs.
 
-## Scope completed
+## Current implemented scope
 
-A single-node control plane with tested vertical slices:
+SciRust Hub is now a durable control plane with local and remote execution
+rather than the single-node foundation described by the original report.
+Merged functionality includes:
 
-1. daemon starts, serves `/health`, `/ready`, `/api/v1/*`;
-2. component manifests register with content digests; identical replays are
-   accepted (`already_registered`), divergent content is `409`;
-3. capabilities are discoverable by exact name;
-4. run specs validate against the registry (capability declared, every input
-   port bound to an existing artifact, limits enforced);
-5. runs execute through the real process executor in per-run working
-   directories with materialized immutable input copies;
-6. stdout/stderr become content-addressed artifacts (capped, truncation
-   flagged);
-7. provenance-bearing run records persist (component identity/version,
-   contract version, params digest, input/output artifact digests, backend,
-   env var names, exit code, duration, full transition history);
-8. everything is queryable through HTTP and the CLI;
-9. registries and run records are durable across daemon restarts via
-   `hub-store-sqlite` (embedded SQLite, WAL + FULL sync, versioned migrations),
-   proven by a kill -9/restart e2e test;
-10. components can declare output files (`outputs:` with `{output:<name>}` argv
-    placeholders); the Hub pre-creates their parent directories, ingests them
-    byte-exactly on clean exits and fails runs whose required outputs are
-    missing;
-11. sequential workflow orchestration (ADR-0006) supports multi-step specs
-    with cross-step artifact references, deterministic topological execution,
-    fail-fast semantics, per-step provenance, SQLite migration v2, HTTP
-    endpoints and CLI verbs.
+1. component registration with content-digest identity, idempotent replay and
+   conflict rejection;
+2. capability discovery, including capability-filtered component lookup;
+3. immutable external artifact ingestion plus captured stdout/stderr and
+   declared output-file ingestion;
+4. provenance-bearing run records and run reproduction with component-version
+   and input-artifact drift guards;
+5. durable SQLite storage for components, runs, artifacts and workflows;
+6. workflow orchestration over the DAG with cross-step artifact references,
+   bounded parallelism, deterministic ready-set selection and fail-fast
+   semantics;
+7. persisted workflow cancellation propagated to active runs, plus opt-in
+   bounded retries with fresh attempt/run identities and attempt provenance;
+8. verified SciCapsule `capsule.execute@1.0.0` process-contract integration,
+   including a real SciCapsule end-to-end success/corruption regression;
+9. read-only MCP introspection over NDJSON stdio;
+10. an authenticated remote worker backend behind the existing synchronous
+    `Executor` port, with workdir transport, lease identity, liveness,
+    cancellation and duplicate attempt/result handling;
+11. optional control-plane bearer authentication for `/api/v1/*`, with
+    non-loopback binds refused when authentication is absent;
+12. a durable append-only lifecycle chronology, committed transactionally with
+    authoritative SQLite metadata mutations and exposed through HTTP, CLI and
+    MCP cursor reads.
 
-## PR history
+## Merged PR history
 
 | PR | Scope | Status |
 |---|---|---|
-| #1 `feat/hub-foundation` | domain, registry, runs, executor, API, CLI, e2e | merged |
-| #2 `feat/durable-sqlite-store` | SQLite persistence behind existing ports | merged |
-| #3 `feat/artifact-file-ingestion` | declared output-file ingestion | merged |
-| #4 `feat/workflow-orchestration` | sequential workflows over the DAG | merged |
+| #1 | Hub foundation: registry, runs, executor, artifacts, provenance, API/CLI | merged |
+| #2 | durable SQLite component/run/artifact persistence | merged |
+| #3 | declared output-file ingestion | merged |
+| #4 | sequential workflow/DAG orchestration foundation | merged |
+| #5 | documentation/DAG semantics reconciliation | merged |
+| #6 | run reproduction + capability-filtered discovery | merged |
+| #7 | read-only MCP adapter | merged |
+| #8 | verified SciCapsule Hub v1 contract fixture | merged |
+| #9 | workflow cancellation + retry attempts | merged |
+| #10 | bounded parallel DAG scheduling | merged |
+| #11 | real SciCapsule Hub v1 execution path + artifact ingress | merged |
+| #12 | authenticated distributed executor substrate | merged |
+| #13 | control-plane bearer authentication | merged |
+| #14 | durable lifecycle event log | merged |
 
-## Architecture
+## Architecture at PR #14
 
-- 5 crates + 2 binaries: `hub-core` (sync domain + ports + in-memory
-  backends), `hub-protocol` (versioned DTOs), `hub-executor` (process/mock),
-  `hub-api` (axum), `hub-store-sqlite` (durable repository adapter),
-  `scirust-hubd`, `scirust-hub`.
-- Executor port is synchronous by design; the async HTTP layer offloads via
-  `spawn_blocking` (ADR-0004). Run cancellation uses a cooperative token
-  checked by the executor between supervision polls.
-- Digests mirror SciRust's length-framed SHA-256 discipline but use hub-
-  namespaced domains (`scirust-hub:*`) so values are never confused with
-  monorepo digests (ADR-0004).
-- Persistence is accessed through repository traits. The daemon defaults to
-  SQLite via `hub-store-sqlite`; in-memory implementations remain available
-  for deterministic tests and explicit ephemeral operation.
-- Workflow execution is deliberately single-node, sequential and fail-fast;
-  parallel scheduling and distribution are not implied by the DAG model.
+Workspace roles remain separated:
 
-## Repository reconnaissance (real commits inspected)
+- `hub-core`: domain types, validation, digests, run/workflow state, DAG
+  scheduler, repository ports, provenance and in-memory backends;
+- `hub-protocol`: versioned Hub wire DTOs plus the versioned worker protocol;
+- `hub-executor`: local `ProcessExecutor`, test executor, remote executor and
+  remote worker service;
+- `hub-store-sqlite`: durable repositories and lifecycle-event chronology;
+- `hub-api`: thin axum adapter over domain/repository ports;
+- `hub-mcp`: read-only MCP adapter reaching a running Hub;
+- `scirust-hubd`: daemon composition root;
+- `scirust-hub`: CLI client;
+- `scirust-hub-worker`: standalone authenticated remote process worker.
 
-| Repository | Branch @ HEAD | Findings used |
-|---|---|---|
-| `Memorithm/scirust` | master @ 9301799 | MSRV 1.89, PolyForm Noncommercial; `Digest32` construction; `.scicap` manifest v1 schema (validated relative paths, sorted sha256-bound payloads); provenance = Merkle signing of emitted code (NOT run records); discovery = OT protocols; events-* = anomaly detection; MCP server with hash-chained audit |
-| `Memorithm/SciCapsule` | main | product bootstrap only (71 lines); format primitives intentionally in monorepo |
-| `Memorithm/forge` | main | evolutionary search driven by execution; forge-bridge = typed facade, "aucun service HTTP"; forge-worker = own TCP protocol |
-| `Memorithm/scirust-hub` | main | bootstrapped control-plane implementation; PRs #1-#4 merged |
+The synchronous `Executor` port remains the execution abstraction. The async
+HTTP layer does not own scheduling semantics. Local and remote backends feed
+observed outcomes back through the same Hub run/provenance machinery.
 
-Notably rejected assumptions: `scirust-ids` is intrusion detection (not typed
-IDs), `scirust-discovery` is OT protocol scanning (not a registry) — neither
-is reusable for Hub purposes.
+## Workflow execution semantics
 
-## Tests executed (exact commands and results)
+The original sequential workflow model has been extended, not replaced.
+`WorkflowSpec.max_concurrency` bounds parallel admission of independent DAG
+nodes. Omission retains the conservative single-concurrency behavior. The
+scheduler uses deterministic dependency/ready ordering, stops admitting new
+work after failure/cancellation and signals active sibling runs.
 
-The PR #4 head (`2948c60998aa18caeabe6d0fe51acdd016afc0ab`) recorded:
+Retries are opt-in. A retry policy bounds attempt count, optional fixed backoff
+and retryable observed failure categories. Every retry has a fresh `AttemptId`
+and fresh `RunId`; workflow provenance retains ordered attempt history.
+Cancellation is not retried.
+
+Restart behavior remains fail-closed for potentially side-effecting execution:
+persisted cancellation intent is reconciled, while a non-cancelled workflow
+left `running` across daemon lifetime boundaries is not silently replayed.
+
+## SciCapsule boundary
+
+Hub does not parse or redefine `.scicap`. The verified integration contract is
+`capsule.execute@1.0.0` and uses ordinary Hub process-component semantics:
+immutable `capsule`, `policy` and `request` artifacts are materialized; the
+configured SciCapsule executable receives direct argv placeholders and must
+produce the required machine-readable result output.
+
+SciCapsule/SciRust retain ownership of canonical capsule validation, detached
+signature/trust-policy evaluation, safe materialization/extraction and bounded
+entrypoint execution. Hub owns outer orchestration and provenance. The real E2E
+regression demonstrates both successful execution and corrupted-capsule
+rejection; it does not turn Hub into a capsule parser or OS sandbox.
+
+## Distributed executor boundary
+
+PR #12 introduced `scirust-hub-worker` and `RemoteExecutor` without changing
+the orchestrator's execution authority. The transport carries workdir-relative
+directory layout and immutable file bytes, so no shared filesystem is assumed.
+A worker advertises identity/protocol/capabilities/payload constraints and
+heartbeat interval. Each invocation has an attempt identity; payload drift
+under one attempt identity and conflicting duplicate results are rejected.
+Worker loss, stale heartbeat, protocol/identity drift and authorization failure
+fail closed as execution failures; cancellation is forwarded to the active
+lease.
+
+This is a real remote execution substrate but **not yet a multi-worker
+capability-aware placement scheduler**. One daemon remote backend is configured
+against one worker endpoint.
+
+## Authentication and transport security
+
+PR #13 protects `/api/v1/*` when `SCIRUST_HUB_TOKEN` is configured and refuses
+unauthenticated non-loopback daemon binds. CLI and MCP clients use the same
+environment token automatically. `/health` and `/ready` remain unauthenticated
+supervisor probes.
+
+The API retains only a SHA-256 verifier in shared HTTP state. This is
+shared-secret authentication, not per-principal authorization. It also does not
+provide transport confidentiality: Hub and worker still require a trusted TLS
+reverse proxy, service mesh or tunnel when crossing an untrusted network.
+Native TLS/mTLS and role-based authorization are not claimed.
+
+The remote worker uses its own worker bearer credential and trust boundary.
+Control-plane and worker credentials should not be conflated.
+
+## Durable lifecycle chronology
+
+PR #14 adds SQLite migration v3 with an append-only `lifecycle_events` table.
+Events cover component registration, artifact recording, run creation/state
+changes, workflow creation/state changes/cancellation and workflow attempt
+creation/state changes.
+
+For SQLite, the event append occurs in the same transaction as the metadata
+mutation that produced it. Identical registration/artifact replays do not add
+new events. Initial run snapshots expand the already-recorded transition list
+once; later run writes append only newly observed transitions.
+
+Readers use `sequence > after` with bounded pages ordered by sequence. Sequence
+is local to one Hub database and establishes append order; timestamps are not a
+global distributed ordering mechanism. HTTP, CLI and the read-only MCP adapter
+expose the cursor stream. The authoritative component/run/workflow/artifact
+records remain the source of truth; the event log is operational evidence, not
+event sourcing.
+
+## Validation evidence
+
+Every functional PR above passed the repository's standard gates before merge:
 
 ```text
-cargo fmt --all -- --check                                   → PASS
-cargo clippy --workspace --all-targets --all-features --locked \
-    -- -D warnings                                           → PASS (0 warnings)
-cargo build --workspace --all-targets --locked               → PASS
-cargo test --workspace --all-features --locked               → PASS, 96 passed / 0 failed / 0 ignored
-RUSTDOCFLAGS="-D warnings" cargo doc --workspace --no-deps   → PASS
-git diff --check                                             → clean
+cargo fmt --all -- --check
+cargo clippy --workspace --all-targets --all-features --locked -- -D warnings
+cargo build --workspace --all-targets --locked
+cargo test --workspace --all-features --locked
+RUSTDOCFLAGS='-D warnings' cargo doc --workspace --no-deps --locked
 ```
 
-The suite covers hub-core domain/workflow units, process-executor behavior
-(timeout/cancel/truncation/env isolation/argv verbatim), protocol
-round-trips, API router tests, SQLite migrations/durability and end-to-end
-flows through the real daemon/CLI.
+For the latest merged functional increment (#14), the exact cleaned PR head
+`97e70391026232ee2d6b70be390ec8dcba584823` passed final CI run
+`33303575051`, including format, Clippy, build, tests and rustdoc. Its separate
+pre-PR validation run `33303404912` also passed focused regressions for
+in-memory event cursoring, SQLite event idempotency/reopen durability and HTTP
+cursor pagination.
 
-The demo pipeline was also executed during foundation validation:
-`cargo run -p scirust-hubd --example demo_pipeline` → two-stage pipeline
-succeeded, final output `{"TEXT":"SCIRUST-HUB"}` with both provenance lines.
+Earlier high-value focused evidence recorded in the merged PRs includes:
 
-## Dependency changes
+- #9: cancellation/retry identity, exhaustion, active cancellation and restart
+  reconciliation tests;
+- #10: independent-node parallelism, dependency barriers, bounded concurrency,
+  queued-work cancellation and interrupted-workflow restart handling;
+- #11: real SciCapsule pack/sign/policy/request/execute flow plus corrupted
+  capsule rejection;
+- #12: remote transport/materialization, bad-auth, unavailable-worker,
+  duplicate-attempt and conflicting-result regressions;
+- #13: API bearer-auth and unauthenticated non-loopback refusal regressions.
 
-Dependencies introduced through PRs #1-#4 include `serde`, `serde_json`,
-`thiserror`, `uuid` (v4 ids), `sha2` (digests), `clap` (CLI/daemon flags),
-`axum`+`tokio` (HTTP adapter only), `tower`/`http-body-util` (dev/test),
-`tracing`/`tracing-subscriber`, `ureq` (blocking CLI HTTP client) and
-`rusqlite` with bundled SQLite for the durable store. Their responsibilities
-remain isolated behind the relevant adapter boundaries.
+No performance, security-isolation or scientific claims are inferred from
+these functional tests beyond what they directly exercise.
 
-## Integration findings
+## Current security limitations
 
-- The natural future Hub↔SciCapsule seam is `scirust-capsule-schema`'s
-  validated manifest v1; execution remains uncontracted ("does not implement
-  … execution"), so the Hub registers nothing capsule-shaped yet rather than
-  faking it.
-- Forge offers no service contract today (bridge-only facade); any Hub
-  integration must wait for one or wrap forge-worker's TCP protocol
-  deliberately.
-- SciRust's MCP server suggests a future MCP adapter exposing Hub
-  capabilities; domain independence is preserved so that stays additive.
+- Local and remote process execution is **not an OS sandbox**. Children inherit
+  resources reachable by the daemon/worker OS identity.
+- Control-plane authentication is one shared bearer secret, not users/roles or
+  fine-grained authorization.
+- Hub and worker do not terminate native TLS/mTLS.
+- Remote execution currently targets one configured worker endpoint; there is
+  no trusted multi-worker scheduler/placement policy.
+- Lifecycle attributes intentionally exclude token values, environment values
+  and captured process payloads, but anyone authorized for `/api/v1` can read
+  the lifecycle endpoint under the current coarse-grained model.
 
-## Known limitations
+## Current functional limitations
 
-- Artifact tracking covers captured streams and explicitly declared output
-  files; undeclared files written into a run working directory are ignored.
-- Capability queries are exact-name matches; no predicate/constraint search.
-- Workflow execution is sequential and fail-fast. Parallel scheduling,
-  retries and distributed execution are not implemented.
-- `WorkflowState::Cancelled` exists, but workflow cancellation is not yet
-  wired to a currently running step/run.
-- No authentication/TLS; bind to localhost.
+- A multi-worker registry/placement scheduler is not implemented.
+- A container/sandbox executor is not implemented.
+- Only declared output files and captured streams are tracked; undeclared
+  workdir files are ignored.
+- MCP remains read-only; execution tools await a deliberate authorization
+  model.
+- An exported metrics surface is still missing even though the durable event
+  chronology now provides a strong source for operational counters.
+- Native TLS/mTLS and principal/role authorization remain future work.
+- Repository licensing remains an explicit unresolved decision; no license
+  file is present.
 
-## Deferred work (deliberate)
+## Recommended next implementation
 
-Workflow cancellation propagation; parallel scheduling; retry policy;
-remote/container/SciCapsule executors; optional output-file glob ingestion;
-metrics; lifecycle event log; authentication/TLS; and shared ecosystem
-protocol extraction if/when a cross-repository consumer justifies it.
-
-## Security limitations
-
-Subprocesses are resource-controlled, not sandboxed (see SECURITY.md).
-HTTP surface is unauthenticated. Unknown-field tolerance on read means new
-fields can appear before validation rules exist for them; strictness is at
-domain construction time instead.
-
-## Potential review hotspots
-
-- `hub-core/src/orchestrator.rs`: placeholder substitution, run claims,
-  workflow artifact resolution and fail-fast transitions.
-- `hub-executor/src/lib.rs`: reader-thread capping semantics and kill/reap
-  ordering.
-- Protocol tolerance policy: unknown fields allowed on read (documented in
-  CHANGELOG/protocol docs) — confirm this matches ecosystem expectations.
-- Idempotency scope: registration replays are canonical-content equivalent;
-  whitespace differences in incoming JSON normalize away through protocol
-  deserialization/re-serialization before domain storage.
-
-## CI status
-
-PR #4 head `2948c60998aa18caeabe6d0fe51acdd016afc0ab` has GitHub Actions CI run
-`32853488193` with conclusion **success**. The workflow runs the repository
-fmt / clippy (`-D warnings`) / build / test / rustdoc gates. This supersedes
-the earlier foundation-era billing-blocker note.
-
-## Recommended next PR
-
-Wire workflow cancellation through the active step/run and expose it through
-the existing HTTP/CLI workflow surface, while preserving the current
-sequential scheduling semantics. The cancellation path should be race-tested
-and must leave both workflow and active run provenance in coherent terminal
-states.
+Build a small operational metrics surface from authoritative Hub state and/or
+the durable lifecycle chronology without introducing a second mutable counter
+store. Prefer low-cardinality metrics (run/workflow terminal states, artifact
+counts/bytes, event high-water mark, executor/backend identity where safe) and
+avoid component/run/workflow UUID labels. The endpoint's authentication and
+information-disclosure boundary must be explicit, and metric derivation must
+remain reproducible from persisted Hub data.
