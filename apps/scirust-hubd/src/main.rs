@@ -98,6 +98,8 @@ enum DaemonError {
     Store(String),
     #[error("invalid execution configuration: {0}")]
     ExecutorConfig(String),
+    #[error("invalid control-plane security configuration: {0}")]
+    SecurityConfig(String),
 }
 
 impl From<hub_core::CoreError> for DaemonError {
@@ -145,6 +147,16 @@ fn run(args: Args) -> Result<(), DaemonError> {
         address: args.listen.clone(),
         source,
     })?;
+    let api_token = std::env::var("SCIRUST_HUB_TOKEN")
+        .ok()
+        .filter(|token| !token.is_empty());
+    validate_control_plane_security(listen, api_token.as_deref())?;
+    if !listen.ip().is_loopback() {
+        tracing::warn!(
+            %listen,
+            "control plane is non-loopback: bearer auth is enabled, but HTTP is plaintext; terminate TLS at a trusted boundary"
+        );
+    }
 
     std::fs::create_dir_all(&args.data_dir).map_err(|source| DaemonError::DataDir {
         path: args.data_dir.clone(),
@@ -239,7 +251,13 @@ fn run(args: Args) -> Result<(), DaemonError> {
         .map_err(DaemonError::Serve)?;
 
     runtime.block_on(async move {
-        let app = hub_api::router(HubState::new(orchestrator));
+        let mut state = HubState::new(orchestrator);
+        if let Some(token) = api_token {
+            state = state
+                .with_bearer_token(token)
+                .map_err(|error| DaemonError::SecurityConfig(error.to_string()))?;
+        }
+        let app = hub_api::router(state);
         let listener = tokio::net::TcpListener::bind(listen)
             .await
             .map_err(DaemonError::Serve)?;
@@ -248,6 +266,18 @@ fn run(args: Args) -> Result<(), DaemonError> {
             .await
             .map_err(DaemonError::Serve)
     })
+}
+
+fn validate_control_plane_security(
+    listen: SocketAddr,
+    api_token: Option<&str>,
+) -> Result<(), DaemonError> {
+    if !listen.ip().is_loopback() && api_token.is_none() {
+        return Err(DaemonError::SecurityConfig(format!(
+            "refusing unauthenticated non-loopback bind {listen}; set SCIRUST_HUB_TOKEN"
+        )));
+    }
+    Ok(())
 }
 
 async fn shutdown_signal() {
@@ -282,4 +312,22 @@ fn init_tracing() {
         .with_env_filter(filter)
         .with_writer(std::io::stderr)
         .try_init();
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn loopback_may_remain_unauthenticated_for_local_compatibility() {
+        let listen: SocketAddr = "127.0.0.1:8477".parse().unwrap();
+        assert!(validate_control_plane_security(listen, None).is_ok());
+    }
+
+    #[test]
+    fn non_loopback_bind_requires_control_plane_token() {
+        let listen: SocketAddr = "0.0.0.0:8477".parse().unwrap();
+        assert!(validate_control_plane_security(listen, None).is_err());
+        assert!(validate_control_plane_security(listen, Some("secret")).is_ok());
+    }
 }

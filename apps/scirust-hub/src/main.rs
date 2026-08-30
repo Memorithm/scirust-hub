@@ -573,6 +573,13 @@ fn url_of(args: &Args, path: &str) -> String {
     format!("{}{path}", args.url)
 }
 
+fn authorized(request: ureq::Request) -> ureq::Request {
+    match std::env::var("SCIRUST_HUB_TOKEN") {
+        Ok(token) if !token.is_empty() => request.set("Authorization", &format!("Bearer {token}")),
+        _ => request,
+    }
+}
+
 /// Distinguishes API rejections (structured envelope body kept) from
 /// transport failures.
 fn request_error(e: ureq::Error) -> CliError {
@@ -594,7 +601,7 @@ fn request_error(e: ureq::Error) -> CliError {
 
 #[allow(clippy::result_large_err)] // CliError keeps full API context
 fn get(path_url: String) -> Result<Value, CliError> {
-    ureq::get(&path_url)
+    authorized(ureq::get(&path_url))
         .call()
         .map_err(request_error)?
         .into_json()
@@ -603,7 +610,7 @@ fn get(path_url: String) -> Result<Value, CliError> {
 
 #[allow(clippy::result_large_err)] // CliError keeps full API context
 fn post_empty(path_url: String) -> Result<Value, CliError> {
-    ureq::post(&path_url)
+    authorized(ureq::post(&path_url))
         .call()
         .map_err(request_error)?
         .into_json()
@@ -617,7 +624,7 @@ fn send_artifact(
     media_type: &str,
     bytes: &[u8],
 ) -> Result<Value, CliError> {
-    ureq::post(path_url)
+    authorized(ureq::post(path_url))
         .set("x-scirust-artifact-name", name)
         .set("content-type", media_type)
         .send_bytes(bytes)
@@ -628,7 +635,7 @@ fn send_artifact(
 
 #[allow(clippy::result_large_err)] // CliError keeps full API context
 fn send_json(request: ureq::Request, payload: Value) -> Result<Value, CliError> {
-    request
+    authorized(request)
         .send_json(payload)
         .map_err(request_error)?
         .into_json()

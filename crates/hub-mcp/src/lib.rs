@@ -35,6 +35,7 @@ pub trait HubFetcher: Send + Sync {
 /// HTTP implementation against the daemon's `/api/v1`.
 pub struct HttpHub {
     base_url: String,
+    bearer_token: Option<String>,
 }
 
 impl HttpHub {
@@ -42,13 +43,23 @@ impl HttpHub {
     pub fn new(base_url: impl Into<String>) -> Self {
         Self {
             base_url: base_url.into(),
+            bearer_token: std::env::var("SCIRUST_HUB_TOKEN")
+                .ok()
+                .filter(|token| !token.is_empty()),
+        }
+    }
+
+    fn authorized(&self, request: ureq::Request) -> ureq::Request {
+        match &self.bearer_token {
+            Some(token) => request.set("Authorization", &format!("Bearer {token}")),
+            None => request,
         }
     }
 }
 
 impl HubFetcher for HttpHub {
     fn get_json(&self, path: &str) -> Result<Value, String> {
-        ureq::get(&format!("{}{path}", self.base_url))
+        self.authorized(ureq::get(&format!("{}{path}", self.base_url)))
             .call()
             .map_err(|e| format!("hub request failed: {e}"))?
             .into_json::<Value>()
@@ -56,7 +67,7 @@ impl HubFetcher for HttpHub {
     }
 
     fn post_json(&self, path: &str, body: &Value) -> Result<Value, String> {
-        ureq::post(&format!("{}{path}", self.base_url))
+        self.authorized(ureq::post(&format!("{}{path}", self.base_url)))
             .send_json(body.clone())
             .map_err(|e| format!("hub request failed: {e}"))?
             .into_json::<Value>()

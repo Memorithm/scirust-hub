@@ -55,6 +55,7 @@ pub fn check_schema_version(found: u16) -> Result<(), ProtocolError> {
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum ErrorCode {
     BadRequest,
+    Unauthorized,
     UnsupportedSchemaVersion,
     Validation,
     NotFound,
@@ -67,6 +68,7 @@ impl ErrorCode {
     pub const fn as_str(self) -> &'static str {
         match self {
             ErrorCode::BadRequest => "bad_request",
+            ErrorCode::Unauthorized => "unauthorized",
             ErrorCode::UnsupportedSchemaVersion => "unsupported_schema_version",
             ErrorCode::Validation => "validation_failed",
             ErrorCode::NotFound => "not_found",
@@ -135,6 +137,7 @@ impl<'de> Deserialize<'de> for ErrorCode {
         let raw = String::deserialize(deserializer)?;
         match raw.as_str() {
             "bad_request" => Ok(ErrorCode::BadRequest),
+            "unauthorized" => Ok(ErrorCode::Unauthorized),
             "unsupported_schema_version" => Ok(ErrorCode::UnsupportedSchemaVersion),
             "validation_failed" => Ok(ErrorCode::Validation),
             "not_found" => Ok(ErrorCode::NotFound),
@@ -144,6 +147,7 @@ impl<'de> Deserialize<'de> for ErrorCode {
                 other,
                 &[
                     "bad_request",
+                    "unauthorized",
                     "unsupported_schema_version",
                     "validation_failed",
                     "not_found",
