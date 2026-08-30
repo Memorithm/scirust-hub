@@ -32,6 +32,12 @@ The TLS daemon path uses `axum-server`'s handle-based graceful shutdown with a
 30-second drain bound. The plaintext path retains Axum's existing graceful
 shutdown behavior.
 
+Both binaries explicitly install Rustls' AWS-LC provider at process startup.
+This is required because Cargo feature unification can make both AWS-LC and
+`ring` available once server TLS and the remote HTTP client coexist; Rustls
+refuses to guess between multiple providers. Explicit installation also covers
+the daemon's HTTPS worker-client path when the Hub server itself remains HTTP.
+
 ## Client trust
 
 `RemoteExecutor` already accepts `https://` endpoints through its TLS-enabled

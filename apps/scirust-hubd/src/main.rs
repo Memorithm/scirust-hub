@@ -206,7 +206,16 @@ fn tls_files(cert: Option<PathBuf>, key: Option<PathBuf>) -> Result<Option<TlsFi
     }
 }
 
+fn install_rustls_crypto_provider() {
+    let _ = rustls::crypto::aws_lc_rs::default_provider().install_default();
+}
+
 fn run(args: Args) -> Result<(), DaemonError> {
+    // Cargo feature unification can make both built-in Rustls providers
+    // available through the server and HTTP-client dependency graph. Select
+    // one process-wide provider before either server or remote-client TLS can
+    // construct a Rustls config.
+    install_rustls_crypto_provider();
     init_tracing();
 
     let listen: SocketAddr = args.listen.parse().map_err(|source| DaemonError::Listen {
@@ -397,6 +406,12 @@ fn init_tracing() {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn rustls_crypto_provider_is_installed_explicitly() {
+        install_rustls_crypto_provider();
+        assert!(rustls::crypto::CryptoProvider::get_default().is_some());
+    }
 
     #[test]
     fn tls_configuration_requires_cert_and_key_together() {

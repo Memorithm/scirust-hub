@@ -35,6 +35,7 @@ sha2 = "0.10"
 clap = { version = "4", features = ["derive", "env"] }
 axum = { version = "0.8", default-features = false, features = ["http1", "json", "tokio", "query"] }
 axum-server = { version = "0.8", features = ["tls-rustls"] }
+rustls = { version = "0.23", default-features = false, features = ["aws_lc_rs"] }
 tokio = { version = "1", features = ["rt-multi-thread", "net", "macros", "signal", "time"] }
 tower = { version = "0.5", features = ["util"] }
 tracing = "0.1"

@@ -15,6 +15,7 @@ hub-api = { workspace = true }
 axum = { workspace = true }
 tokio = { workspace = true }
 axum-server = { workspace = true }
+rustls = { workspace = true }
 clap = { workspace = true }
 tracing = { workspace = true }
 tracing-subscriber = { workspace = true }

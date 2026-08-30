@@ -81,7 +81,15 @@ fn tls_files(cert: Option<PathBuf>, key: Option<PathBuf>) -> Result<Option<TlsFi
     }
 }
 
+fn install_rustls_crypto_provider() {
+    let _ = rustls::crypto::aws_lc_rs::default_provider().install_default();
+}
+
 fn run(args: Args) -> Result<(), WorkerError> {
+    // Select the process-level provider explicitly before Rustls configuration
+    // is built; this is robust to additive Cargo features enabling both
+    // built-in providers elsewhere in the dependency graph.
+    install_rustls_crypto_provider();
     let listen: SocketAddr = args
         .listen
         .parse()
@@ -128,6 +136,12 @@ fn run(args: Args) -> Result<(), WorkerError> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn rustls_crypto_provider_is_installed_explicitly() {
+        install_rustls_crypto_provider();
+        assert!(rustls::crypto::CryptoProvider::get_default().is_some());
+    }
 
     #[test]
     fn tls_configuration_requires_cert_and_key_together() {
