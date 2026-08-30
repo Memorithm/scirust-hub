@@ -114,8 +114,15 @@ cargo run -p scirust-hubd -- --executor remote --data-dir ./hub-data
 The worker bearer token is a separate trust boundary from
 `SCIRUST_HUB_TOKEN`. Plain HTTP does not protect either credential on an
 untrusted network; use a trusted private/tunneled/TLS boundary for remote
-traffic. The current remote backend targets one configured worker endpoint; a
-multi-worker placement scheduler is not claimed.
+traffic. A single configured URL retains the original direct `RemoteExecutor`.
+Repeating `--remote-worker-url` (or comma-separating
+`SCIRUST_HUB_REMOTE_WORKER_URL`) enables a configured worker pool. The pool
+queries every worker descriptor before dispatch, skips unavailable or
+incompatible endpoints, rejects duplicate worker identities, and selects the
+lowest local in-flight count with worker-id/endpoint tie-breaking. Once selected,
+a run stays pinned to that worker; an ambiguous post-dispatch transport failure
+is never replayed elsewhere. All configured workers currently share the same
+environment-only worker bearer token.
 
 ## Workflows
 
@@ -261,14 +268,16 @@ RUSTDOCFLAGS='-D warnings' cargo doc --workspace --no-deps --locked
 CI additionally contains focused integration/regression coverage for daemon and
 CLI flows, crash/restart durability, SciCapsule contract execution, workflow
 cancellation/retries/parallelism, remote worker transport/idempotency/liveness,
-control-plane authentication and lifecycle-event cursor durability.
+control-plane authentication, lifecycle-event cursor durability and
+configured multi-worker placement/identity safety.
 
 ## Current limitations
 
 - Process execution remains **not sandboxed**. Local and remote worker children
   inherit the privileges available to their daemon/worker OS identity.
-- The remote executor targets one configured worker endpoint; there is no
-  multi-worker capability-aware placement scheduler yet.
+- Multi-worker execution is a configured pool with descriptor discovery
+  and deterministic local-load placement; there is not yet a dynamic worker
+  registration/expiry service or resource-aware global scheduler.
 - Bearer authentication is shared-secret authentication, not fine-grained
   authorization. There are no principals/roles yet.
 - Hub and worker do not provide native TLS/mTLS; trusted TLS/tunnel boundaries

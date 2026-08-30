@@ -62,6 +62,41 @@ impl RemoteExecutor {
         self
     }
 
+    pub(crate) fn endpoint(&self) -> &str {
+        &self.endpoint
+    }
+
+    pub(crate) fn discover_eligible(&self) -> Result<WorkerDescriptor, String> {
+        let descriptor = self.describe().map_err(|error| match error {
+            RemoteCallError::Authorization => "authorization refused".to_owned(),
+            other => format!("unavailable: {other}"),
+        })?;
+        if descriptor.protocol_version != WORKER_PROTOCOL_VERSION {
+            return Err(format!(
+                "protocol {} unsupported; expected {}",
+                descriptor.protocol_version, WORKER_PROTOCOL_VERSION
+            ));
+        }
+        if !descriptor
+            .capabilities
+            .iter()
+            .any(|capability| capability == PROCESS_EXECUTION_CAPABILITY)
+        {
+            return Err(format!(
+                "worker {} lacks capability {}",
+                descriptor.worker_id, PROCESS_EXECUTION_CAPABILITY
+            ));
+        }
+        let descriptor_limit = usize::try_from(descriptor.max_payload_bytes).unwrap_or(usize::MAX);
+        if self.max_payload_bytes > descriptor_limit {
+            return Err(format!(
+                "worker payload limit {} is below configured client limit {}",
+                descriptor.max_payload_bytes, self.max_payload_bytes
+            ));
+        }
+        Ok(descriptor)
+    }
+
     fn url(&self, path: &str) -> String {
         format!("{}{path}", self.endpoint)
     }

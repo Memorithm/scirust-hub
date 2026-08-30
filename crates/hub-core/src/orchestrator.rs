@@ -15,7 +15,7 @@ use crate::capability::{Capability, CapabilityName};
 use crate::clock::{Clock, UnixMillis};
 use crate::component::{ComponentManifest, ExecutionBinding};
 use crate::error::CoreError;
-use crate::exec::{CancelToken, ExecutionOutcome, ExecutionRequest, Executor};
+use crate::exec::{CancelToken, ExecutionOutcome, ExecutionReport, ExecutionRequest, Executor};
 use crate::id::{ArtifactId, AttemptId, ComponentId, RunId, WorkflowId};
 use crate::limits::Limits;
 use crate::memory::FileSystemArtifactStore;
@@ -400,7 +400,8 @@ impl Orchestrator {
         record.transition(RunState::Running, started_at)?;
         self.runs.put(&record)?;
 
-        let outcome = self.run_process(&mut record, &binding, &workdir, token)?;
+        let report = self.run_process(&mut record, &binding, &workdir, token)?;
+        let outcome = report.outcome;
         let finished_at = self.clock.now_ms();
         let duration_ms = finished_at.saturating_sub(started_at);
         let params_digest = record.spec.params_digest()?;
@@ -450,7 +451,7 @@ impl Orchestrator {
             signal: outcome.signal,
             timed_out: outcome.timed_out,
             cancelled: outcome.cancelled,
-            executor_backend: self.executor.backend_id().to_owned(),
+            executor_backend: report.backend_id,
             duration_ms,
             inputs: input_provenance,
             outputs,
@@ -484,7 +485,7 @@ impl Orchestrator {
         binding: &Option<ExecutionBinding>,
         workdir: &std::path::Path,
         token: &CancelToken,
-    ) -> Result<ExecutionOutcome, CoreError> {
+    ) -> Result<ExecutionReport, CoreError> {
         let request = match self.build_request(&record.spec, binding, workdir) {
             Ok(request) => request,
             // Unreachable in practice thanks to submission-time checks; kept
@@ -496,35 +497,41 @@ impl Orchestrator {
                 return Err(e);
             }
         };
-        match self.executor.execute(&request, token) {
-            Ok(outcome) => Ok(outcome),
+        match self.executor.execute_report(&request, token) {
+            Ok(report) => Ok(report),
             Err(crate::error::ExecutorFailure::TimedOut { timeout_ms }) => {
                 // The backend enforced the timeout; surface it as a timed-out
                 // outcome so provenance stays complete instead of erroring.
-                Ok(ExecutionOutcome {
+                Ok(ExecutionReport {
+                    backend_id: self.executor.backend_id().to_owned(),
+                    outcome: ExecutionOutcome {
+                        exit_code: None,
+                        signal: None,
+                        timed_out: true,
+                        cancelled: false,
+                        start_error: None,
+                        duration_ms: timeout_ms,
+                        stdout: Vec::new(),
+                        stdout_truncated: false,
+                        stderr: Vec::new(),
+                        stderr_truncated: false,
+                    },
+                })
+            }
+            Err(crate::error::ExecutorFailure::Cancelled) => Ok(ExecutionReport {
+                backend_id: self.executor.backend_id().to_owned(),
+                outcome: ExecutionOutcome {
                     exit_code: None,
                     signal: None,
-                    timed_out: true,
-                    cancelled: false,
+                    timed_out: false,
+                    cancelled: true,
                     start_error: None,
-                    duration_ms: timeout_ms,
+                    duration_ms: 0,
                     stdout: Vec::new(),
                     stdout_truncated: false,
                     stderr: Vec::new(),
                     stderr_truncated: false,
-                })
-            }
-            Err(crate::error::ExecutorFailure::Cancelled) => Ok(ExecutionOutcome {
-                exit_code: None,
-                signal: None,
-                timed_out: false,
-                cancelled: true,
-                start_error: None,
-                duration_ms: 0,
-                stdout: Vec::new(),
-                stdout_truncated: false,
-                stderr: Vec::new(),
-                stderr_truncated: false,
+                },
             }),
             Err(crate::error::ExecutorFailure::Backend { reason }) => {
                 Err(CoreError::ExecutionFailed {
@@ -1857,6 +1864,45 @@ mod tests {
         }
     }
 
+    struct ReportedExecutor;
+
+    impl Executor for ReportedExecutor {
+        fn backend_id(&self) -> &str {
+            "remote-pool"
+        }
+
+        fn execute(
+            &self,
+            _request: &ExecutionRequest,
+            _cancel: &CancelToken,
+        ) -> Result<ExecutionOutcome, crate::error::ExecutorFailure> {
+            Ok(ExecutionOutcome {
+                exit_code: Some(0),
+                signal: None,
+                timed_out: false,
+                cancelled: false,
+                start_error: None,
+                duration_ms: 1,
+                stdout: Vec::new(),
+                stdout_truncated: false,
+                stderr: Vec::new(),
+                stderr_truncated: false,
+            })
+        }
+
+        fn execute_report(
+            &self,
+            request: &ExecutionRequest,
+            cancel: &CancelToken,
+        ) -> Result<ExecutionReport, crate::error::ExecutorFailure> {
+            self.execute(request, cancel)
+                .map(|outcome| ExecutionReport {
+                    outcome,
+                    backend_id: "remote:worker-a@http://worker-a".into(),
+                })
+        }
+    }
+
     struct TestHub {
         orch: Orchestrator,
         artifacts: Arc<InMemoryArtifactMeta>,
@@ -1898,6 +1944,28 @@ mod tests {
         )
     }
 
+    fn hub_with_executor(executor: Arc<dyn Executor>) -> TestHub {
+        let dir = std::env::temp_dir().join(format!("hub-orch-report-{}", uuid::Uuid::new_v4()));
+        std::fs::create_dir_all(&dir).expect("mkdir");
+        let artifacts = Arc::new(InMemoryArtifactMeta::default());
+        let orch = Orchestrator::new(
+            Arc::new(ManualClock::starting_at(2_000)),
+            Arc::new(InMemoryComponents::default()),
+            Arc::new(InMemoryRuns::default()),
+            artifacts.clone(),
+            Arc::new(InMemoryWorkflows::default()),
+            FileSystemArtifactStore::open(dir.join("blobs")).expect("blobs"),
+            executor,
+            Limits::default(),
+            dir.join("workdirs"),
+        );
+        TestHub {
+            orch,
+            artifacts,
+            dir,
+        }
+    }
+
     fn echo_manifest(id: ComponentId) -> ComponentManifest {
         ComponentManifest::new_v1(
             id,
@@ -1924,6 +1992,30 @@ mod tests {
             BTreeMap::new(),
         )
         .expect("m")
+    }
+
+    #[test]
+    fn per_invocation_executor_target_is_recorded_in_run_provenance() {
+        let hub = hub_with_executor(Arc::new(ReportedExecutor));
+        let manifest = echo_manifest(ComponentId::generate());
+        hub.orch
+            .register_component(manifest.clone())
+            .expect("register");
+        let submitted = hub
+            .orch
+            .submit_run(RunSpec {
+                component: manifest.id,
+                capability: CapabilityName::parse("demo.echo").expect("cap"),
+                parameters: BTreeMap::new(),
+                inputs: Vec::new(),
+                timeout_ms: 1_000,
+            })
+            .expect("submit");
+        let finished = hub.orch.execute_run(submitted.id).expect("execute");
+        assert_eq!(
+            finished.outcome.expect("outcome").executor_backend,
+            "remote:worker-a@http://worker-a"
+        );
     }
 
     #[test]

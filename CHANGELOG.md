@@ -8,6 +8,14 @@ pre-1.0 (`0.x`), so minor bumps may contain breaking changes.
 
 ### Added
 
+- Configured multi-worker remote placement: repeating `--remote-worker-url`
+  (or comma-separating `SCIRUST_HUB_REMOTE_WORKER_URL`) discovers compatible
+  worker descriptors before dispatch and deterministically selects the lowest
+  Hub-local in-flight target. Duplicate worker identities fail closed; once a
+  target is selected there is no ambiguous post-dispatch failover. Per-run
+  provenance records the concrete selected worker target while single-worker
+  remote mode remains compatible.
+
 - Durable append-only lifecycle event log (ADR-0012): SQLite migration v3
   records component, artifact, run, workflow and workflow-attempt lifecycle
   changes in the same transaction as authoritative metadata writes. Cursor
