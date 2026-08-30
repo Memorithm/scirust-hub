@@ -204,6 +204,23 @@ Results are ordered by monotonically increasing store-local `sequence` and
 return `next_after` for the next page. The read-only MCP adapter exposes the
 same chronology as `hub.list_events`.
 
+## Metrics
+
+Hub exposes low-cardinality Prometheus text metrics at `GET /metrics`. The
+snapshot is recomputed from authoritative persisted records on every scrape;
+there is no independent mutable counter store to drift after restart.
+
+```bash
+curl -H "Authorization: Bearer $SCIRUST_HUB_TOKEN" \
+  http://127.0.0.1:8477/metrics
+```
+
+The initial surface reports build/executor info, component-manifest count,
+run/workflow counts by state, retained workflow-attempt count, artifact count
+and logical bytes, plus the lifecycle-event high-water sequence. Entity UUIDs
+are deliberately not used as labels. `/metrics` follows the same bearer policy
+as `/api/v1`.
+
 ## MCP introspection
 
 `scirust-hub-mcp` is a read-only MCP server over NDJSON stdio. It reaches the
@@ -260,7 +277,5 @@ control-plane authentication and lifecycle-event cursor durability.
   files written into a workdir are ignored.
 - SciCapsule is integrated through its verified versioned process contract,
   not by moving capsule parsing/extraction into Hub.
-- The lifecycle stream exists, but an exported metrics surface has not yet
-  landed.
 - Licensing remains an explicit open repository decision; no license file is
   currently present.

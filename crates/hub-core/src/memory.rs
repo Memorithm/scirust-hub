@@ -389,6 +389,10 @@ impl LifecycleEventRepository for InMemoryHubStore {
     ) -> Result<Vec<LifecycleEvent>, CoreError> {
         self.events.list_after(after_sequence, limit)
     }
+
+    fn high_water_sequence(&self) -> Result<u64, CoreError> {
+        self.events.high_water_sequence()
+    }
 }
 
 fn poison<T>(_e: T) -> CoreError {

@@ -14,6 +14,10 @@ pre-1.0 (`0.x`), so minor bumps may contain breaking changes.
   reads are exposed as `GET /api/v1/events?after=&limit=`, `scirust-hub event
   list`, and read-only MCP tool `hub.list_events`; ephemeral memory mode uses
   an equivalent composite store.
+- Derived low-cardinality operational metrics (ADR-0013): authenticated
+  `GET /metrics` emits Prometheus text format 0.0.4 from authoritative
+  component/run/workflow/artifact state plus the lifecycle event high-water
+  mark. No mutable metrics store or entity-UUID labels are introduced.
 - Control-plane bearer authentication (ADR-0011): `SCIRUST_HUB_TOKEN` protects
   `/api/v1/*`; `/health` and `/ready` remain supervisor probes. Non-loopback
   Hub binds fail closed without a token. CLI/MCP clients attach the token from

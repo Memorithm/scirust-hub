@@ -5,6 +5,8 @@
 //! delegate, map errors. Domain calls are blocking; handlers offload them to
 //! `spawn_blocking`.
 
+mod metrics;
+
 use std::collections::BTreeMap;
 use std::sync::Arc;
 
@@ -57,8 +59,9 @@ impl HubState {
         self
     }
 
-    /// Enables bearer authentication for all `/api/v1/*` routes. Only a
-    /// SHA-256 verifier is retained in shared state; the plaintext token is
+    /// Enables bearer authentication for protected control-plane routes
+    /// (`/api/v1/*` and `/metrics`). Only a SHA-256 verifier is retained in
+    /// shared state; the plaintext token is
     /// discarded after construction.
     ///
     /// # Errors
@@ -104,6 +107,7 @@ pub fn router(state: HubState) -> Router {
         )
         .route("/api/v1/artifacts/{id}", get(get_artifact))
         .route("/api/v1/events", get(list_lifecycle_events))
+        .route("/metrics", get(prometheus_metrics))
         .route_layer(middleware::from_fn_with_state(
             state.clone(),
             require_api_bearer,
@@ -158,6 +162,26 @@ fn digest_eq(left: &[u8; 32], right: &[u8; 32]) -> bool {
 // ----------------------------------------------------------------------
 // Handlers
 // ----------------------------------------------------------------------
+
+async fn prometheus_metrics(State(state): State<HubState>) -> Response {
+    let orchestrator = state.orchestrator.clone();
+    let events = state.events.clone();
+    let rendered = tokio::task::spawn_blocking(move || {
+        metrics::collect_and_render(orchestrator.as_ref(), events.as_ref())
+    })
+    .await;
+    match joined(rendered) {
+        Ok(text) => (
+            [(
+                header::CONTENT_TYPE,
+                "text/plain; version=0.0.4; charset=utf-8",
+            )],
+            text,
+        )
+            .into_response(),
+        Err(response) => response,
+    }
+}
 
 async fn health(State(_state): State<HubState>) -> Json<proto::HealthResponse> {
     Json(proto::HealthResponse {
@@ -944,6 +968,63 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn metrics_are_prometheus_text_and_derived_from_authoritative_state() {
+        let (state, _clock, _dir) = test_state();
+        let events = Arc::new(InMemoryLifecycleEvents::default());
+        events
+            .record(hub_core::NewLifecycleEvent::new(
+                10,
+                hub_core::LifecycleEventKind::RunCreated,
+                hub_core::LifecycleEntityType::Run,
+                "example-run",
+                BTreeMap::new(),
+            ))
+            .unwrap();
+        let request: proto::RegisterComponentRequest =
+            serde_json::from_str(&sample_manifest_json()).unwrap();
+        let manifest: ComponentManifest = request.manifest.into();
+        state.orchestrator.register_component(manifest).unwrap();
+        state
+            .orchestrator
+            .ingest_artifact(
+                "metrics-input".into(),
+                "application/octet-stream".into(),
+                b"abc",
+            )
+            .unwrap();
+
+        let app = router(state.with_event_repository(events));
+        let response = app
+            .oneshot(
+                Request::builder()
+                    .uri("/metrics")
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(response.status(), StatusCode::OK);
+        assert_eq!(
+            response
+                .headers()
+                .get("content-type")
+                .and_then(|v| v.to_str().ok()),
+            Some("text/plain; version=0.0.4; charset=utf-8")
+        );
+        let bytes = axum::body::to_bytes(response.into_body(), 1024 * 1024)
+            .await
+            .unwrap();
+        let text = String::from_utf8(bytes.to_vec()).unwrap();
+        assert!(text.ends_with('\n'));
+        assert!(text.contains("scirust_hub_component_manifests 1\n"));
+        assert!(text.contains("scirust_hub_artifacts 1\n"));
+        assert!(text.contains("scirust_hub_artifact_bytes 3\n"));
+        assert!(text.contains("scirust_hub_lifecycle_event_high_water_sequence 1\n"));
+        assert!(text.contains("scirust_hub_executor_info{backend=\"process\"} 1\n"));
+        assert!(text.contains("scirust_hub_run_records{state=\"queued\"} 0\n"));
+    }
+
+    #[tokio::test]
     async fn lifecycle_events_endpoint_is_cursor_paginated() {
         let (state, _clock, _dir) = test_state();
         let events = Arc::new(InMemoryLifecycleEvents::default());
@@ -1022,6 +1103,18 @@ mod tests {
         .await;
         assert_eq!(status, StatusCode::UNAUTHORIZED);
         assert_eq!(body["error"]["code"], "unauthorized");
+
+        let response = app
+            .clone()
+            .oneshot(
+                Request::builder()
+                    .uri("/metrics")
+                    .body(Body::empty())
+                    .expect("req"),
+            )
+            .await
+            .expect("metrics response");
+        assert_eq!(response.status(), StatusCode::UNAUTHORIZED);
 
         let (status, body) = send(
             app.clone(),

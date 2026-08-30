@@ -667,6 +667,19 @@ impl LifecycleEventRepository for SqliteStore {
         }
         Ok(events)
     }
+
+    fn high_water_sequence(&self) -> Result<u64, CoreError> {
+        let conn = self.lock()?;
+        let sequence: i64 = conn
+            .query_row(
+                "SELECT COALESCE(MAX(sequence), 0) FROM lifecycle_events",
+                [],
+                |row| row.get(0),
+            )
+            .map_err(storage("reading lifecycle event high-water mark"))?;
+        u64::try_from(sequence)
+            .map_err(|_| CoreError::Storage("negative lifecycle event high-water mark".into()))
+    }
 }
 
 #[cfg(test)]
@@ -910,6 +923,10 @@ mod tests {
             .windows(2)
             .all(|pair| pair[0].sequence < pair[1].sequence));
         assert_eq!(events.last().unwrap().attributes["to"], "queued");
+        assert_eq!(
+            LifecycleEventRepository::high_water_sequence(&store).unwrap(),
+            4
+        );
         assert!(events
             .iter()
             .any(|event| event.entity_id == run_id.to_string()));
