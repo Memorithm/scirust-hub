@@ -41,6 +41,7 @@ tower = { version = "0.5", features = ["util"] }
 tracing = "0.1"
 tracing-subscriber = { version = "0.3", features = ["env-filter", "fmt"] }
 ureq = { version = "2", default-features = false, features = ["json", "tls", "native-certs"] }
+nix = { version = "0.31", default-features = false, features = ["signal", "process"] }
 
 [workspace.lints.rust]
 unsafe_code = "forbid"

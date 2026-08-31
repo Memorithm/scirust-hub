@@ -2,7 +2,9 @@
 //!
 //! - [`ProcessExecutor`]: supervised local subprocess execution with hard
 //!   output caps, wall-clock timeouts, cooperative cancellation and an
-//!   explicitly constructed environment. **This is resource control, not a
+//!   explicitly constructed environment. On Unix each execution is isolated
+//!   into its own process group so ordinary descendants are terminated with
+//!   the group on timeout/cancellation. **This is resource control, not a
 //!   security sandbox**: children run with the Hub's OS privileges.
 //! - [`MockExecutor`]: scripted deterministic outcomes for tests.
 //! - [`RemoteExecutor`]: authenticated lease-based execution on one worker.
@@ -18,7 +20,9 @@ pub use remote::RemoteExecutor;
 
 use std::collections::VecDeque;
 use std::io::Read;
-use std::process::{Command, Stdio};
+#[cfg(unix)]
+use std::os::unix::process::CommandExt as _;
+use std::process::{Child, Command, Stdio};
 use std::sync::{Arc, Mutex};
 use std::thread;
 use std::time::{Duration, Instant};
@@ -73,6 +77,13 @@ impl Executor for ProcessExecutor {
             .stdout(Stdio::piped())
             .stderr(Stdio::piped());
 
+        // On Unix the direct child becomes leader of a fresh process group.
+        // Descendants inherit that group unless they deliberately detach, so
+        // timeout/cancellation can terminate the ordinary execution subtree
+        // without signalling the Hub's own process group.
+        #[cfg(unix)]
+        command.process_group(0);
+
         // Spawn failure (missing program, permission denied, bad cwd) is an
         // observable outcome recorded in provenance, not a backend panic.
         let Ok(mut child) = command.spawn() else {
@@ -117,12 +128,12 @@ impl Executor for ProcessExecutor {
             }
             if cancel.is_cancelled() {
                 cancelled = true;
-                let _ = child.kill();
+                terminate_supervised_process(&mut child);
                 break child.wait().ok();
             }
             if Instant::now() >= deadline {
                 timed_out = true;
-                let _ = child.kill();
+                terminate_supervised_process(&mut child);
                 break child.wait().ok();
             }
             thread::sleep(Duration::from_millis(POLL_INTERVAL_MS));
@@ -150,6 +161,20 @@ impl Executor for ProcessExecutor {
             stderr_truncated: stderr.truncated,
         })
     }
+}
+
+fn terminate_supervised_process(child: &mut Child) {
+    #[cfg(unix)]
+    if let Ok(raw_pid) = i32::try_from(child.id()) {
+        use nix::sys::signal::{killpg, Signal};
+        use nix::unistd::Pid;
+
+        // `process_group(0)` makes the child's PID its PGID. Signal the whole
+        // group first, then retain `Child::kill` as a best-effort fallback in
+        // case group signalling fails for an OS-specific reason.
+        let _ = killpg(Pid::from_raw(raw_pid), Signal::SIGKILL);
+    }
+    let _ = child.kill();
 }
 
 fn ms_since(started: Instant) -> u64 {
@@ -467,6 +492,77 @@ mod tests {
         assert!(outcome.cancelled);
         assert!(!outcome.exited_cleanly());
         assert!(started.elapsed() < Duration::from_secs(5));
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn cancellation_kills_ordinary_descendants_in_process_group() {
+        use nix::errno::Errno;
+        use nix::sys::signal::{killpg, Signal};
+        use nix::unistd::{getpgid, Pid};
+
+        let exec = ProcessExecutor::new();
+        let workdir = temp_workdir("cancel-group");
+        let pid_file = workdir.join("pids");
+        let mut request = base_request("sh", &[]);
+        request.working_dir = workdir.clone();
+        request.args = vec![
+            "-c".to_owned(),
+            r#"sleep 30 & printf '%s %s\n' "$$" "$!" > "$1"; wait"#.to_owned(),
+            "hub-process-group-test".to_owned(),
+            pid_file.display().to_string(),
+        ];
+        request.timeout_ms = 60_000;
+
+        let cancel = CancelToken::new();
+        let watcher_cancel = cancel.clone();
+        let watcher_pid_file = pid_file.clone();
+        let watcher = thread::spawn(move || {
+            let deadline = Instant::now() + Duration::from_secs(5);
+            loop {
+                if let Ok(text) = std::fs::read_to_string(&watcher_pid_file) {
+                    let mut fields = text.split_whitespace();
+                    if let (Some(parent), Some(descendant)) = (fields.next(), fields.next()) {
+                        let parent: i32 = parent.parse().expect("parent pid");
+                        let descendant: i32 = descendant.parse().expect("descendant pid");
+                        assert!(parent > 1 && descendant > 1);
+                        assert_eq!(
+                            getpgid(Some(Pid::from_raw(descendant))).expect("descendant pgid"),
+                            Pid::from_raw(parent),
+                            "descendant must inherit the executor-created process group"
+                        );
+                        watcher_cancel.cancel();
+                        return parent;
+                    }
+                }
+                assert!(
+                    Instant::now() < deadline,
+                    "child did not publish process-group membership"
+                );
+                thread::sleep(Duration::from_millis(10));
+            }
+        });
+
+        let started = Instant::now();
+        let outcome = exec.execute(&request, &cancel).expect("run");
+        let process_group = watcher.join().expect("watcher");
+        assert!(outcome.cancelled);
+        assert!(started.elapsed() < Duration::from_secs(5));
+
+        let deadline = Instant::now() + Duration::from_secs(5);
+        loop {
+            match killpg(Pid::from_raw(process_group), Option::<Signal>::None) {
+                Err(Errno::ESRCH) => break,
+                Ok(()) => {}
+                Err(error) => panic!("checking execution process group: {error}"),
+            }
+            assert!(
+                Instant::now() < deadline,
+                "execution process group survived cancellation"
+            );
+            thread::sleep(Duration::from_millis(10));
+        }
+        let _ = std::fs::remove_dir_all(workdir);
     }
 
     #[test]

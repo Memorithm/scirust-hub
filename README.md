@@ -32,7 +32,12 @@ provenance. Ownership boundaries are documented in
   search semantics.
 - Registering a component never executes its code.
 - Neither the local process executor nor the remote worker is an OS sandbox.
-  Child processes run with the privileges of the daemon/worker OS identity.
+  Child processes run with the privileges of the daemon/worker OS identity. On
+  Unix, each execution is placed in a fresh process group and timeout/cancel
+  kills that group, covering ordinary descendants that remain members. A
+  descendant can deliberately detach into another session/process group, so
+  this is resource supervision rather than containment. Non-Unix targets retain
+  direct-child termination behavior.
 - Bearer authentication is not TLS/mTLS and is not fine-grained authorization.
 
 ## Build

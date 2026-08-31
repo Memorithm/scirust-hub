@@ -8,6 +8,12 @@ pre-1.0 (`0.x`), so minor bumps may contain breaking changes.
 
 ### Added
 
+- Unix process-group supervision for `ProcessExecutor` (ADR-0017): every local
+  execution becomes leader of a fresh process group, and timeout/cancellation
+  signals that group before the existing direct-child kill fallback. Ordinary
+  descendants can no longer keep running merely because the direct child was
+  killed; deliberately detached descendants remain outside this guarantee.
+
 - Fail-closed remote-worker graceful drain (ADR-0016): SIGINT/SIGTERM stops
   descriptor eligibility and new lease admission, preserves idempotent replay
   of already-reserved attempts, cancels queued leases before process start,
