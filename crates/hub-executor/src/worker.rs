@@ -42,6 +42,7 @@ struct WorkerInner {
 
 #[derive(Default)]
 struct LeaseBook {
+    draining: bool,
     leases: BTreeMap<String, LeaseEntry>,
     attempts: BTreeMap<String, String>,
 }
@@ -106,6 +107,56 @@ impl WorkerService {
         }
     }
 
+    /// Enters fail-closed drain mode and requests cancellation of every active
+    /// lease. Queued leases become terminal before they can spawn a process;
+    /// running leases observe their existing cooperative cancellation token.
+    /// Idempotent replays of already-reserved attempts remain readable.
+    pub fn begin_draining(&self) -> Result<usize, String> {
+        let mut book = self
+            .inner
+            .leases
+            .lock()
+            .map_err(|_| "lease book lock poisoned".to_owned())?;
+        book.draining = true;
+        let now = now_ms();
+        let mut active = 0usize;
+        for entry in book.leases.values_mut() {
+            if entry.state.is_terminal() {
+                continue;
+            }
+            active = active.saturating_add(1);
+            entry.cancel.cancel();
+            if entry.state == LeaseState::Queued {
+                entry.state = LeaseState::Cancelled;
+                entry.last_heartbeat_ms = now;
+            }
+        }
+        Ok(active)
+    }
+
+    /// Whether the worker has stopped accepting new leases.
+    pub fn is_draining(&self) -> Result<bool, String> {
+        self.inner
+            .leases
+            .lock()
+            .map(|book| book.draining)
+            .map_err(|_| "lease book lock poisoned".to_owned())
+    }
+
+    /// Number of leases that have not yet reached a terminal state.
+    pub fn active_lease_count(&self) -> Result<usize, String> {
+        self.inner
+            .leases
+            .lock()
+            .map(|book| {
+                book.leases
+                    .values()
+                    .filter(|entry| !entry.state.is_terminal())
+                    .count()
+            })
+            .map_err(|_| "lease book lock poisoned".to_owned())
+    }
+
     fn authorize(&self, headers: &HeaderMap) -> bool {
         headers
             .get(header::AUTHORIZATION)
@@ -158,6 +209,9 @@ impl WorkerService {
                 ));
             }
             return Ok(self.create_response(&existing_id, existing));
+        }
+        if book.draining {
+            return Err(ReserveError::Draining);
         }
 
         let lease_id = uuid::Uuid::new_v4().to_string();
@@ -258,6 +312,17 @@ impl WorkerService {
             .leases
             .get_mut(lease_id)
             .ok_or_else(|| "lease disappeared before execution".to_owned())?;
+        if entry.state != LeaseState::Queued {
+            return Err(format!(
+                "lease cannot start from terminal/non-queued state {:?}",
+                entry.state
+            ));
+        }
+        if entry.cancel.is_cancelled() {
+            entry.state = LeaseState::Cancelled;
+            entry.last_heartbeat_ms = now_ms();
+            return Err("lease was cancelled before execution".to_owned());
+        }
         entry.state = LeaseState::Running;
         entry.last_heartbeat_ms = now_ms();
         Ok((entry.execution.clone(), entry.cancel.clone()))
@@ -413,11 +478,28 @@ pub async fn serve(
     axum::serve(listener, router(service)).await
 }
 
+pub async fn serve_with_shutdown<F>(
+    listener: tokio::net::TcpListener,
+    service: WorkerService,
+    shutdown: F,
+) -> std::io::Result<()>
+where
+    F: std::future::Future<Output = ()> + Send + 'static,
+{
+    axum::serve(listener, router(service))
+        .with_graceful_shutdown(shutdown)
+        .await
+}
+
 async fn describe_worker(State(service): State<WorkerService>, headers: HeaderMap) -> Response {
     if !service.authorize(&headers) {
         return unauthorized();
     }
-    Json(service.descriptor()).into_response()
+    match service.is_draining() {
+        Ok(false) => Json(service.descriptor()).into_response(),
+        Ok(true) => worker_error(StatusCode::SERVICE_UNAVAILABLE, "worker is draining"),
+        Err(error) => worker_error(StatusCode::INTERNAL_SERVER_ERROR, error),
+    }
 }
 
 async fn create_lease(
@@ -443,6 +525,12 @@ async fn create_lease(
             return worker_error(StatusCode::BAD_REQUEST, error)
         }
         Err(ReserveError::Conflict(error)) => return worker_error(StatusCode::CONFLICT, error),
+        Err(ReserveError::Draining) => {
+            return worker_error(
+                StatusCode::SERVICE_UNAVAILABLE,
+                "worker is draining and not accepting new leases",
+            )
+        }
         Err(ReserveError::PayloadTooLarge) => {
             return worker_error(
                 StatusCode::PAYLOAD_TOO_LARGE,
@@ -509,6 +597,7 @@ fn worker_error(status: StatusCode, error: impl Into<String>) -> Response {
 enum ReserveError {
     BadRequest(String),
     Conflict(String),
+    Draining,
     PayloadTooLarge,
     Internal(String),
 }
@@ -713,6 +802,66 @@ mod tests {
         assert!(service
             .complete_result(&lease.lease_id, result(b"different"))
             .is_err());
+    }
+
+    #[test]
+    fn draining_rejects_new_leases_but_preserves_idempotent_replay() {
+        let service = service();
+        let first = service
+            .reserve_lease(&request("attempt-drain"))
+            .expect("reserve");
+
+        assert_eq!(service.begin_draining().expect("drain"), 1);
+        assert!(service.is_draining().expect("state"));
+        assert_eq!(service.active_lease_count().expect("active"), 0);
+        assert_eq!(
+            service
+                .status(&first.lease_id)
+                .expect("status")
+                .expect("lease")
+                .state,
+            LeaseState::Cancelled
+        );
+
+        let replay = service
+            .reserve_lease(&request("attempt-drain"))
+            .expect("idempotent replay remains safe");
+        assert_eq!(replay.lease_id, first.lease_id);
+        assert!(matches!(
+            service.reserve_lease(&request("attempt-new")),
+            Err(ReserveError::Draining)
+        ));
+    }
+
+    #[test]
+    fn queued_cancellation_prevents_process_start() {
+        let service = service();
+        let lease = service
+            .reserve_lease(&request("attempt-cancel-before-start"))
+            .expect("reserve");
+        assert!(service.cancel(&lease.lease_id).expect("cancel"));
+        assert!(service.mark_running(&lease.lease_id).is_err());
+        assert_eq!(
+            service
+                .status(&lease.lease_id)
+                .expect("status")
+                .expect("lease")
+                .state,
+            LeaseState::Cancelled
+        );
+    }
+
+    #[test]
+    fn draining_requests_cancellation_of_running_lease() {
+        let service = service();
+        let lease = service
+            .reserve_lease(&request("attempt-running-drain"))
+            .expect("reserve");
+        let (_, cancel) = service.mark_running(&lease.lease_id).expect("running");
+        assert!(!cancel.is_cancelled());
+        assert_eq!(service.begin_draining().expect("drain"), 1);
+        assert!(cancel.is_cancelled());
+        assert_eq!(service.active_lease_count().expect("active"), 1);
     }
 
     #[test]
