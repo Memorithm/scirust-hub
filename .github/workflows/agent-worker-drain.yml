@@ -1,0 +1,169 @@
+name: Agent worker graceful drain
+
+on:
+  push:
+    branches: [work/worker-graceful-drain]
+
+permissions:
+  contents: write
+
+env:
+  CARGO_INCREMENTAL: 0
+  CARGO_TERM_COLOR: always
+
+jobs:
+  verify:
+    if: github.actor != 'github-actions[bot]'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+        with:
+          fetch-depth: 0
+      - uses: dtolnay/rust-toolchain@4360b52568e2003a75bf9bc1d59f33a8e3fc893c
+        with:
+          components: rustfmt, clippy
+      - name: Apply graceful drain patch
+        run: python3 .github/agent_worker_drain.py
+      - name: Format
+        run: cargo fmt --all
+      - name: Format gate
+        run: cargo fmt --all -- --check
+      - name: Check gate
+        run: cargo check --workspace --all-targets --locked
+      - name: Clippy gate
+        run: cargo clippy --workspace --all-targets --all-features --locked -- -D warnings
+      - name: Test gate
+        run: cargo test --workspace --all-features --locked
+      - name: Build gate
+        run: cargo build --workspace --all-targets --locked
+      - name: Doc gate
+        run: RUSTDOCFLAGS='-D warnings' cargo doc --workspace --no-deps --locked
+      - name: SIGTERM drain smoke
+        shell: bash
+        run: |
+          set -euo pipefail
+          TMP="$(mktemp -d)"
+          cleanup() {
+            set +e
+            [[ -n "${WORKER_PID:-}" ]] && kill -KILL "$WORKER_PID" 2>/dev/null
+            rm -rf "$TMP"
+          }
+          trap cleanup EXIT
+
+          SLEEP_BIN="$(command -v sleep)"
+          if pgrep -f "^${SLEEP_BIN} 37$" >/dev/null; then
+            echo 'unexpected pre-existing sleep 37 process' >&2
+            exit 1
+          fi
+
+          export SCIRUST_HUB_WORKER_TOKEN='drain-ci-secret'
+          target/debug/scirust-hub-worker \
+            --listen 127.0.0.1:18488 \
+            --worker-id drain-ci-worker \
+            --data-dir "$TMP/worker-data" \
+            >"$TMP/worker.out" 2>"$TMP/worker.err" &
+          WORKER_PID=$!
+
+          READY=0
+          for _ in $(seq 1 100); do
+            if ! kill -0 "$WORKER_PID" 2>/dev/null; then
+              echo 'worker exited before readiness' >&2
+              cat "$TMP/worker.err" >&2 || true
+              exit 1
+            fi
+            if curl --silent --show-error --fail \
+              -H 'Authorization: Bearer drain-ci-secret' \
+              http://127.0.0.1:18488/v1/worker >"$TMP/descriptor.json"; then
+              READY=1
+              break
+            fi
+            sleep 0.05
+          done
+          test "$READY" = 1
+
+          python3 - "$SLEEP_BIN" >"$TMP/request.json" <<'PY'
+          import json, sys
+          json.dump({
+              "protocol_version": 1,
+              "attempt_id": "drain-smoke-attempt",
+              "execution": {
+                  "program": sys.argv[1],
+                  "args": ["37"],
+                  "env": {},
+                  "timeout_ms": 60000,
+                  "max_capture_bytes_per_stream": 1024,
+                  "directories": [],
+                  "files": [],
+              },
+          }, sys.stdout)
+          PY
+
+          curl --silent --show-error --fail \
+            -H 'Authorization: Bearer drain-ci-secret' \
+            -H 'Content-Type: application/json' \
+            --data-binary @"$TMP/request.json" \
+            http://127.0.0.1:18488/v1/leases >"$TMP/lease.json"
+          LEASE_ID="$(python3 -c 'import json,sys; print(json.load(open(sys.argv[1]))["lease_id"])' "$TMP/lease.json")"
+
+          RUNNING=0
+          for _ in $(seq 1 100); do
+            curl --silent --show-error --fail \
+              -H 'Authorization: Bearer drain-ci-secret' \
+              "http://127.0.0.1:18488/v1/leases/$LEASE_ID" >"$TMP/status.json"
+            STATE="$(python3 -c 'import json,sys; print(json.load(open(sys.argv[1]))["state"])' "$TMP/status.json")"
+            if [[ "$STATE" == running ]]; then
+              RUNNING=1
+              break
+            fi
+            if [[ "$STATE" == completed || "$STATE" == cancelled || "$STATE" == failed ]]; then
+              echo "lease became terminal before SIGTERM: $STATE" >&2
+              exit 1
+            fi
+            sleep 0.05
+          done
+          test "$RUNNING" = 1
+
+          CHILD_SEEN=0
+          for _ in $(seq 1 100); do
+            if pgrep -f "^${SLEEP_BIN} 37$" >/dev/null; then
+              CHILD_SEEN=1
+              break
+            fi
+            sleep 0.05
+          done
+          test "$CHILD_SEEN" = 1
+
+          kill -TERM "$WORKER_PID"
+          EXITED=0
+          for _ in $(seq 1 200); do
+            if ! kill -0 "$WORKER_PID" 2>/dev/null; then
+              EXITED=1
+              break
+            fi
+            sleep 0.05
+          done
+          if [[ "$EXITED" != 1 ]]; then
+            echo 'worker did not exit after SIGTERM drain' >&2
+            cat "$TMP/worker.err" >&2 || true
+            exit 1
+          fi
+          wait "$WORKER_PID"
+          unset WORKER_PID
+
+          if pgrep -f "^${SLEEP_BIN} 37$" >/dev/null; then
+            echo 'worker child survived graceful drain' >&2
+            cat "$TMP/worker.err" >&2 || true
+            exit 1
+          fi
+          grep -q 'draining 1 active lease(s)' "$TMP/worker.err"
+      - name: Commit verified implementation
+        run: |
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git add \
+            crates/hub-executor/src/worker.rs \
+            apps/scirust-hub-worker/src/main.rs \
+            README.md CHANGELOG.md \
+            docs/adr/0016-worker-graceful-drain.md
+          git commit -m 'feat: drain remote worker on shutdown'
+          git push origin HEAD:work/worker-graceful-drain
