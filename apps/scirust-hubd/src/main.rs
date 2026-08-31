@@ -8,6 +8,7 @@
 //! 5. serve `/api/v1` until SIGINT/SIGTERM;
 //! 6. shut down gracefully.
 
+use std::collections::BTreeMap;
 use std::net::SocketAddr;
 use std::path::PathBuf;
 use std::sync::Arc;
@@ -31,6 +32,7 @@ use hub_store_sqlite::SqliteStore;
 
 /// Default TCP listen address.
 const DEFAULT_LISTEN: &str = "127.0.0.1:8477";
+const REMOTE_WORKER_TOKENS_JSON_ENV: &str = "SCIRUST_HUB_REMOTE_WORKER_TOKENS_JSON";
 
 #[derive(Debug, clap::Parser)]
 #[command(
@@ -155,6 +157,7 @@ fn build_executor(
     backend: ExecutorBackend,
     remote_worker_urls: Vec<String>,
     remote_worker_token: Option<String>,
+    remote_worker_tokens_json: Option<&str>,
 ) -> Result<Arc<dyn Executor>, DaemonError> {
     match backend {
         ExecutorBackend::Process => Ok(Arc::new(ProcessExecutor::new())),
@@ -164,26 +167,113 @@ fn build_executor(
                     "at least one --remote-worker-url is required with --executor remote".into(),
                 ));
             }
-            let token = remote_worker_token.ok_or_else(|| {
-                DaemonError::ExecutorConfig(
-                    "--remote-worker-token is required with --executor remote".into(),
-                )
-            })?;
-            if remote_worker_urls.len() == 1 {
-                let url = remote_worker_urls
-                    .into_iter()
-                    .next()
-                    .expect("checked length");
+            let credentials = remote_worker_credentials(
+                &remote_worker_urls,
+                remote_worker_token,
+                remote_worker_tokens_json,
+            )?;
+            if credentials.len() == 1 {
+                let (url, token) = credentials.into_iter().next().expect("checked length");
                 Ok(Arc::new(
                     RemoteExecutor::new(url, token).map_err(DaemonError::ExecutorConfig)?,
                 ))
             } else {
                 Ok(Arc::new(
-                    RemotePoolExecutor::new(remote_worker_urls, token)
+                    RemotePoolExecutor::from_credentials(credentials)
                         .map_err(DaemonError::ExecutorConfig)?,
                 ))
             }
         }
+    }
+}
+
+fn normalize_worker_endpoint(endpoint: &str) -> String {
+    endpoint.trim_end_matches('/').to_owned()
+}
+
+fn remote_worker_credentials(
+    remote_worker_urls: &[String],
+    shared_token: Option<String>,
+    per_worker_json: Option<&str>,
+) -> Result<Vec<(String, String)>, DaemonError> {
+    if shared_token.is_some() && per_worker_json.is_some() {
+        return Err(DaemonError::ExecutorConfig(format!(
+            "SCIRUST_HUB_REMOTE_WORKER_TOKEN and {REMOTE_WORKER_TOKENS_JSON_ENV} are mutually exclusive"
+        )));
+    }
+
+    let mut normalized_urls = Vec::with_capacity(remote_worker_urls.len());
+    let mut seen_urls = BTreeMap::<String, ()>::new();
+    for endpoint in remote_worker_urls {
+        let normalized = normalize_worker_endpoint(endpoint);
+        if seen_urls.insert(normalized.clone(), ()).is_some() {
+            return Err(DaemonError::ExecutorConfig(format!(
+                "duplicate remote worker endpoint {normalized:?}"
+            )));
+        }
+        normalized_urls.push(normalized);
+    }
+
+    match (shared_token, per_worker_json) {
+        (Some(token), None) => {
+            if token.is_empty() {
+                return Err(DaemonError::ExecutorConfig(
+                    "remote worker bearer token must not be empty".into(),
+                ));
+            }
+            Ok(normalized_urls
+                .into_iter()
+                .map(|endpoint| (endpoint, token.clone()))
+                .collect())
+        }
+        (None, Some(raw)) => {
+            let configured: BTreeMap<String, String> = serde_json::from_str(raw).map_err(|error| {
+                DaemonError::ExecutorConfig(format!(
+                    "invalid {REMOTE_WORKER_TOKENS_JSON_ENV} JSON object: {error}"
+                ))
+            })?;
+            if configured.is_empty() {
+                return Err(DaemonError::ExecutorConfig(format!(
+                    "{REMOTE_WORKER_TOKENS_JSON_ENV} must not be empty"
+                )));
+            }
+
+            let mut tokens = BTreeMap::<String, String>::new();
+            for (endpoint, token) in configured {
+                let normalized = normalize_worker_endpoint(&endpoint);
+                if token.is_empty() {
+                    return Err(DaemonError::ExecutorConfig(format!(
+                        "remote worker bearer token must not be empty for endpoint {normalized:?}"
+                    )));
+                }
+                if tokens.insert(normalized.clone(), token).is_some() {
+                    return Err(DaemonError::ExecutorConfig(format!(
+                        "duplicate normalized credential endpoint {normalized:?} in {REMOTE_WORKER_TOKENS_JSON_ENV}"
+                    )));
+                }
+            }
+
+            let mut credentials = Vec::with_capacity(normalized_urls.len());
+            for endpoint in normalized_urls {
+                let token = tokens.remove(&endpoint).ok_or_else(|| {
+                    DaemonError::ExecutorConfig(format!(
+                        "missing worker credential for configured endpoint {endpoint:?} in {REMOTE_WORKER_TOKENS_JSON_ENV}"
+                    ))
+                })?;
+                credentials.push((endpoint, token));
+            }
+            if !tokens.is_empty() {
+                let extras = tokens.keys().cloned().collect::<Vec<_>>().join(", ");
+                return Err(DaemonError::ExecutorConfig(format!(
+                    "unused worker credential endpoint(s) in {REMOTE_WORKER_TOKENS_JSON_ENV}: {extras}"
+                )));
+            }
+            Ok(credentials)
+        }
+        (None, None) => Err(DaemonError::ExecutorConfig(format!(
+            "remote execution requires SCIRUST_HUB_REMOTE_WORKER_TOKEN or {REMOTE_WORKER_TOKENS_JSON_ENV}"
+        ))),
+        (Some(_), Some(_)) => unreachable!("mutual exclusion checked above"),
     }
 }
 
@@ -250,10 +340,14 @@ fn run(args: Args) -> Result<(), DaemonError> {
         source,
     })?;
 
+    let remote_worker_tokens_json = std::env::var(REMOTE_WORKER_TOKENS_JSON_ENV)
+        .ok()
+        .filter(|value| !value.trim().is_empty());
     let executor = build_executor(
         args.executor,
         args.remote_worker_url,
         args.remote_worker_token,
+        remote_worker_tokens_json.as_deref(),
     )?;
 
     // One store instance serves all repository ports; `Arc` is coerced
@@ -435,6 +529,7 @@ mod tests {
             ExecutorBackend::Remote,
             vec!["http://worker-a:8488".into()],
             Some("secret".into()),
+            None,
         )
         .expect("single");
         assert_eq!(single.backend_id(), "remote:http://worker-a:8488");
@@ -443,9 +538,104 @@ mod tests {
             ExecutorBackend::Remote,
             vec!["http://worker-a:8488".into(), "http://worker-b:8488".into()],
             Some("secret".into()),
+            None,
         )
         .expect("pool");
         assert_eq!(pool.backend_id(), "remote-pool");
+    }
+
+    #[test]
+    fn per_worker_credentials_match_normalized_endpoints_exactly() {
+        let urls = vec![
+            "http://worker-a:8488/".to_owned(),
+            "http://worker-b:8488".to_owned(),
+        ];
+        let credentials = remote_worker_credentials(
+            &urls,
+            None,
+            Some(r#"{"http://worker-a:8488":"secret-a","http://worker-b:8488/":"secret-b"}"#),
+        )
+        .expect("credentials");
+        assert_eq!(
+            credentials,
+            vec![
+                ("http://worker-a:8488".to_owned(), "secret-a".to_owned()),
+                ("http://worker-b:8488".to_owned(), "secret-b".to_owned()),
+            ]
+        );
+    }
+
+    #[test]
+    fn per_worker_credentials_fail_closed_on_ambiguous_or_drifted_configuration() {
+        let urls = vec![
+            "http://worker-a:8488".to_owned(),
+            "http://worker-b:8488".to_owned(),
+        ];
+
+        let both = remote_worker_credentials(
+            &urls,
+            Some("shared-secret".into()),
+            Some(r#"{"http://worker-a:8488":"secret-a","http://worker-b:8488":"secret-b"}"#),
+        )
+        .expect_err("mutually exclusive configuration");
+        assert!(both.to_string().contains("mutually exclusive"));
+        assert!(!both.to_string().contains("shared-secret"));
+        assert!(!both.to_string().contains("secret-a"));
+
+        let missing =
+            remote_worker_credentials(&urls, None, Some(r#"{"http://worker-a:8488":"secret-a"}"#))
+                .expect_err("missing credential");
+        assert!(missing.to_string().contains("worker-b"));
+        assert!(!missing.to_string().contains("secret-a"));
+
+        let extra = remote_worker_credentials(
+            &urls,
+            None,
+            Some(r#"{"http://worker-a:8488":"secret-a","http://worker-b:8488":"secret-b","http://worker-c:8488":"secret-c"}"#),
+        )
+        .expect_err("unused credential");
+        assert!(extra.to_string().contains("worker-c"));
+        assert!(!extra.to_string().contains("secret-c"));
+    }
+
+    #[test]
+    fn per_worker_credentials_reject_empty_and_normalized_duplicates() {
+        let urls = vec![
+            "http://worker-a:8488".to_owned(),
+            "http://worker-b:8488".to_owned(),
+        ];
+        let empty = remote_worker_credentials(
+            &urls,
+            None,
+            Some(r#"{"http://worker-a:8488":"secret-a","http://worker-b:8488":""}"#),
+        )
+        .expect_err("empty token");
+        assert!(empty.to_string().contains("worker-b"));
+        assert!(!empty.to_string().contains("secret-a"));
+
+        let duplicate_urls = vec![
+            "http://worker-a:8488".to_owned(),
+            "http://worker-a:8488/".to_owned(),
+        ];
+        let duplicate =
+            remote_worker_credentials(&duplicate_urls, Some("shared-secret".into()), None)
+                .expect_err("duplicate normalized configured endpoint");
+        assert!(duplicate
+            .to_string()
+            .contains("duplicate remote worker endpoint"));
+        assert!(!duplicate.to_string().contains("shared-secret"));
+
+        let normalized_map_duplicate = remote_worker_credentials(
+            &urls,
+            None,
+            Some(r#"{"http://worker-a:8488":"secret-a","http://worker-a:8488/":"secret-b","http://worker-b:8488":"secret-c"}"#),
+        )
+        .expect_err("duplicate normalized credential endpoint");
+        assert!(normalized_map_duplicate
+            .to_string()
+            .contains("duplicate normalized credential endpoint"));
+        assert!(!normalized_map_duplicate.to_string().contains("secret-a"));
+        assert!(!normalized_map_duplicate.to_string().contains("secret-b"));
     }
 
     #[test]

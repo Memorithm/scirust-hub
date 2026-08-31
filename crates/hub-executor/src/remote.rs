@@ -23,7 +23,7 @@ const DEFAULT_POLL_MS: u64 = 100;
 const DEFAULT_LOST_AFTER_MS: u64 = 3_000;
 const DEFAULT_MAX_PAYLOAD_BYTES: usize = 64 * 1024 * 1024;
 
-#[derive(Clone, Debug)]
+#[derive(Clone)]
 pub struct RemoteExecutor {
     endpoint: String,
     token: String,
@@ -32,6 +32,20 @@ pub struct RemoteExecutor {
     lost_after: Duration,
     max_payload_bytes: usize,
     expected_worker_id: Option<String>,
+}
+
+impl std::fmt::Debug for RemoteExecutor {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("RemoteExecutor")
+            .field("endpoint", &self.endpoint)
+            .field("token", &"[REDACTED]")
+            .field("backend_id", &self.backend_id)
+            .field("poll_interval", &self.poll_interval)
+            .field("lost_after", &self.lost_after)
+            .field("max_payload_bytes", &self.max_payload_bytes)
+            .field("expected_worker_id", &self.expected_worker_id)
+            .finish()
+    }
 }
 
 impl RemoteExecutor {
@@ -602,5 +616,20 @@ fn cancelled_outcome(started: Instant) -> ExecutionOutcome {
         stdout_truncated: false,
         stderr: Vec::new(),
         stderr_truncated: false,
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn debug_representation_redacts_worker_bearer_token() {
+        let executor =
+            RemoteExecutor::new("http://worker-a:8488", "top-secret-token").expect("executor");
+        let debug = format!("{executor:?}");
+        assert!(debug.contains("http://worker-a:8488"));
+        assert!(debug.contains("[REDACTED]"));
+        assert!(!debug.contains("top-secret-token"));
     }
 }

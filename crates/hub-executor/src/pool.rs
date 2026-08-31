@@ -24,21 +24,37 @@ impl RemotePoolExecutor {
     /// Builds a pool from two or more configured endpoints sharing one worker
     /// bearer credential. Endpoint strings must be unique.
     pub fn new(endpoints: Vec<String>, token: impl Into<String>) -> Result<Self, String> {
-        if endpoints.len() < 2 {
-            return Err("remote worker pool requires at least two endpoints".into());
-        }
         let token = token.into();
         if token.is_empty() {
             return Err("remote worker bearer token must not be empty".into());
         }
+        Self::from_credentials(
+            endpoints
+                .into_iter()
+                .map(|endpoint| (endpoint, token.clone()))
+                .collect(),
+        )
+    }
+
+    /// Builds a pool from two or more endpoint-specific bearer credentials.
+    /// Tokens are never included in validation errors or backend identities.
+    pub fn from_credentials(credentials: Vec<(String, String)>) -> Result<Self, String> {
+        if credentials.len() < 2 {
+            return Err("remote worker pool requires at least two endpoints".into());
+        }
         let mut seen = BTreeMap::<String, ()>::new();
-        let mut workers = Vec::with_capacity(endpoints.len());
-        for endpoint in endpoints {
+        let mut workers = Vec::with_capacity(credentials.len());
+        for (endpoint, token) in credentials {
             let normalized = endpoint.trim_end_matches('/').to_owned();
             if seen.insert(normalized.clone(), ()).is_some() {
                 return Err(format!("duplicate remote worker endpoint {normalized:?}"));
             }
-            workers.push(RemoteExecutor::new(normalized, token.clone())?);
+            if token.is_empty() {
+                return Err(format!(
+                    "remote worker bearer token must not be empty for endpoint {normalized:?}"
+                ));
+            }
+            workers.push(RemoteExecutor::new(normalized, token)?);
         }
         Ok(Self {
             workers,
@@ -196,5 +212,45 @@ impl Executor for RemotePoolExecutor {
                 outcome,
                 backend_id,
             })
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn endpoint_specific_credentials_validate_without_exposing_tokens() {
+        let pool = RemotePoolExecutor::from_credentials(vec![
+            ("http://worker-a:8488/".into(), "secret-a".into()),
+            ("http://worker-b:8488".into(), "secret-b".into()),
+        ])
+        .expect("pool");
+        let debug = format!("{pool:?}");
+        assert!(!debug.contains("secret-a"));
+        assert!(!debug.contains("secret-b"));
+    }
+
+    #[test]
+    fn endpoint_specific_credentials_reject_duplicate_normalized_endpoint() {
+        let error = RemotePoolExecutor::from_credentials(vec![
+            ("http://worker-a:8488".into(), "secret-a".into()),
+            ("http://worker-a:8488/".into(), "secret-b".into()),
+        ])
+        .expect_err("duplicate endpoint");
+        assert!(error.contains("duplicate remote worker endpoint"));
+        assert!(!error.contains("secret-a"));
+        assert!(!error.contains("secret-b"));
+    }
+
+    #[test]
+    fn endpoint_specific_credentials_reject_empty_token_without_other_secret_values() {
+        let error = RemotePoolExecutor::from_credentials(vec![
+            ("http://worker-a:8488".into(), "secret-a".into()),
+            ("http://worker-b:8488".into(), String::new()),
+        ])
+        .expect_err("empty token");
+        assert!(error.contains("worker-b"));
+        assert!(!error.contains("secret-a"));
     }
 }
