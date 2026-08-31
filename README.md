@@ -136,8 +136,25 @@ queries every worker descriptor before dispatch, skips unavailable or
 incompatible endpoints, rejects duplicate worker identities, and selects the
 lowest local in-flight count with worker-id/endpoint tie-breaking. Once selected,
 a run stays pinned to that worker; an ambiguous post-dispatch transport failure
-is never replayed elsewhere. All configured workers currently share the same
-environment-only worker bearer token.
+is never replayed elsewhere.
+
+For compatibility, `SCIRUST_HUB_REMOTE_WORKER_TOKEN` still supplies one shared
+bearer to every configured endpoint. Multi-worker deployments can instead keep
+credentials isolated per endpoint with the environment-only
+`SCIRUST_HUB_REMOTE_WORKER_TOKENS_JSON` object:
+
+```bash
+export SCIRUST_HUB_REMOTE_WORKER_URL='https://worker-a:8488,https://worker-b:8488'
+unset SCIRUST_HUB_REMOTE_WORKER_TOKEN
+export SCIRUST_HUB_REMOTE_WORKER_TOKENS_JSON='{"https://worker-a:8488":"token-a","https://worker-b:8488":"token-b"}'
+```
+
+The JSON endpoint set must match the configured worker URL set exactly after
+trailing-slash normalization. Missing, unused, empty or normalized-duplicate
+credential entries fail startup closed, and configuring both the shared token
+and the JSON map is rejected as ambiguous. Tokens are not included in backend
+identities, validation errors or `Debug` output. The map is intentionally
+environment-only so bearer values need not be placed in command-line argv.
 
 On SIGINT/SIGTERM a worker enters drain mode before closing its listener.
 Descriptor discovery and genuinely new lease creation return `503`, so a

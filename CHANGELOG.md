@@ -8,6 +8,12 @@ pre-1.0 (`0.x`), so minor bumps may contain breaking changes.
 
 ### Added
 
+- Per-worker remote bearer credentials (ADR-0018): multi-worker pools may use
+  an environment-only endpoint-to-token JSON map with exact fail-closed endpoint
+  matching, while the existing shared token remains compatible. Shared and
+  per-worker modes are mutually exclusive, and `RemoteExecutor` debug output now
+  redacts bearer material.
+
 - Unix process-group supervision for `ProcessExecutor` (ADR-0017): every local
   execution becomes leader of a fresh process group, and timeout/cancellation
   signals that group before the existing direct-child kill fallback. Ordinary
