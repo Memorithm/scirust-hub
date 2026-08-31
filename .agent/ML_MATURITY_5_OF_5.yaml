@@ -1,0 +1,63 @@
+schema_version: 1
+kind: memorithm_ml_maturity_program
+status: active
+last_updated: "2026-08-31"
+repository: Memorithm/scirust-hub
+objective: >-
+  Raise the ML orchestration/control-plane contribution to evidence-backed 5/5:
+  Hub must schedule and reproduce real ML runs across heterogeneous workers and
+  immutable model/data/evidence artifacts without becoming the tensor, training,
+  inference or optimization runtime.
+score_policy:
+  five_of_five_requires:
+    - versioned_ML_component_capabilities_and_resource_requirements
+    - durable_restart_safe_multi_worker_execution
+    - immutable_model_dataset_checkpoint_and_evidence_artifact_identity
+    - resource_aware_placement_and_explicit_failure_semantics
+    - exact_head_required_CI_green
+  forbidden:
+    - implementing_DDP_or_model_execution_inside_Hub
+    - scheduling_on_unverified_capabilities
+    - silently_replaying_ambiguous_side_effecting_training_attempts
+priority_program:
+  - id: HML0
+    name: ML capability schema
+    priority: P0
+    goals:
+      - register_training_inference_benchmark_and_verification_capabilities_with_versioned_ports
+      - express_device_dtype_memory_accelerator_and_backend_requirements
+      - keep_capability_discovery_distinct_from_execution_success
+  - id: HML1
+    name: Resource aware worker pool
+    priority: P0
+    goals:
+      - dynamic_worker_registration_lease_expiry_and_liveness
+      - advertise_CPU_GPU_memory_driver_and_runtime_capabilities
+      - deterministic_compatible_placement_with_bounded_parallelism
+      - preserve_worker_identity_and_attempt_identity_across_retries
+  - id: HML2
+    name: Distributed ML orchestration
+    priority: P1
+    goals:
+      - orchestrate_multi_process_or_multi_host_training_components_without_implementing_collectives
+      - allocate_coherent_worker_groups_and_publish_rendezvous_inputs_as_explicit_artifacts_or_parameters
+      - cancel_fail_fast_and_recover_workflow_state_without_duplicate_side_effects
+  - id: HML3
+    name: Model data checkpoint artifact lineage
+    priority: P0
+    goals:
+      - support_large_immutable_artifact_metadata_and_content_addressed_identity
+      - preserve_model_config_tokenizer_weights_dataset_manifest_checkpoint_and_optimizer_lineage
+      - link_reproduction_runs_without_rewriting_original_provenance
+  - id: HML4
+    name: Qualification campaign orchestration
+    priority: P0
+    goals:
+      - run_same_workload_SciRust_Burn_Candle_PyTorch_comparison_components_when_registered
+      - collect_machine_readable_outputs_without_reinterpreting_measurement_semantics
+      - hand_evidence_to_SciRust_Verify_for_verdicts
+completion_definition: >-
+  Hub is 5/5 for ML when heterogeneous worker resources can be discovered and
+  safely allocated to real training/inference/benchmark workflows, all model and
+  checkpoint lineage is immutable and reproducible, and verification remains
+  delegated to the appropriate evidence layer.
