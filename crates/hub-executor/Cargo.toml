@@ -17,5 +17,8 @@ axum = { workspace = true }
 tokio = { workspace = true }
 ureq = { workspace = true }
 
+[target.'cfg(unix)'.dependencies]
+nix = { workspace = true }
+
 [lints]
 workspace = true
