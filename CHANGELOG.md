@@ -8,6 +8,12 @@ pre-1.0 (`0.x`), so minor bumps may contain breaking changes.
 
 ### Added
 
+- Fail-closed remote-worker graceful drain (ADR-0016): SIGINT/SIGTERM stops
+  descriptor eligibility and new lease admission, preserves idempotent replay
+  of already-reserved attempts, cancels queued leases before process start,
+  propagates cancellation to running leases, and waits a bounded interval for
+  active leases to settle before server/runtime shutdown.
+
 - Opt-in native Rustls HTTPS for both `scirust-hubd` and
   `scirust-hub-worker`. PEM certificate and private-key paths must be configured
   together and malformed/missing material fails startup closed. HTTP remains

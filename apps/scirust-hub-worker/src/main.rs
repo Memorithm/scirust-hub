@@ -2,6 +2,7 @@
 
 use std::net::SocketAddr;
 use std::path::PathBuf;
+use std::time::Duration;
 
 use axum_server::tls_rustls::RustlsConfig;
 use clap::Parser;
@@ -9,6 +10,8 @@ use hub_executor::worker::WorkerService;
 
 const DEFAULT_LISTEN: &str = "127.0.0.1:8488";
 const DEFAULT_MAX_PAYLOAD_BYTES: usize = 64 * 1024 * 1024;
+const SHUTDOWN_GRACE: Duration = Duration::from_secs(30);
+const SERVER_DRAIN_GRACE: Duration = Duration::from_secs(5);
 
 #[derive(Debug, Parser)]
 #[command(
@@ -111,14 +114,22 @@ fn run(args: Args) -> Result<(), WorkerError> {
         .enable_all()
         .build()
         .map_err(|error| WorkerError::Runtime(error.to_string()))?;
-    runtime.block_on(async move {
+    let result = runtime.block_on(async move {
         if let Some(tls) = tls {
             let config = RustlsConfig::from_pem_file(&tls.cert, &tls.key)
                 .await
                 .map_err(|error| {
                     WorkerError::TlsConfig(format!("loading PEM certificate/private key: {error}"))
                 })?;
+            let handle = axum_server::Handle::new();
+            let shutdown_handle = handle.clone();
+            let shutdown_service = service.clone();
+            tokio::spawn(async move {
+                drain_on_shutdown(shutdown_service).await;
+                shutdown_handle.graceful_shutdown(Some(SERVER_DRAIN_GRACE));
+            });
             axum_server::bind_rustls(listen, config)
+                .handle(handle)
                 .serve(hub_executor::worker::router(service).into_make_service())
                 .await
                 .map_err(WorkerError::Serve)
@@ -126,11 +137,74 @@ fn run(args: Args) -> Result<(), WorkerError> {
             let listener = tokio::net::TcpListener::bind(listen)
                 .await
                 .map_err(WorkerError::Serve)?;
-            hub_executor::worker::serve(listener, service)
-                .await
-                .map_err(WorkerError::Serve)
+            let shutdown_service = service.clone();
+            hub_executor::worker::serve_with_shutdown(
+                listener,
+                service,
+                drain_on_shutdown(shutdown_service),
+            )
+            .await
+            .map_err(WorkerError::Serve)
         }
-    })
+    });
+    runtime.shutdown_timeout(SERVER_DRAIN_GRACE);
+    result
+}
+
+async fn drain_on_shutdown(service: WorkerService) {
+    shutdown_signal().await;
+    let active = match service.begin_draining() {
+        Ok(active) => active,
+        Err(error) => {
+            eprintln!("scirust-hub-worker: failed to enter drain mode: {error}");
+            return;
+        }
+    };
+    eprintln!("scirust-hub-worker: draining {active} active lease(s)");
+
+    let deadline = tokio::time::Instant::now() + SHUTDOWN_GRACE;
+    loop {
+        match service.active_lease_count() {
+            Ok(0) => return,
+            Ok(active) if tokio::time::Instant::now() >= deadline => {
+                eprintln!(
+                    "scirust-hub-worker: drain deadline reached with {active} active lease(s)"
+                );
+                return;
+            }
+            Ok(_) => tokio::time::sleep(Duration::from_millis(25)).await,
+            Err(error) => {
+                eprintln!("scirust-hub-worker: failed to inspect drain state: {error}");
+                return;
+            }
+        }
+    }
+}
+
+async fn shutdown_signal() {
+    let ctrl_c = async {
+        if let Err(error) = tokio::signal::ctrl_c().await {
+            eprintln!("scirust-hub-worker: ctrl-c listener failed: {error}");
+        }
+    };
+    #[cfg(unix)]
+    let terminate = async {
+        match tokio::signal::unix::signal(tokio::signal::unix::SignalKind::terminate()) {
+            Ok(mut stream) => {
+                stream.recv().await;
+            }
+            Err(error) => {
+                eprintln!("scirust-hub-worker: SIGTERM listener unavailable: {error}");
+            }
+        }
+    };
+    #[cfg(not(unix))]
+    let terminate = std::future::pending::<()>();
+
+    tokio::select! {
+        () = ctrl_c => {},
+        () = terminate => {},
+    }
 }
 
 #[cfg(test)]
