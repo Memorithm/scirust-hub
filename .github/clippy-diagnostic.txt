@@ -1,0 +1,17 @@
+[1m[92m    Checking[0m hub-core v0.2.0 (/home/runner/work/scirust-hub/scirust-hub/crates/hub-core)
+[1m[92m    Checking[0m hub-mcp v0.2.0 (/home/runner/work/scirust-hub/scirust-hub/crates/hub-mcp)
+[1m[92m    Checking[0m scirust-hub v0.2.0 (/home/runner/work/scirust-hub/scirust-hub/apps/scirust-hub)
+[1m[92m    Checking[0m hub-protocol v0.2.0 (/home/runner/work/scirust-hub/scirust-hub/crates/hub-protocol)
+[1m[92m    Checking[0m hub-store-sqlite v0.2.0 (/home/runner/work/scirust-hub/scirust-hub/crates/hub-store-sqlite)
+[1m[92m    Checking[0m hub-executor v0.2.0 (/home/runner/work/scirust-hub/scirust-hub/crates/hub-executor)
+[1m[92m    Checking[0m hub-api v0.2.0 (/home/runner/work/scirust-hub/scirust-hub/crates/hub-api)
+[1m[91merror[0m[1m: no rules expected `$`[0m
+   [1m[94m--> [0mcrates/hub-executor/src/lib.rs:511:43
+    [1m[94m|[0m
+[1m[94m511[0m [1m[94m|[0m             "sleep 30 & printf '%s %s\n' "$$" "$!" > "$1"; wait".to_owned(),
+    [1m[94m|[0m                                           [1m[91m^[0m [1m[91mno rules expected this token in macro call[0m
+    [1m[94m|[0m
+    [1m[94m= [0m[1mnote[0m: while trying to match sequence start
+
+[1m[91merror[0m: could not compile `hub-executor` (lib test) due to 1 previous error
+[1m[33mwarning[0m: build failed, waiting for other jobs to finish...
