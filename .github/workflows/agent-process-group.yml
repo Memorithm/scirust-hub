@@ -23,22 +23,7 @@ jobs:
         with:
           components: rustfmt, clippy
       - name: Apply process-group patch
-        run: |
-          python3 .github/agent_process_group.py
-          python3 - <<'PY'
-          from pathlib import Path
-          p = Path('crates/hub-executor/src/lib.rs')
-          text = p.read_text()
-          old = '''        use nix::sys::signal::{getpgid, killpg, Signal};
-                  use nix::unistd::Pid;
-          '''
-          new = '''        use nix::sys::signal::{killpg, Signal};
-                  use nix::unistd::{getpgid, Pid};
-          '''
-          if text.count(old) != 1:
-              raise SystemExit(f'expected one nix test import block, found {text.count(old)}')
-          p.write_text(text.replace(old, new, 1))
-          PY
+        run: python3 .github/agent_process_group_v2.py
       - name: Resolve lockfile
         run: cargo check --workspace
       - name: Format
