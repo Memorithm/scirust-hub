@@ -134,6 +134,16 @@ a run stays pinned to that worker; an ambiguous post-dispatch transport failure
 is never replayed elsewhere. All configured workers currently share the same
 environment-only worker bearer token.
 
+On SIGINT/SIGTERM a worker enters drain mode before closing its listener.
+Descriptor discovery and genuinely new lease creation return `503`, so a
+configured pool can skip the draining worker, while idempotent replays of an
+already-reserved attempt remain safe. Queued leases are cancelled before
+process start and running leases receive their existing cancellation token; the
+worker waits up to 30 seconds for non-terminal leases to settle before server
+shutdown. Worker lease state remains intentionally ephemeral, so a hard crash
+or exhausted drain still fails the affected Hub run closed rather than replaying
+it elsewhere.
+
 ## Workflows
 
 Multi-step workflows chain exact Hub artifacts between runs. The scheduler
