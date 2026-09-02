@@ -116,14 +116,22 @@ impl StaticPrincipal {
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum AuthConfigError {
     EmptyPrincipalSet,
-    InvalidPrincipalId { principal_id: String },
-    EmptyCredential { principal_id: String },
-    EmptyPermissions { principal_id: String },
+    InvalidPrincipalId {
+        principal_id: String,
+    },
+    EmptyCredential {
+        principal_id: String,
+    },
+    EmptyPermissions {
+        principal_id: String,
+    },
     DuplicatePermission {
         principal_id: String,
         permission: AuthPermission,
     },
-    DuplicatePrincipalId { principal_id: String },
+    DuplicatePrincipalId {
+        principal_id: String,
+    },
     DuplicateCredential,
 }
 
@@ -138,7 +146,10 @@ impl fmt::Display for AuthConfigError {
                 write!(f, "empty bearer credential for principal {principal_id:?}")
             }
             Self::EmptyPermissions { principal_id } => {
-                write!(f, "principal {principal_id:?} must have at least one permission")
+                write!(
+                    f,
+                    "principal {principal_id:?} must have at least one permission"
+                )
             }
             Self::DuplicatePermission {
                 principal_id,
@@ -160,7 +171,7 @@ impl fmt::Display for AuthConfigError {
 
 impl std::error::Error for AuthConfigError {}
 
-pub(crate) fn validate_principal_set(principals: &[StaticPrincipal]) -> Result<(), AuthConfigError> {
+pub fn validate_static_principals(principals: &[StaticPrincipal]) -> Result<(), AuthConfigError> {
     if principals.is_empty() {
         return Err(AuthConfigError::EmptyPrincipalSet);
     }
@@ -208,9 +219,7 @@ pub(crate) fn required_permission(method: &Method, path: &str) -> AuthPermission
 fn validate_principal_id(id: &str) -> Result<(), AuthConfigError> {
     let valid = (1..=64).contains(&id.len())
         && id.bytes().all(|byte| {
-            byte.is_ascii_lowercase()
-                || byte.is_ascii_digit()
-                || matches!(byte, b'-' | b'_' | b'.')
+            byte.is_ascii_lowercase() || byte.is_ascii_digit() || matches!(byte, b'-' | b'_' | b'.')
         });
     if valid {
         Ok(())
@@ -236,7 +245,9 @@ mod tests {
     #[test]
     fn principal_validation_is_fail_closed_without_secret_debugging() {
         assert!(StaticPrincipal::new("observer", "secret", [AuthPermission::Inspect]).is_ok());
-        assert!(StaticPrincipal::new("Bad Principal", "secret", [AuthPermission::Inspect]).is_err());
+        assert!(
+            StaticPrincipal::new("Bad Principal", "secret", [AuthPermission::Inspect]).is_err()
+        );
         assert!(StaticPrincipal::new("observer", "", [AuthPermission::Inspect]).is_err());
         assert!(StaticPrincipal::new("observer", "secret", []).is_err());
         assert!(StaticPrincipal::new(
@@ -253,13 +264,13 @@ mod tests {
         let duplicate_id =
             StaticPrincipal::new("a", "secret-b", [AuthPermission::Control]).unwrap();
         assert!(matches!(
-            validate_principal_set(&[a.clone(), duplicate_id]),
+            validate_static_principals(&[a.clone(), duplicate_id]),
             Err(AuthConfigError::DuplicatePrincipalId { .. })
         ));
         let duplicate_token =
             StaticPrincipal::new("b", "secret-a", [AuthPermission::Metrics]).unwrap();
         assert!(matches!(
-            validate_principal_set(&[a, duplicate_token]),
+            validate_static_principals(&[a, duplicate_token]),
             Err(AuthConfigError::DuplicateCredential)
         ));
     }
@@ -274,9 +285,15 @@ mod tests {
             "/api/v1/artifacts/abc",
             "/api/v1/events",
         ] {
-            assert_eq!(required_permission(&Method::GET, path), AuthPermission::Inspect);
+            assert_eq!(
+                required_permission(&Method::GET, path),
+                AuthPermission::Inspect
+            );
         }
-        assert_eq!(required_permission(&Method::GET, "/metrics"), AuthPermission::Metrics);
+        assert_eq!(
+            required_permission(&Method::GET, "/metrics"),
+            AuthPermission::Metrics
+        );
         for path in [
             "/api/v1/components",
             "/api/v1/runs",
@@ -288,7 +305,10 @@ mod tests {
             "/api/v1/workflows/abc/executions",
             "/api/v1/artifacts",
         ] {
-            assert_eq!(required_permission(&Method::POST, path), AuthPermission::Control);
+            assert_eq!(
+                required_permission(&Method::POST, path),
+                AuthPermission::Control
+            );
         }
     }
 
