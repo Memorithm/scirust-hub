@@ -17,7 +17,7 @@ use std::time::Duration;
 use axum_server::tls_rustls::RustlsConfig;
 
 use clap::Parser;
-use hub_api::HubState;
+use hub_api::{AuthPermission, HubState, StaticPrincipal};
 use hub_core::clock::SystemClock;
 use hub_core::exec::Executor;
 use hub_core::limits::Limits;
@@ -33,6 +33,7 @@ use hub_store_sqlite::SqliteStore;
 /// Default TCP listen address.
 const DEFAULT_LISTEN: &str = "127.0.0.1:8477";
 const REMOTE_WORKER_TOKENS_JSON_ENV: &str = "SCIRUST_HUB_REMOTE_WORKER_TOKENS_JSON";
+const PRINCIPALS_JSON_ENV: &str = "SCIRUST_HUB_PRINCIPALS_JSON";
 
 #[derive(Debug, clap::Parser)]
 #[command(
@@ -315,8 +316,17 @@ fn run(args: Args) -> Result<(), DaemonError> {
     let api_token = std::env::var("SCIRUST_HUB_TOKEN")
         .ok()
         .filter(|token| !token.is_empty());
+    let principals_json = std::env::var(PRINCIPALS_JSON_ENV)
+        .ok()
+        .filter(|value| !value.trim().is_empty());
+    if api_token.is_some() && principals_json.is_some() {
+        return Err(DaemonError::SecurityConfig(format!(
+            "SCIRUST_HUB_TOKEN and {PRINCIPALS_JSON_ENV} are mutually exclusive"
+        )));
+    }
+    let static_principals = parse_static_principals(principals_json.as_deref())?;
     let tls = tls_files(args.tls_cert, args.tls_key)?;
-    validate_control_plane_security(listen, api_token.as_deref())?;
+    validate_control_plane_security(listen, api_token.is_some() || static_principals.is_some())?;
     if !listen.ip().is_loopback() && tls.is_none() {
         tracing::warn!(
             %listen,
@@ -416,7 +426,11 @@ fn run(args: Args) -> Result<(), DaemonError> {
 
     runtime.block_on(async move {
         let mut state = HubState::new(orchestrator).with_event_repository(event_store);
-        if let Some(token) = api_token {
+        if let Some(principals) = static_principals {
+            state = state
+                .with_static_principals(principals)
+                .map_err(|error| DaemonError::SecurityConfig(error.to_string()))?;
+        } else if let Some(token) = api_token {
             state = state
                 .with_bearer_token(token)
                 .map_err(|error| DaemonError::SecurityConfig(error.to_string()))?;
@@ -453,14 +467,105 @@ fn run(args: Args) -> Result<(), DaemonError> {
 
 fn validate_control_plane_security(
     listen: SocketAddr,
-    api_token: Option<&str>,
+    authentication_configured: bool,
 ) -> Result<(), DaemonError> {
-    if !listen.ip().is_loopback() && api_token.is_none() {
+    if !listen.ip().is_loopback() && !authentication_configured {
         return Err(DaemonError::SecurityConfig(format!(
-            "refusing unauthenticated non-loopback bind {listen}; set SCIRUST_HUB_TOKEN"
+            "refusing unauthenticated non-loopback bind {listen}; set SCIRUST_HUB_TOKEN or {PRINCIPALS_JSON_ENV}"
         )));
     }
     Ok(())
+}
+
+fn parse_static_principals(raw: Option<&str>) -> Result<Option<Vec<StaticPrincipal>>, DaemonError> {
+    let Some(raw) = raw else {
+        return Ok(None);
+    };
+    let value: serde_json::Value = serde_json::from_str(raw).map_err(|error| {
+        DaemonError::SecurityConfig(format!("invalid {PRINCIPALS_JSON_ENV} JSON: {error}"))
+    })?;
+    let root = value.as_object().ok_or_else(|| {
+        DaemonError::SecurityConfig(format!("{PRINCIPALS_JSON_ENV} must be a JSON object"))
+    })?;
+    for key in root.keys() {
+        if !matches!(key.as_str(), "schema_version" | "principals") {
+            return Err(DaemonError::SecurityConfig(format!(
+                "unknown {PRINCIPALS_JSON_ENV} field {key:?}"
+            )));
+        }
+    }
+    if root
+        .get("schema_version")
+        .and_then(serde_json::Value::as_u64)
+        != Some(1)
+    {
+        return Err(DaemonError::SecurityConfig(format!(
+            "{PRINCIPALS_JSON_ENV} requires schema_version 1"
+        )));
+    }
+    let records = root
+        .get("principals")
+        .and_then(serde_json::Value::as_array)
+        .ok_or_else(|| {
+            DaemonError::SecurityConfig(format!(
+                "{PRINCIPALS_JSON_ENV}.principals must be an array"
+            ))
+        })?;
+    let mut principals = Vec::with_capacity(records.len());
+    for record in records {
+        let object = record.as_object().ok_or_else(|| {
+            DaemonError::SecurityConfig("each static principal must be a JSON object".into())
+        })?;
+        for key in object.keys() {
+            if !matches!(key.as_str(), "id" | "token" | "permissions") {
+                return Err(DaemonError::SecurityConfig(format!(
+                    "unknown static principal field {key:?}"
+                )));
+            }
+        }
+        let id = object
+            .get("id")
+            .and_then(serde_json::Value::as_str)
+            .ok_or_else(|| {
+                DaemonError::SecurityConfig("static principal id must be a string".into())
+            })?;
+        let token = object
+            .get("token")
+            .and_then(serde_json::Value::as_str)
+            .ok_or_else(|| {
+                DaemonError::SecurityConfig(format!(
+                    "static principal {id:?} token must be a string"
+                ))
+            })?;
+        let permission_values = object
+            .get("permissions")
+            .and_then(serde_json::Value::as_array)
+            .ok_or_else(|| {
+                DaemonError::SecurityConfig(format!(
+                    "static principal {id:?} permissions must be an array"
+                ))
+            })?;
+        let mut permissions = Vec::with_capacity(permission_values.len());
+        for permission in permission_values {
+            let raw_permission = permission.as_str().ok_or_else(|| {
+                DaemonError::SecurityConfig(format!(
+                    "static principal {id:?} permission must be a string"
+                ))
+            })?;
+            permissions.push(AuthPermission::parse(raw_permission).ok_or_else(|| {
+                DaemonError::SecurityConfig(format!(
+                    "unknown static principal permission {raw_permission:?} for {id:?}"
+                ))
+            })?);
+        }
+        principals.push(
+            StaticPrincipal::new(id, token, permissions)
+                .map_err(|error| DaemonError::SecurityConfig(error.to_string()))?,
+        );
+    }
+    hub_api::validate_static_principals(&principals)
+        .map_err(|error| DaemonError::SecurityConfig(error.to_string()))?;
+    Ok(Some(principals))
 }
 
 async fn shutdown_signal() {
@@ -500,6 +605,23 @@ fn init_tracing() {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn versioned_static_principal_config_is_strict_and_secret_safe() {
+        let raw = r#"{"schema_version":1,"principals":[{"id":"observer","token":"secret-a","permissions":["inspect","metrics"]},{"id":"controller","token":"secret-b","permissions":["inspect","control","metrics"]}]}"#;
+        let principals = parse_static_principals(Some(raw))
+            .expect("valid")
+            .expect("configured");
+        assert_eq!(principals.len(), 2);
+        assert_eq!(principals[0].id(), "observer");
+
+        let unknown = r#"{"schema_version":1,"principals":[{"id":"observer","token":"secret-a","permissions":["admin"]}]}"#;
+        assert!(parse_static_principals(Some(unknown)).is_err());
+        let duplicate_id = r#"{"schema_version":1,"principals":[{"id":"same","token":"secret-a","permissions":["inspect"]},{"id":"same","token":"secret-b","permissions":["control"]}]}"#;
+        assert!(parse_static_principals(Some(duplicate_id)).is_err());
+        let duplicate_token = r#"{"schema_version":1,"principals":[{"id":"a","token":"same-secret","permissions":["inspect"]},{"id":"b","token":"same-secret","permissions":["control"]}]}"#;
+        assert!(parse_static_principals(Some(duplicate_token)).is_err());
+    }
 
     #[test]
     fn rustls_crypto_provider_is_installed_explicitly() {
@@ -641,13 +763,13 @@ mod tests {
     #[test]
     fn loopback_may_remain_unauthenticated_for_local_compatibility() {
         let listen: SocketAddr = "127.0.0.1:8477".parse().unwrap();
-        assert!(validate_control_plane_security(listen, None).is_ok());
+        assert!(validate_control_plane_security(listen, false).is_ok());
     }
 
     #[test]
     fn non_loopback_bind_requires_control_plane_token() {
         let listen: SocketAddr = "0.0.0.0:8477".parse().unwrap();
-        assert!(validate_control_plane_security(listen, None).is_err());
-        assert!(validate_control_plane_security(listen, Some("secret")).is_ok());
+        assert!(validate_control_plane_security(listen, false).is_err());
+        assert!(validate_control_plane_security(listen, true).is_ok());
     }
 }
