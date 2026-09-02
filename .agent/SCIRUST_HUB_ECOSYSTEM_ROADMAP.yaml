@@ -1,7 +1,7 @@
 schema_version: 1
 kind: scirust_hub_ecosystem_agent_roadmap
 status: active
-last_updated: "2026-08-31"
+last_updated: "2026-09-03"
 repository: Memorithm/scirust-hub
 intended_consumer: autonomous_coding_agent
 merge_policy: never_merge_this_file_to_default_branch_unless_user_explicitly_requests
@@ -27,6 +27,9 @@ verified_current_facts:
   - Hub_records_immutable_artifacts_and_execution_provenance
   - Hub_has_read_only_MCP_introspection
   - Hub_has_bearer_authentication_and_optional_native_TLS
+  - Hub_has_static_control_plane_principals_with_explicit_inspect_control_and_metrics_permissions
+  - Hub_distinguishes_unauthorized_401_from_authenticated_forbidden_403
+  - legacy_SCIRUST_HUB_TOKEN_mode_remains_backward_compatible_full_control
   - process_execution_is_supervised_but_not_an_OS_sandbox
   - current_BOUNDARIES_md_contains_historical_not_yet_established_notes_that_must_be_reconciled_against_newer_published_contracts_before_relying_on_them
 
@@ -39,6 +42,7 @@ invariants:
   - ambiguous_post_dispatch_side_effecting_failures_are_not_blindly_replayed_elsewhere
   - restart_behavior_must_not_silently_repeat_side_effecting_work
   - authentication_is_not_equated_with_authorization_or_sandboxing
+  - transport_principal_identity_is_not_retroactively_invented_for_historical_core_events
   - required_CI_must_be_green_on_exact_PR_head_before_merge
 
 ownership:
@@ -162,11 +166,30 @@ roadmap:
       - keep_lifecycle_events_transactionally_linked_to_authoritative_mutations
   - id: HUB2
     name: Authorization and worker trust
-    status: active_priority
-    goals:
-      - evolve_beyond_shared_bearer_authentication_toward_explicit_principals_roles_or_capabilities
+    status: active_worker_trust_next
+    completed_slices:
+      - id: HUB2_static_control_plane_principals
+        status: complete
+        issue: 24
+        pull_request: 25
+        final_exact_head: 5597ceabe04b91a385db3a746c594e2f73705cb4
+        merge_commit: d5a1703aa8aeeed3094058e49b34b91cab7cadf0
+        required_CI: CI_success_on_final_exact_head
+        guarantees:
+          - explicit_non_secret_principal_identity_at_HTTP_control_plane_boundary
+          - strict_inspect_control_metrics_permission_vocabulary
+          - legacy_single_token_full_control_compatibility
+          - fail_closed_versioned_multi_principal_configuration
+          - unauthorized_401_distinct_from_forbidden_403
+          - all_current_mutation_categories_covered_by_read_only_403_tests
+          - health_and_ready_remain_unauthenticated_and_metrics_permission_is_explicit
+          - principal_spoof_headers_do_not_elevate_authority
+          - core_lifecycle_history_is_not_rewritten_with_invented_actor_identity
+    remaining_goals:
       - evaluate_mTLS_or_equivalent_worker_identity_without_weakening_existing_TLS_validation
+      - define_worker_authorization_separately_from_control_plane_principals
       - distinguish_transport_authentication_authorization_and_execution_isolation
+      - keep_MCP_read_only_until_agent_mutation_authorization_is_separately_reviewed
   - id: HUB3
     name: Dynamic resource-aware worker plane
     status: planned
