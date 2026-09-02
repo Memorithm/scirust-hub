@@ -1230,17 +1230,30 @@ mod tests {
             .expect("metrics");
         assert_eq!(response.status(), StatusCode::OK);
 
-        let observer_mutation = Request::builder()
-            .method("POST")
-            .uri("/api/v1/components")
-            .header("authorization", "Bearer observer-secret")
-            .header("x-scirust-hub-principal", "controller")
-            .header("content-type", "application/json")
-            .body(Body::from(sample_manifest_json()))
-            .expect("req");
-        let (status, body) = send(app.clone(), observer_mutation).await;
-        assert_eq!(status, StatusCode::FORBIDDEN);
-        assert_eq!(body["error"]["code"], "forbidden");
+        let mutation_paths = [
+            "/api/v1/components".to_owned(),
+            "/api/v1/runs".to_owned(),
+            format!("/api/v1/runs/{}/cancel", uuid::Uuid::new_v4()),
+            format!("/api/v1/runs/{}/reproduce", uuid::Uuid::new_v4()),
+            "/api/v1/executions".to_owned(),
+            "/api/v1/workflows".to_owned(),
+            format!("/api/v1/workflows/{}/cancel", uuid::Uuid::new_v4()),
+            format!("/api/v1/workflows/{}/executions", uuid::Uuid::new_v4()),
+            "/api/v1/artifacts".to_owned(),
+        ];
+        for path in mutation_paths {
+            let observer_mutation = Request::builder()
+                .method("POST")
+                .uri(path.as_str())
+                .header("authorization", "Bearer observer-secret")
+                .header("x-scirust-hub-principal", "controller")
+                .header("content-type", "application/json")
+                .body(Body::empty())
+                .expect("req");
+            let (status, body) = send(app.clone(), observer_mutation).await;
+            assert_eq!(status, StatusCode::FORBIDDEN, "path={path}; body={body}");
+            assert_eq!(body["error"]["code"], "forbidden", "path={path}");
+        }
 
         let controller_mutation = Request::builder()
             .method("POST")
