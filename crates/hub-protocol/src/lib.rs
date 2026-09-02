@@ -56,6 +56,7 @@ pub fn check_schema_version(found: u16) -> Result<(), ProtocolError> {
 pub enum ErrorCode {
     BadRequest,
     Unauthorized,
+    Forbidden,
     UnsupportedSchemaVersion,
     Validation,
     NotFound,
@@ -69,6 +70,7 @@ impl ErrorCode {
         match self {
             ErrorCode::BadRequest => "bad_request",
             ErrorCode::Unauthorized => "unauthorized",
+            ErrorCode::Forbidden => "forbidden",
             ErrorCode::UnsupportedSchemaVersion => "unsupported_schema_version",
             ErrorCode::Validation => "validation_failed",
             ErrorCode::NotFound => "not_found",
@@ -138,6 +140,7 @@ impl<'de> Deserialize<'de> for ErrorCode {
         match raw.as_str() {
             "bad_request" => Ok(ErrorCode::BadRequest),
             "unauthorized" => Ok(ErrorCode::Unauthorized),
+            "forbidden" => Ok(ErrorCode::Forbidden),
             "unsupported_schema_version" => Ok(ErrorCode::UnsupportedSchemaVersion),
             "validation_failed" => Ok(ErrorCode::Validation),
             "not_found" => Ok(ErrorCode::NotFound),
@@ -148,6 +151,7 @@ impl<'de> Deserialize<'de> for ErrorCode {
                 &[
                     "bad_request",
                     "unauthorized",
+                    "forbidden",
                     "unsupported_schema_version",
                     "validation_failed",
                     "not_found",

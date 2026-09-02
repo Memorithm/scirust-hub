@@ -5,7 +5,13 @@
 //! delegate, map errors. Domain calls are blocking; handlers offload them to
 //! `spawn_blocking`.
 
+mod auth;
 mod metrics;
+
+pub use auth::{
+    validate_static_principals, AuthConfigError, AuthPermission, AuthenticatedPrincipal,
+    StaticPrincipal,
+};
 
 use std::collections::BTreeMap;
 use std::sync::Arc;
@@ -22,14 +28,13 @@ use hub_core::{
     Orchestrator, RunSpec,
 };
 use hub_protocol as proto;
-use sha2::{Digest, Sha256};
 
 /// Shared application state.
 #[derive(Clone)]
 pub struct HubState {
     pub orchestrator: Arc<Orchestrator>,
     events: Arc<dyn LifecycleEventRepository>,
-    api_bearer_sha256: Option<[u8; 32]>,
+    api_principals: Vec<StaticPrincipal>,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -49,7 +54,7 @@ impl HubState {
         Self {
             orchestrator,
             events: Arc::new(InMemoryLifecycleEvents::default()),
-            api_bearer_sha256: None,
+            api_principals: Vec::new(),
         }
     }
 
@@ -71,7 +76,23 @@ impl HubState {
         if token.is_empty() {
             return Err(EmptyBearerToken);
         }
-        self.api_bearer_sha256 = Some(Sha256::digest(token.as_bytes()).into());
+        let principal = StaticPrincipal::new("legacy-control", token, AuthPermission::ALL)
+            .map_err(|_| EmptyBearerToken)?;
+        self.api_principals = vec![principal];
+        Ok(self)
+    }
+
+    /// Enables explicit static-principal authorization. This replaces legacy
+    /// single-token mode for this state instance.
+    ///
+    /// # Errors
+    /// Fails closed for an empty set, duplicate ids, or duplicate credentials.
+    pub fn with_static_principals(
+        mut self,
+        principals: Vec<StaticPrincipal>,
+    ) -> Result<Self, AuthConfigError> {
+        auth::validate_static_principals(&principals)?;
+        self.api_principals = principals;
         Ok(self)
     }
 }
@@ -123,40 +144,57 @@ pub fn router(state: HubState) -> Router {
 
 async fn require_api_bearer(
     State(state): State<HubState>,
-    request: Request,
+    mut request: Request,
     next: Next,
 ) -> Response {
-    let Some(expected) = state.api_bearer_sha256 else {
+    if state.api_principals.is_empty() {
         return next.run(request).await;
-    };
+    }
     let supplied = request
         .headers()
         .get(header::AUTHORIZATION)
         .and_then(|value| value.to_str().ok())
         .and_then(|value| value.strip_prefix("Bearer "))
-        .filter(|value| !value.is_empty())
-        .map(|token| <[u8; 32]>::from(Sha256::digest(token.as_bytes())));
-    if supplied.is_some_and(|actual| digest_eq(&expected, &actual)) {
-        return next.run(request).await;
+        .filter(|value| !value.is_empty());
+    let Some(principal) =
+        supplied.and_then(|token| auth::authenticate(&state.api_principals, token))
+    else {
+        let mut response = error_response(
+            StatusCode::UNAUTHORIZED,
+            proto::ErrorCode::Unauthorized,
+            "bearer authentication required",
+        );
+        response
+            .headers_mut()
+            .insert(header::WWW_AUTHENTICATE, HeaderValue::from_static("Bearer"));
+        return response;
+    };
+
+    let method = request.method().clone();
+    let path = request.uri().path().to_owned();
+    let required = auth::required_permission(&method, &path);
+    if !principal.permits(required) {
+        return error_response(
+            StatusCode::FORBIDDEN,
+            proto::ErrorCode::Forbidden,
+            "authenticated principal lacks required permission",
+        );
     }
 
-    let mut response = error_response(
-        StatusCode::UNAUTHORIZED,
-        proto::ErrorCode::Unauthorized,
-        "bearer authentication required",
-    );
-    response
-        .headers_mut()
-        .insert(header::WWW_AUTHENTICATE, HeaderValue::from_static("Bearer"));
-    response
-}
-
-fn digest_eq(left: &[u8; 32], right: &[u8; 32]) -> bool {
-    let mut difference = 0u8;
-    for (&a, &b) in left.iter().zip(right.iter()) {
-        difference |= a ^ b;
+    let identity = principal.authenticated_identity();
+    let principal_id = identity.id().to_owned();
+    request.extensions_mut().insert(identity);
+    let response = next.run(request).await;
+    if required == AuthPermission::Control && response.status().is_success() {
+        tracing::info!(
+            principal_id = %principal_id,
+            method = %method,
+            path = %path,
+            status = response.status().as_u16(),
+            "authorized control-plane mutation completed"
+        );
     }
-    difference == 0
+    response
 }
 
 // ----------------------------------------------------------------------
@@ -1136,6 +1174,96 @@ mod tests {
         )
         .await;
         assert_eq!(status, StatusCode::OK);
+    }
+
+    #[tokio::test]
+    async fn static_principals_distinguish_authentication_authorization_and_metrics() {
+        let (state, _clock, _dir) = test_state();
+        let observer = StaticPrincipal::new(
+            "observer",
+            "observer-secret",
+            [AuthPermission::Inspect, AuthPermission::Metrics],
+        )
+        .expect("observer");
+        let controller =
+            StaticPrincipal::new("controller", "controller-secret", AuthPermission::ALL)
+                .expect("controller");
+        let app = router(
+            state
+                .with_static_principals(vec![observer, controller])
+                .expect("principal set"),
+        );
+
+        let (status, body) = send(
+            app.clone(),
+            Request::builder()
+                .uri("/api/v1/components")
+                .header("authorization", "Bearer wrong")
+                .body(Body::empty())
+                .expect("req"),
+        )
+        .await;
+        assert_eq!(status, StatusCode::UNAUTHORIZED);
+        assert_eq!(body["error"]["code"], "unauthorized");
+
+        let (status, _) = send(
+            app.clone(),
+            Request::builder()
+                .uri("/api/v1/components")
+                .header("authorization", "Bearer observer-secret")
+                .body(Body::empty())
+                .expect("req"),
+        )
+        .await;
+        assert_eq!(status, StatusCode::OK);
+
+        let response = app
+            .clone()
+            .oneshot(
+                Request::builder()
+                    .uri("/metrics")
+                    .header("authorization", "Bearer observer-secret")
+                    .body(Body::empty())
+                    .expect("req"),
+            )
+            .await
+            .expect("metrics");
+        assert_eq!(response.status(), StatusCode::OK);
+
+        let mutation_paths = [
+            "/api/v1/components".to_owned(),
+            "/api/v1/runs".to_owned(),
+            format!("/api/v1/runs/{}/cancel", uuid::Uuid::new_v4()),
+            format!("/api/v1/runs/{}/reproduce", uuid::Uuid::new_v4()),
+            "/api/v1/executions".to_owned(),
+            "/api/v1/workflows".to_owned(),
+            format!("/api/v1/workflows/{}/cancel", uuid::Uuid::new_v4()),
+            format!("/api/v1/workflows/{}/executions", uuid::Uuid::new_v4()),
+            "/api/v1/artifacts".to_owned(),
+        ];
+        for path in mutation_paths {
+            let observer_mutation = Request::builder()
+                .method("POST")
+                .uri(path.as_str())
+                .header("authorization", "Bearer observer-secret")
+                .header("x-scirust-hub-principal", "controller")
+                .header("content-type", "application/json")
+                .body(Body::empty())
+                .expect("req");
+            let (status, body) = send(app.clone(), observer_mutation).await;
+            assert_eq!(status, StatusCode::FORBIDDEN, "path={path}; body={body}");
+            assert_eq!(body["error"]["code"], "forbidden", "path={path}");
+        }
+
+        let controller_mutation = Request::builder()
+            .method("POST")
+            .uri("/api/v1/components")
+            .header("authorization", "Bearer controller-secret")
+            .header("content-type", "application/json")
+            .body(Body::from(sample_manifest_json()))
+            .expect("req");
+        let (status, _) = send(app, controller_mutation).await;
+        assert_eq!(status, StatusCode::CREATED);
     }
 
     #[test]
