@@ -1,0 +1,48 @@
+name: Temporary HUB2 static principal staging
+
+on:
+  push:
+    branches: [staging/hub2-static-principals]
+
+permissions:
+  contents: write
+
+jobs:
+  validate:
+    if: github.actor != 'github-actions[bot]'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: rustfmt,clippy
+      - name: Apply HUB2 product patch
+        run: |
+          python3 .tmp/hub2_patch.py
+          python3 - <<'PY'
+          from pathlib import Path
+          p = Path('crates/hub-api/src/lib.rs')
+          s = p.read_text()
+          old = 'pub use auth::{AuthConfigError, AuthPermission, AuthenticatedPrincipal, StaticPrincipal};'
+          new = 'pub use auth::{\n    validate_static_principals, AuthConfigError, AuthPermission, AuthenticatedPrincipal,\n    StaticPrincipal,\n};'
+          if s.count(old) != 1:
+              raise SystemExit(f'public auth export anchor count={s.count(old)}')
+          p.write_text(s.replace(old, new, 1))
+          PY
+      - name: Format
+        run: cargo fmt --all
+      - name: Validate exact product source
+        run: |
+          cargo fmt --all -- --check
+          cargo check --workspace
+          cargo clippy --workspace --all-targets --all-features --locked -- -D warnings
+          cargo test --workspace --all-features --locked
+          cargo build --workspace --all-targets --locked
+          RUSTDOCFLAGS='-D warnings' cargo doc --workspace --no-deps --locked
+      - name: Commit validated product files only
+        run: |
+          git config user.name MEMOPERF
+          git config user.email contact@checkupauto.fr
+          git add crates/hub-api/src/auth.rs crates/hub-api/src/lib.rs crates/hub-protocol/src/lib.rs apps/scirust-hubd/src/main.rs
+          git commit -m 'feat(authz): add static control-plane principals'
+          git push origin HEAD:staging/hub2-static-principals
