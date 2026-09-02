@@ -28,6 +28,19 @@ jobs:
           if s.count(old) != 1:
               raise SystemExit(f'public auth export anchor count={s.count(old)}')
           p.write_text(s.replace(old, new, 1))
+
+          p = Path('apps/scirust-hubd/src/main.rs')
+          s = p.read_text()
+          replacements = {
+              'validate_control_plane_security(listen, None).is_ok()': 'validate_control_plane_security(listen, false).is_ok()',
+              'validate_control_plane_security(listen, None).is_err()': 'validate_control_plane_security(listen, false).is_err()',
+              'validate_control_plane_security(listen, Some("secret")).is_ok()': 'validate_control_plane_security(listen, true).is_ok()',
+          }
+          for old, new in replacements.items():
+              if s.count(old) != 1:
+                  raise SystemExit(f'legacy security fixture anchor {old!r} count={s.count(old)}')
+              s = s.replace(old, new, 1)
+          p.write_text(s)
           PY
       - name: Format
         run: cargo fmt --all
