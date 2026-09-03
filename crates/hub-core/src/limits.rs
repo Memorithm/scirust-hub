@@ -21,7 +21,10 @@ pub struct Limits {
     /// Maximum bytes captured from one output stream (stdout or stderr).
     /// Excess is truncated and flagged, not dropped silently.
     pub max_capture_bytes: usize,
-    /// Maximum size of an artifact stored through the Hub.
+    /// Maximum size of an artifact stored through the Hub. HTTP request bodies
+    /// and inline reads have independent, much smaller limits; declared process
+    /// outputs use streaming ingestion, so this bound can accommodate model
+    /// bundles without buffering them in memory.
     pub max_artifact_bytes: u64,
     /// Maximum wall-clock timeout for one execution.
     pub max_timeout_ms: u64,
@@ -37,7 +40,7 @@ impl Default for Limits {
             max_inputs: 32,
             max_outputs: 16,
             max_capture_bytes: 1024 * 1024,
-            max_artifact_bytes: 16 * 1024 * 1024,
+            max_artifact_bytes: 64 * 1024 * 1024 * 1024,
             max_timeout_ms: 60 * 60 * 1000,
         }
     }
