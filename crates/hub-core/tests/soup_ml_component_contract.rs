@@ -1,12 +1,18 @@
 use hub_core::capability::CapabilityName;
 use hub_core::component::{ComponentManifest, ExecutionBinding};
 
+const ML_RESOURCE_CONTRACT: &str = "hub.ml.resource-requirements@1.0.0";
+
 struct Case {
     raw: &'static str,
     capability: &'static str,
     inputs: &'static [&'static str],
     outputs: &'static [&'static str],
     operation: &'static str,
+    device_resolution: &'static str,
+    dtype_resolution: &'static str,
+    accelerator_resolution: &'static str,
+    memory_resolution: &'static str,
 }
 
 #[test]
@@ -18,6 +24,10 @@ fn soup_ml_component_contracts_are_valid_and_versioned() {
             inputs: &["config", "dataset"],
             outputs: &["model_bundle", "report"],
             operation: "train",
+            device_resolution: "runtime_configured",
+            dtype_resolution: "runtime_configured",
+            accelerator_resolution: "runtime_configured",
+            memory_resolution: "runtime_preflight",
         },
         Case {
             raw: include_str!("../../../examples/soup-eval-component.json"),
@@ -25,6 +35,10 @@ fn soup_ml_component_contracts_are_valid_and_versioned() {
             inputs: &["model_bundle"],
             outputs: &["result"],
             operation: "eval",
+            device_resolution: "parameter:device",
+            dtype_resolution: "model_defined",
+            accelerator_resolution: "optional",
+            memory_resolution: "runtime_preflight",
         },
         Case {
             raw: include_str!("../../../examples/soup-export-component.json"),
@@ -32,6 +46,10 @@ fn soup_ml_component_contracts_are_valid_and_versioned() {
             inputs: &["model_bundle"],
             outputs: &["export_bundle", "report"],
             operation: "export",
+            device_resolution: "operation_defined",
+            dtype_resolution: "operation_defined",
+            accelerator_resolution: "operation_defined",
+            memory_resolution: "operation_defined",
         },
     ];
 
@@ -62,6 +80,43 @@ fn soup_ml_component_contracts_are_valid_and_versioned() {
                 .map(|port| port.name.as_str())
                 .collect::<Vec<_>>(),
             case.outputs
+        );
+        assert_eq!(
+            capability
+                .properties
+                .get("ml.resource_contract")
+                .map(String::as_str),
+            Some(ML_RESOURCE_CONTRACT)
+        );
+        assert_eq!(
+            capability.properties.get("ml.backend").map(String::as_str),
+            Some("soup")
+        );
+        assert_eq!(
+            capability.properties.get("ml.device").map(String::as_str),
+            Some(case.device_resolution)
+        );
+        assert_eq!(
+            capability.properties.get("ml.dtype").map(String::as_str),
+            Some(case.dtype_resolution)
+        );
+        assert_eq!(
+            capability
+                .properties
+                .get("ml.accelerator")
+                .map(String::as_str),
+            Some(case.accelerator_resolution)
+        );
+        assert_eq!(
+            capability.properties.get("ml.memory").map(String::as_str),
+            Some(case.memory_resolution)
+        );
+        assert_eq!(
+            capability
+                .properties
+                .get("ml.placement_enforcement")
+                .map(String::as_str),
+            Some("component_preflight")
         );
         assert_eq!(
             manifest
