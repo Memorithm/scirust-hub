@@ -40,8 +40,8 @@ jobs:
       - name: Format
         run: cargo fmt --all -- --check
 
-      - name: SOUP adapter contract
-        run: python3 -m unittest scripts/test_soup_hub_adapter.py
+      - name: SOUP adapter contracts
+        run: python3 -m unittest scripts/test_soup_hub_adapter.py scripts/test_soup_elastic_hub_adapter.py
 
       - name: Clippy
         run: cargo clippy --workspace --all-targets --all-features --locked -- -D warnings
