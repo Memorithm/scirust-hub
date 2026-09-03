@@ -33,7 +33,14 @@
         "dataset_placeholder": "${SOUP_HUB_DATASET}",
         "output_placeholder": "${SOUP_HUB_OUTPUT}",
         "bundle_schema": "application/vnd.scirust-hub.soup-bundle.v1+tar",
-        "trust_remote_code_default": "false"
+        "trust_remote_code_default": "false",
+        "ml.resource_contract": "hub.ml.resource-requirements@1.0.0",
+        "ml.backend": "soup",
+        "ml.device": "runtime_configured",
+        "ml.dtype": "runtime_configured",
+        "ml.accelerator": "runtime_configured",
+        "ml.memory": "runtime_preflight",
+        "ml.placement_enforcement": "component_preflight"
       }
     }
   ],
