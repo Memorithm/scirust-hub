@@ -612,26 +612,30 @@ impl Orchestrator {
         now: UnixMillis,
     ) -> Result<Option<OutputRef>, CoreError> {
         let path = workdir.join(&spec.path);
-        if !path.is_file() {
+        let metadata = match std::fs::symlink_metadata(&path) {
+            Ok(metadata) => metadata,
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(None),
+            Err(error) => {
+                return Err(CoreError::Storage(format!(
+                    "stating output {:?}: {error}",
+                    spec.path
+                )))
+            }
+        };
+        if metadata.file_type().is_symlink() {
+            return Err(CoreError::Storage(format!(
+                "declared output {:?} must not be a symbolic link",
+                spec.path
+            )));
+        }
+        if !metadata.is_file() {
             return Ok(None);
         }
-        // Size gate before reading; oversized declared outputs fail the run
-        // rather than being silently truncated (truncation would corrupt the
-        // artifact's meaning).
-        let size = std::fs::metadata(&path)
-            .map_err(|e| CoreError::Storage(format!("stating output {:?}: {e}", spec.path)))?
-            .len();
-        if size > self.limits.max_artifact_bytes {
-            return Err(CoreError::ArtifactTooLarge {
-                artifact: ArtifactId::generate(),
-                size,
-                limit: self.limits.max_artifact_bytes,
-            });
-        }
-        let bytes = std::fs::read(&path)
-            .map_err(|e| CoreError::Storage(format!("reading output {:?}: {e}", spec.path)))?;
-        let digest = self.blobs.put(
-            &bytes,
+        // Stream the declared output into content-addressed storage. The store
+        // enforces the limit while reading, so growth after this stat cannot
+        // bypass the resource bound and the whole artifact never sits in RAM.
+        let (digest, size) = self.blobs.put_file(
+            &path,
             self.limits.max_artifact_bytes,
             crate::digest::DOMAIN_ARTIFACT_BLOB,
         )?;
