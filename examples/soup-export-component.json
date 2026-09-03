@@ -28,7 +28,14 @@
         "execution_mode": "local_process",
         "bundle_schema": "application/vnd.scirust-hub.soup-bundle.v1+tar",
         "format_parameter": "required",
-        "unknown_parameters": "rejected"
+        "unknown_parameters": "rejected",
+        "ml.resource_contract": "hub.ml.resource-requirements@1.0.0",
+        "ml.backend": "soup",
+        "ml.device": "operation_defined",
+        "ml.dtype": "operation_defined",
+        "ml.accelerator": "operation_defined",
+        "ml.memory": "operation_defined",
+        "ml.placement_enforcement": "component_preflight"
       }
     }
   ],
