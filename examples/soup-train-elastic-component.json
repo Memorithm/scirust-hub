@@ -1,0 +1,100 @@
+{
+  "schema_version": 1,
+  "id": "00000000-0000-0000-0000-000000000006",
+  "name": "SOUP Training with Elastic Resource Plan",
+  "version": "0.73.3",
+  "kind": "tool",
+  "capabilities": [
+    {
+      "name": "llm.train.elastic",
+      "contract_version": "1.0.0",
+      "inputs": [
+        {
+          "name": "config",
+          "description": "text/yaml; SOUP template containing ${SOUP_HUB_DATASET}, ${SOUP_HUB_OUTPUT}, root task: ${SOUP_HUB_RESOURCE_TASK}, and a two-space-indented ${SOUP_HUB_RESOURCE_PLAN} line under training:"
+        },
+        {
+          "name": "dataset",
+          "description": "Immutable training dataset artifact referenced by the SOUP config template"
+        },
+        {
+          "name": "resource_plan",
+          "description": "application/vnd.elastic.soup.run-resource-plan.v1+json; immutable ElasticXxx pre-execution resource plan"
+        }
+      ],
+      "outputs": [
+        {
+          "name": "model_bundle",
+          "description": "application/vnd.scirust-hub.soup-bundle.v1+tar"
+        },
+        {
+          "name": "report",
+          "description": "application/vnd.scirust-hub.soup-train-report.v1+json"
+        }
+      ],
+      "properties": {
+        "execution_mode": "local_process",
+        "dataset_placeholder": "${SOUP_HUB_DATASET}",
+        "output_placeholder": "${SOUP_HUB_OUTPUT}",
+        "elastic.task_placeholder": "${SOUP_HUB_RESOURCE_TASK}",
+        "elastic.plan_placeholder": "${SOUP_HUB_RESOURCE_PLAN}",
+        "elastic.resource_plan_contract": "elastic.soup.run-resource-plan@1.0.0",
+        "elastic.resource_plan_media_type": "application/vnd.elastic.soup.run-resource-plan.v1+json",
+        "elastic.source_merge": "6e0952e59842eb9c14f808266d6f3eb0b1f33014",
+        "bundle_schema": "application/vnd.scirust-hub.soup-bundle.v1+tar",
+        "trust_remote_code_default": "false",
+        "ml.resource_contract": "hub.ml.resource-requirements@1.0.0",
+        "ml.backend": "soup",
+        "ml.device": "runtime_configured",
+        "ml.dtype": "runtime_configured",
+        "ml.accelerator": "runtime_configured",
+        "ml.memory": "elastic_plan_plus_soup_runtime_preflight",
+        "ml.placement_enforcement": "component_preflight"
+      }
+    }
+  ],
+  "execution": {
+    "type": "process",
+    "program": "python3",
+    "args": [
+      "/opt/scirust-hub/libexec/soup_elastic_hub_adapter.py",
+      "train",
+      "--config",
+      "{input:config}",
+      "--dataset",
+      "{input:dataset}",
+      "--resource-plan",
+      "{input:resource_plan}",
+      "--bundle",
+      "{output:model_bundle}",
+      "--report",
+      "{output:report}",
+      "--params",
+      "{params}"
+    ],
+    "outputs": [
+      {
+        "name": "model_bundle",
+        "path": "outputs/soup-model-bundle.tar",
+        "media_type": "application/vnd.scirust-hub.soup-bundle.v1+tar",
+        "required": true
+      },
+      {
+        "name": "report",
+        "path": "outputs/soup-train-report.json",
+        "media_type": "application/vnd.scirust-hub.soup-train-report.v1+json",
+        "required": true
+      }
+    ]
+  },
+  "metadata": {
+    "upstream_repository": "https://github.com/MakazhanAlpamys/Soup",
+    "upstream_release_reference": "v0.73.3",
+    "upstream_qualified_commit": "05b646523727925990530667e7012ede50bd30b2",
+    "elastic_repository": "https://github.com/Memorithm/ElasticXxx",
+    "elastic_contract": "elastic.soup.run-resource-plan@1.0.0",
+    "elastic_contract_media_type": "application/vnd.elastic.soup.run-resource-plan.v1+json",
+    "elastic_source_merge": "6e0952e59842eb9c14f808266d6f3eb0b1f33014",
+    "contract": "soup-train-elastic-v1"
+  }
+}
