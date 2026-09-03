@@ -30,6 +30,21 @@ verified_slices:
       SOUP train/eval/export publish backend, device, dtype, accelerator and
       memory resolution semantics while explicitly leaving compatible-worker
       placement to HML1.
+  - id: SOUP_Elastic_preexecution_resource_plan_handoff_v1
+    status: complete
+    pull_request: 30
+    final_exact_head: f4a8336622a8383f1a7df3610e87d200356e1ddb
+    merge_commit: 66fcd61a8b7d8ad39425b1725b94919f5abc210f
+    capability: llm.train.elastic@1.0.0
+    elastic_contract: elastic.soup.run-resource-plan@1.0.0
+    elastic_media_type: application/vnd.elastic.soup.run-resource-plan.v1+json
+    elastic_source_merge: 6e0952e59842eb9c14f808266d6f3eb0b1f33014
+    scope: >-
+      Hub accepts an immutable, versioned ElasticXxx pre-execution resource-plan
+      artifact for SOUP training, revalidates its wire boundary, and materializes
+      only explicit config-template seams before SOUP performs its own runtime
+      validation. This does not establish HML1 worker-resource discovery or
+      dynamic compatible placement and does not run Elastic policy inside Hub.
   - id: SOUP_HML3_streamed_bundle_lineage_v1
     status: complete
     artifact_streaming_pull_request: 27
@@ -47,7 +62,7 @@ priority_program:
   - id: HML0
     name: ML capability schema
     priority: P0
-    status: active_with_SOUP_v1_reference_contract
+    status: active_with_SOUP_and_Elastic_resource_plan_reference_contracts
     goals:
       - register_training_inference_benchmark_and_verification_capabilities_with_versioned_ports
       - express_device_dtype_memory_accelerator_and_backend_requirements
