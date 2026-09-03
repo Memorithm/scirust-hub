@@ -3,6 +3,8 @@
 //! Metadata (what, when, which digest) is deliberately separate from blob
 //! contents; the metadata repository never stores payload bytes.
 
+use std::io::Read as _;
+
 use crate::artifact::ArtifactMeta;
 use crate::digest::ContentDigest;
 use crate::error::CoreError;
@@ -117,13 +119,17 @@ pub trait ArtifactStore: Send + Sync {
     /// otherwise.
     fn put(&self, bytes: &[u8], max_bytes: u64, domain: &[u8]) -> Result<ContentDigest, CoreError>;
 
-    /// Streams one regular file into content-addressed storage without loading
-    /// its complete contents into memory. The returned size is the exact byte
-    /// count that was hashed and stored, not a pre-open metadata estimate.
+    /// Ingests one regular file into content-addressed storage.
     ///
-    /// Implementations must reject symbolic links and non-regular files. They
-    /// must also enforce `max_bytes` while reading so a file that grows after a
-    /// preflight stat cannot bypass the resource bound.
+    /// The default implementation is deliberately conservative: it rejects
+    /// symbolic links and non-regular files, enforces `max_bytes` both before
+    /// and while reading, and keeps at most `max_bytes + 1` bytes in memory
+    /// before delegating to [`Self::put`]. Backends designed for large model
+    /// artifacts may override this method with a true streaming implementation
+    /// without changing callers or artifact identity.
+    ///
+    /// The returned size is the exact byte count read and stored, not merely a
+    /// pre-open metadata estimate.
     ///
     /// # Errors
     /// [`CoreError::ArtifactTooLarge`] beyond `max_bytes`; [`CoreError::Storage`]
@@ -133,7 +139,57 @@ pub trait ArtifactStore: Send + Sync {
         path: &std::path::Path,
         max_bytes: u64,
         domain: &[u8],
-    ) -> Result<(ContentDigest, u64), CoreError>;
+    ) -> Result<(ContentDigest, u64), CoreError> {
+        let metadata = std::fs::symlink_metadata(path)
+            .map_err(|e| CoreError::Storage(format!("stating artifact file {path:?}: {e}")))?;
+        if metadata.file_type().is_symlink() {
+            return Err(CoreError::Storage(format!(
+                "refusing symbolic-link artifact file {path:?}"
+            )));
+        }
+        if !metadata.file_type().is_file() {
+            return Err(CoreError::Storage(format!(
+                "refusing non-regular artifact file {path:?}"
+            )));
+        }
+        if metadata.len() > max_bytes {
+            return Err(CoreError::ArtifactTooLarge {
+                artifact: ArtifactId::generate(),
+                size: metadata.len(),
+                limit: max_bytes,
+            });
+        }
+
+        let file = std::fs::File::open(path)
+            .map_err(|e| CoreError::Storage(format!("opening artifact file {path:?}: {e}")))?;
+        let opened = file
+            .metadata()
+            .map_err(|e| CoreError::Storage(format!("stating opened artifact file {path:?}: {e}")))?;
+        if !opened.is_file() {
+            return Err(CoreError::Storage(format!(
+                "refusing non-regular opened artifact file {path:?}"
+            )));
+        }
+
+        let read_limit = max_bytes.saturating_add(1);
+        let mut reader = file.take(read_limit);
+        let mut bytes = Vec::new();
+        reader
+            .read_to_end(&mut bytes)
+            .map_err(|e| CoreError::Storage(format!("reading artifact file {path:?}: {e}")))?;
+        let size = u64::try_from(bytes.len())
+            .map_err(|_| CoreError::Storage("artifact size does not fit u64".into()))?;
+        if size > max_bytes {
+            return Err(CoreError::ArtifactTooLarge {
+                artifact: ArtifactId::generate(),
+                size,
+                limit: max_bytes,
+            });
+        }
+
+        let digest = self.put(&bytes, max_bytes, domain)?;
+        Ok((digest, size))
+    }
 
     /// Reads a whole blob back. Blob sizes are capped upstream, so buffering
     /// is bounded.
