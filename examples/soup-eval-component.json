@@ -1,0 +1,59 @@
+{
+  "schema_version": 1,
+  "id": "00000000-0000-0000-0000-000000000004",
+  "name": "SOUP Evaluation",
+  "version": "0.73.3",
+  "kind": "tool",
+  "capabilities": [
+    {
+      "name": "llm.eval",
+      "contract_version": "1.0.0",
+      "inputs": [
+        {
+          "name": "model_bundle",
+          "description": "application/vnd.scirust-hub.soup-bundle.v1+tar"
+        }
+      ],
+      "outputs": [
+        {
+          "name": "result",
+          "description": "application/vnd.scirust-hub.soup-eval-result.v1+json"
+        }
+      ],
+      "properties": {
+        "execution_mode": "local_process",
+        "bundle_schema": "application/vnd.scirust-hub.soup-bundle.v1+tar",
+        "default_benchmark": "mmlu",
+        "unknown_parameters": "rejected"
+      }
+    }
+  ],
+  "execution": {
+    "type": "process",
+    "program": "python3",
+    "args": [
+      "/opt/scirust-hub/libexec/soup_hub_adapter.py",
+      "eval",
+      "--bundle",
+      "{input:model_bundle}",
+      "--result",
+      "{output:result}",
+      "--params",
+      "{params}"
+    ],
+    "outputs": [
+      {
+        "name": "result",
+        "path": "outputs/soup-eval-result.json",
+        "media_type": "application/vnd.scirust-hub.soup-eval-result.v1+json",
+        "required": true
+      }
+    ]
+  },
+  "metadata": {
+    "upstream_repository": "https://github.com/MakazhanAlpamys/Soup",
+    "upstream_release_reference": "v0.73.3",
+    "upstream_qualified_commit": "05b646523727925990530667e7012ede50bd30b2",
+    "contract": "soup-eval-v1"
+  }
+}
