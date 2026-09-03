@@ -27,6 +27,12 @@ The integration uses four separate Hub components because a Hub v1 component has
 
 The manifests are `examples/soup-{ship,train,eval,export}-component.json`.
 
+## HML0 resource declaration contract
+
+The ML execution capabilities publish the versioned resource profile `hub.ml.resource-requirements@1.0.0`, defined in `docs/contracts/ML_RESOURCE_REQUIREMENTS_V1.md`. It makes backend, device, dtype, accelerator and memory-resolution semantics discoverable without claiming that Hub already performs resource-aware worker placement.
+
+For SOUP v1, `ml.placement_enforcement=component_preflight`: SOUP and the adapter still decide whether the selected worker/run is actually executable. `llm.train` resolves device/dtype/accelerator from the SOUP run configuration and relies on SOUP's runtime hardware-fit preflight; `llm.eval` exposes device as an explicit run parameter; export resource needs remain format/operation-defined. HML1 will later use worker capability descriptors and run-specific requirements for deterministic placement. Registration alone is never evidence that a worker can execute a run.
+
 ## Training configuration contract
 
 Hub does not parse or rewrite SOUP's schema. Instead the immutable config input must contain two explicit tokens:
@@ -139,7 +145,7 @@ The Python suite covers semantic ship exits, deterministic bundle round trips, s
 python3 -m unittest scripts/test_soup_hub_adapter.py
 ```
 
-Rust tests parse every shipped manifest through Hub's real `ComponentManifest` validator:
+Rust tests parse every shipped manifest through Hub's real `ComponentManifest` validator and pin the HML0 resource profile fields:
 
 ```bash
 cargo test -p hub-core --test soup_component_contract --locked
