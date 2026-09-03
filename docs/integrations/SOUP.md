@@ -1,65 +1,116 @@
 # SOUP integration
 
-Status: first published integration slice, `llm.ship@1.0.0`.
+Status: published `llm.ship@1.0.0`; proposed `llm.train@1.0.0`, `llm.eval@1.0.0`, and `llm.export@1.0.0` on this branch.
 
-This integration treats [SOUP](https://github.com/MakazhanAlpamys/Soup) as an independent
-LLM post-training product. SciRust Hub owns only the outer component contract,
-immutable artifact flow, execution lifecycle and provenance. It does not reimplement
-SOUP training, evaluation, model loading, scoring or verdict semantics.
+This integration treats [SOUP](https://github.com/MakazhanAlpamys/Soup) as an independent LLM post-training product. SciRust Hub owns the outer component contracts, immutable artifact flow, execution lifecycle and provenance. It does not reimplement SOUP training, evaluation, model loading, scoring, export or verdict semantics.
 
-The first contract deliberately covers **offline ship-gate replay only**. Full SOUP
-training/export is not yet a Hub contract because current Hub v1 declared outputs are
-single bounded files, while trained adapters/checkpoints are naturally directory-shaped
-and may be much larger than the current artifact limit. Publishing a training contract
-before Hub can preserve that lineage would make the integration look more complete than
-it is.
+## Qualified upstream revisions
 
-## Published capability
+The already-published ship component remains tied to the SOUP revision recorded in `examples/soup-ship-component.json`. The train/eval/export v1 contracts were reviewed against SOUP release reference `v0.73.3` and exact upstream commit:
 
-`examples/soup-ship-component.json` publishes:
+```text
+05b646523727925990530667e7012ede50bd30b2
+```
 
-- capability: `llm.ship`;
-- contract version: `1.0.0`;
-- immutable input: SOUP ship evidence JSON;
-- required output: SOUP verdict JSON;
-- execution mode: offline evidence replay.
+The exact commit is provenance. It is not a claim that arbitrary future SOUP revisions are compatible.
 
-The example component identifies upstream SOUP `v0.73.3` and records the upstream
-`main` commit that was reviewed when this contract was authored. Those identifiers are
-provenance, not a claim that every future SOUP release is wire-compatible.
+## Capabilities
 
-## Why the adapter exists
+The integration uses four separate Hub components because a Hub v1 component has one process execution binding:
 
-SOUP's `ship` command has verdict-oriented exit codes:
+| Capability | Input | Output | Purpose |
+| --- | --- | --- | --- |
+| `llm.ship@1.0.0` | SOUP evidence JSON | verdict JSON | replay a frozen ship gate |
+| `llm.train@1.0.0` | SOUP config template + dataset | deterministic model bundle + report | execute local SOUP training |
+| `llm.eval@1.0.0` | deterministic model bundle | result JSON | execute `soup eval benchmark` |
+| `llm.export@1.0.0` | deterministic model bundle | deterministic export bundle + report | execute a validated SOUP export |
 
-- `0`: `SHIP`;
-- `2`: `DON'T SHIP`;
-- `1`: runtime error;
-- `3`: usage/validation error.
+The manifests are `examples/soup-{ship,train,eval,export}-component.json`.
 
-A plain Hub process binding cannot preserve that distinction because Hub normally treats
-a non-zero process exit as a failed run and ingests declared output files only after a
-clean process exit. Directly binding `soup ship` would therefore discard a valid
-`DON'T SHIP` verdict as if the evaluator itself had failed.
+## HML0 resource declaration contract
 
-`scripts/soup_hub_adapter.py` is a deliberately narrow translation boundary. It invokes
-SOUP without a shell and maps SOUP exits `0` and `2` to adapter success **only when a
-regular, non-symlink verdict file was actually produced**. SOUP exits `1`, `3`, signals,
-unknown statuses, or a missing verdict remain failures. The adapter does not inspect or
-reinterpret the verdict payload.
+The ML execution capabilities publish the versioned resource profile `hub.ml.resource-requirements@1.0.0`, defined in `docs/contracts/ML_RESOURCE_REQUIREMENTS_V1.md`. It makes backend, device, dtype, accelerator and memory-resolution semantics discoverable without claiming that Hub already performs resource-aware worker placement.
 
-## Runtime boundary
+For SOUP v1, `ml.placement_enforcement=component_preflight`: SOUP and the adapter still decide whether the selected worker/run is actually executable. `llm.train` resolves device/dtype/accelerator from the SOUP run configuration and relies on SOUP's runtime hardware-fit preflight; `llm.eval` exposes device as an explicit run parameter; export resource needs remain format/operation-defined. HML1 will later use worker capability descriptors and run-specific requirements for deterministic placement. Registration alone is never evidence that a worker can execute a run.
 
-The component example expects the adapter at:
+## Training configuration contract
+
+Hub does not parse or rewrite SOUP's schema. Instead the immutable config input must contain two explicit tokens:
+
+```yaml
+base: meta-llama/Llama-3.1-8B-Instruct
+task: sft
+data:
+  train: ${SOUP_HUB_DATASET}
+output: ${SOUP_HUB_OUTPUT}
+```
+
+Before execution, the adapter replaces `${SOUP_HUB_DATASET}` with the absolute path of Hub's materialized `dataset` artifact and `${SOUP_HUB_OUTPUT}` with a new output directory inside the per-run Hub work directory. Both tokens are required. This keeps dataset identity tied to the Hub input digest without teaching Hub the SOUP configuration schema.
+
+The `llm.train` parameter object currently accepts only:
+
+- `gpus`: `"auto"` or integer `1..64`;
+- `trust_remote_code`: boolean, default `false`.
+
+Unknown parameters fail closed. Remote-code execution remains opt-in.
+
+## Deterministic model bundle v1
+
+SOUP models, adapters, tokenizer files and checkpoints are directory-shaped, while Hub process outputs are files. The adapter therefore emits an uncompressed deterministic tar with media type:
+
+```text
+application/vnd.scirust-hub.soup-bundle.v1+tar
+```
+
+Bundle v1 has these invariants:
+
+- all paths live below one `artifact/` root;
+- entries are sorted;
+- uid/gid and owner names are normalized;
+- modification times are zeroed;
+- directory/file modes are normalized;
+- symbolic links and non-regular filesystem entries are rejected;
+- extraction rejects absolute paths, `..`, duplicate members, links, devices and FIFOs;
+- member count and total extracted payload are bounded;
+- existing extraction targets are never overwritten.
+
+Hub ingests declared output files through streaming content-addressed storage. The default artifact ceiling is 64 GiB. HTTP request bodies and inline artifact responses keep independent, much smaller limits, so this is not a 64 GiB HTTP upload surface.
+
+## Evaluation contract
+
+`llm.eval` safely extracts the model bundle into the Hub run directory, resolves one model root, and invokes `soup eval benchmark` without a shell.
+
+Accepted parameters are:
+
+- `benchmarks`: safe comma-separated task identifiers, default `mmlu`;
+- `fewshot`: integer `0..100`;
+- `batch_size`: integer `1..4096`, default `8`;
+- `device`: `cpu`, `mps`, `cuda`, or `cuda:<index>`;
+- `model_subpath`: explicit relative path when a bundle contains more than one plausible model root.
+
+The result artifact contains the bounded child stdout/stderr and the resolved parameter set. SOUP remains authoritative for benchmark semantics.
+
+## Export contract
+
+`llm.export` accepts `format`, optional `quant`, optional `base`, and optional `model_subpath`. Formats are allowlisted by the adapter and currently include the export formats reviewed in the qualified SOUP revision: `gguf`, `onnx`, `tensorrt`, `awq`, `gptq`, `bitnet`, `tq1_0`, `torchao`, and `gguf-ud`.
+
+SOUP may produce a file or directory; the adapter normalizes either form into the same deterministic bundle v1 before Hub ingests it.
+
+## Ship verdict boundary
+
+SOUP's `ship` command uses verdict-oriented process statuses: `0 = SHIP`, `2 = DON'T SHIP`, `1 = runtime error`, `3 = usage/validation error`. A plain Hub process binding would discard a valid exit `2` as a process failure. `soup_hub_adapter.py` therefore maps exits `0` and `2` to adapter success only when a regular, non-symlink verdict file exists. Runtime errors, usage errors, signals, unknown statuses and missing verdicts remain failures.
+
+## Runtime and deployment
+
+The component manifests expect the adapter at:
 
 ```text
 /opt/scirust-hub/libexec/soup_hub_adapter.py
 ```
 
-and executes it with `python3`. SOUP itself must be installed in the worker's `PATH`.
-The example does not install or upgrade SOUP and does not enable network access.
+SOUP itself must be installed on the selected worker with the extras needed by the operation. For example, training needs SOUP's training dependencies and benchmark evaluation needs the eval stack. The Hub integration does not install or upgrade SOUP at execution time.
 
-For a source checkout, install the adapter explicitly:
+For a source checkout:
 
 ```bash
 sudo install -d -m 0755 /opt/scirust-hub/libexec
@@ -67,67 +118,48 @@ sudo install -m 0644 scripts/soup_hub_adapter.py \
   /opt/scirust-hub/libexec/soup_hub_adapter.py
 ```
 
-Then register the component through the normal Hub registry path:
+Register only the capabilities available on that worker, for example:
 
 ```bash
+cargo run -p scirust-hub -- component register examples/soup-train-component.json
+cargo run -p scirust-hub -- component register examples/soup-eval-component.json
+cargo run -p scirust-hub -- component register examples/soup-export-component.json
 cargo run -p scirust-hub -- component register examples/soup-ship-component.json
 ```
 
-Registration is metadata-only; it does not execute SOUP.
+Registration remains metadata-only.
 
-## Security and provenance properties
+## Security and provenance
 
-The v1 adapter:
+The adapter invokes child processes with structured argv, `shell=False`, and closed stdin. Unknown Hub parameters are rejected. Hub inputs must be regular files. Bundle capture/extraction rejects symlinks and unsafe tar member types. Child stdout/stderr is written to run-local files and only a bounded prefix is embedded in the JSON report.
 
-- passes argv directly through `subprocess.run(..., shell=False)`;
-- closes stdin;
-- rejects a symlink or non-regular evidence input;
-- accepts a semantic verdict only if the declared verdict exists as a regular,
-  non-symlink file;
-- leaves SOUP's verdict bytes untouched so Hub can content-address the exact output;
-- keeps runtime/usage failures distinct from negative model-quality verdicts.
+This is process supervision and provenance, not an OS sandbox. A SOUP worker can download remote model/data dependencies allowed by the SOUP configuration and network policy. `trust_remote_code` remains false unless a run explicitly requests it. The selected worker's OS identity and privileges still define the execution boundary.
 
-Hub still provides the outer per-run work directory, materializes the input artifact from
-its content-addressed store, records the component/contract version and digests, captures
-stdout/stderr, and ingests the required verdict artifact.
-
-This is process supervision and provenance, not a sandbox. SOUP executes with the OS
-identity and privileges of the selected Hub worker.
+No Jetson/aarch64 training compatibility is claimed by this contract. That requires a real hardware qualification run of the relevant SOUP/PyTorch/bitsandbytes stack.
 
 ## Validation
 
-The Rust integration test in `crates/hub-core/tests/soup_component_contract.rs` parses the
-shipped manifest through Hub's real `ComponentManifest` validator and pins the published
-capability, versioned ports and placeholders.
-
-The dependency-free Python test suite exercises the semantic-exit adapter including a
-real subprocess fixture that writes a `DON'T SHIP` verdict and exits `2`:
+The Python suite covers semantic ship exits, deterministic bundle round trips, symlink rejection, tar traversal rejection, unknown parameters, and fake-process end-to-end train/eval/export flows:
 
 ```bash
 python3 -m unittest scripts/test_soup_hub_adapter.py
-cargo test -p hub-core --test soup_component_contract --locked
 ```
 
-Both commands are part of, or covered by, the repository CI path.
+Rust tests parse every shipped manifest through Hub's real `ComponentManifest` validator and pin the HML0 resource profile fields:
 
-## Next integration slices
+```bash
+cargo test -p hub-core --test soup_component_contract --locked
+cargo test -p hub-core --test soup_ml_component_contract --locked
+```
 
-The following are intentionally **not** claimed by `llm.ship@1.0.0`:
+Repository CI additionally runs format, Clippy, workspace build/test and rustdoc gates.
 
-1. **Large/directory artifact lineage.** Hub needs a versioned, bounded representation
-   for model directories, adapters, checkpoints and tokenizer/config file sets before a
-   trustworthy `llm.train` or `llm.export` contract is published.
-2. **Resource-aware placement.** A SOUP training capability should declare accelerator,
-   VRAM/RAM, dtype/backend and storage requirements only after Hub's ML capability and
-   worker-resource schemas can validate them. Static worker URLs are not sufficient.
-3. **SciRust acceleration.** No SciRust compute backend is enabled by this first slice.
-   A future bridge must expose a measured, versioned operation that SOUP can call without
-   making Hub or SciRust depend on PyTorch training semantics. Candidate areas must be
-   selected from real SciRust APIs and benchmarked against SOUP's existing implementation
-   before adoption.
-4. **Forge optimization.** Forge may later search SOUP recipes/configurations, but the
-   search semantics remain Forge-owned and the executed training/evaluation semantics
-   remain SOUP-owned.
+## Ecosystem boundary after Hub integration
 
-The integration should advance in that order so every new edge remains testable,
-reproducible and attributable to the component that actually owns the result.
+Hub integration makes SOUP executable and provenance-preserving inside the Memorithm control plane. It does not by itself make SOUP a SciRust compute backend. The next cross-repository contracts are deliberately separate:
+
+1. SciRust: deterministic verifier/reward process usable by SOUP RLVR/GRPO without importing PyTorch into SciRust;
+2. Forge: execution-driven search over SOUP recipes, with SOUP evaluation evidence authoritative and `soup sweep` retained as a baseline;
+3. ElasticXxx: adaptive model-residency/resource policy mapped to SOUP streaming/batch knobs without moving adaptation policy into Hub.
+
+Those edges must each be versioned and tested before they are treated as operational.
