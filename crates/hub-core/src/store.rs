@@ -205,11 +205,8 @@ pub trait ArtifactStore: Send + Sync {
     /// # Errors
     /// [`CoreError::ArtifactNotFound`] when the digest is unknown; backend IO
     /// errors otherwise.
-    fn copy_to_path(
-        &self,
-        digest: &ContentDigest,
-        dest: &std::path::Path,
-    ) -> Result<(), CoreError>;
+    fn copy_to_path(&self, digest: &ContentDigest, dest: &std::path::Path)
+        -> Result<(), CoreError>;
 
     #[must_use]
     fn contains(&self, digest: &ContentDigest) -> bool;
