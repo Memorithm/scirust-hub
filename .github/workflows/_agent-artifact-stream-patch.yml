@@ -1,0 +1,28 @@
+name: agent artifact stream patch
+
+on:
+  push:
+    branches:
+      - agent/artifact-stream-ingest
+
+permissions:
+  contents: write
+
+jobs:
+  patch:
+    if: ${{ !startsWith(github.event.head_commit.message, 'chore: apply artifact stream patch') }}
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+        with:
+          fetch-depth: 0
+      - name: Apply deterministic patch
+        run: python3 scripts/_agent_patch_artifact_stream.py
+      - name: Commit patch
+        run: |
+          git config user.name "CHECKUPAUTO"
+          git config user.email "contact@checkupauto.fr"
+          git add -A
+          git diff --cached --check
+          git commit -m "chore: apply artifact stream patch"
+          git push origin HEAD:agent/artifact-stream-ingest
