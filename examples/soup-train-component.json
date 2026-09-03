@@ -1,0 +1,78 @@
+{
+  "schema_version": 1,
+  "id": "00000000-0000-0000-0000-000000000003",
+  "name": "SOUP Training",
+  "version": "0.73.3",
+  "kind": "tool",
+  "capabilities": [
+    {
+      "name": "llm.train",
+      "contract_version": "1.0.0",
+      "inputs": [
+        {
+          "name": "config",
+          "description": "text/yaml; SOUP config template containing ${SOUP_HUB_DATASET} and ${SOUP_HUB_OUTPUT}"
+        },
+        {
+          "name": "dataset",
+          "description": "Immutable training dataset artifact referenced by the SOUP config template"
+        }
+      ],
+      "outputs": [
+        {
+          "name": "model_bundle",
+          "description": "application/vnd.scirust-hub.soup-bundle.v1+tar"
+        },
+        {
+          "name": "report",
+          "description": "application/vnd.scirust-hub.soup-train-report.v1+json"
+        }
+      ],
+      "properties": {
+        "execution_mode": "local_process",
+        "dataset_placeholder": "${SOUP_HUB_DATASET}",
+        "output_placeholder": "${SOUP_HUB_OUTPUT}",
+        "bundle_schema": "application/vnd.scirust-hub.soup-bundle.v1+tar",
+        "trust_remote_code_default": "false"
+      }
+    }
+  ],
+  "execution": {
+    "type": "process",
+    "program": "python3",
+    "args": [
+      "/opt/scirust-hub/libexec/soup_hub_adapter.py",
+      "train",
+      "--config",
+      "{input:config}",
+      "--dataset",
+      "{input:dataset}",
+      "--bundle",
+      "{output:model_bundle}",
+      "--report",
+      "{output:report}",
+      "--params",
+      "{params}"
+    ],
+    "outputs": [
+      {
+        "name": "model_bundle",
+        "path": "outputs/soup-model-bundle.tar",
+        "media_type": "application/vnd.scirust-hub.soup-bundle.v1+tar",
+        "required": true
+      },
+      {
+        "name": "report",
+        "path": "outputs/soup-train-report.json",
+        "media_type": "application/vnd.scirust-hub.soup-train-report.v1+json",
+        "required": true
+      }
+    ]
+  },
+  "metadata": {
+    "upstream_repository": "https://github.com/MakazhanAlpamys/Soup",
+    "upstream_release_reference": "v0.73.3",
+    "upstream_qualified_commit": "05b646523727925990530667e7012ede50bd30b2",
+    "contract": "soup-train-v1"
+  }
+}
