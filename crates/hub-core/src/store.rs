@@ -162,9 +162,9 @@ pub trait ArtifactStore: Send + Sync {
 
         let file = std::fs::File::open(path)
             .map_err(|e| CoreError::Storage(format!("opening artifact file {path:?}: {e}")))?;
-        let opened = file
-            .metadata()
-            .map_err(|e| CoreError::Storage(format!("stating opened artifact file {path:?}: {e}")))?;
+        let opened = file.metadata().map_err(|e| {
+            CoreError::Storage(format!("stating opened artifact file {path:?}: {e}"))
+        })?;
         if !opened.is_file() {
             return Err(CoreError::Storage(format!(
                 "refusing non-regular opened artifact file {path:?}"
@@ -205,8 +205,11 @@ pub trait ArtifactStore: Send + Sync {
     /// # Errors
     /// [`CoreError::ArtifactNotFound`] when the digest is unknown; backend IO
     /// errors otherwise.
-    fn copy_to_path(&self, digest: &ContentDigest, dest: &std::path::Path)
-        -> Result<(), CoreError>;
+    fn copy_to_path(
+        &self,
+        digest: &ContentDigest,
+        dest: &std::path::Path,
+    ) -> Result<(), CoreError>;
 
     #[must_use]
     fn contains(&self, digest: &ContentDigest) -> bool;
