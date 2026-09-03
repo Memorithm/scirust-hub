@@ -1,0 +1,71 @@
+{
+  "schema_version": 1,
+  "id": "00000000-0000-0000-0000-000000000005",
+  "name": "SOUP Export",
+  "version": "0.73.3",
+  "kind": "tool",
+  "capabilities": [
+    {
+      "name": "llm.export",
+      "contract_version": "1.0.0",
+      "inputs": [
+        {
+          "name": "model_bundle",
+          "description": "application/vnd.scirust-hub.soup-bundle.v1+tar"
+        }
+      ],
+      "outputs": [
+        {
+          "name": "export_bundle",
+          "description": "application/vnd.scirust-hub.soup-bundle.v1+tar"
+        },
+        {
+          "name": "report",
+          "description": "application/vnd.scirust-hub.soup-export-report.v1+json"
+        }
+      ],
+      "properties": {
+        "execution_mode": "local_process",
+        "bundle_schema": "application/vnd.scirust-hub.soup-bundle.v1+tar",
+        "format_parameter": "required",
+        "unknown_parameters": "rejected"
+      }
+    }
+  ],
+  "execution": {
+    "type": "process",
+    "program": "python3",
+    "args": [
+      "/opt/scirust-hub/libexec/soup_hub_adapter.py",
+      "export",
+      "--bundle",
+      "{input:model_bundle}",
+      "--exported-bundle",
+      "{output:export_bundle}",
+      "--report",
+      "{output:report}",
+      "--params",
+      "{params}"
+    ],
+    "outputs": [
+      {
+        "name": "export_bundle",
+        "path": "outputs/soup-export-bundle.tar",
+        "media_type": "application/vnd.scirust-hub.soup-bundle.v1+tar",
+        "required": true
+      },
+      {
+        "name": "report",
+        "path": "outputs/soup-export-report.json",
+        "media_type": "application/vnd.scirust-hub.soup-export-report.v1+json",
+        "required": true
+      }
+    ]
+  },
+  "metadata": {
+    "upstream_repository": "https://github.com/MakazhanAlpamys/Soup",
+    "upstream_release_reference": "v0.73.3",
+    "upstream_qualified_commit": "05b646523727925990530667e7012ede50bd30b2",
+    "contract": "soup-export-v1"
+  }
+}
