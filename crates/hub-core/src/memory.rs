@@ -242,13 +242,13 @@ impl ArtifactStore for FileSystemArtifactStore {
                         )))
                     }
                 };
-                size = size.checked_add(read as u64).ok_or_else(|| {
-                    CoreError::ArtifactTooLarge {
-                        artifact: ArtifactId::generate(),
-                        size: u64::MAX,
-                        limit: max_bytes,
-                    }
-                })?;
+                size =
+                    size.checked_add(read as u64)
+                        .ok_or_else(|| CoreError::ArtifactTooLarge {
+                            artifact: ArtifactId::generate(),
+                            size: u64::MAX,
+                            limit: max_bytes,
+                        })?;
                 if size > max_bytes {
                     return Err(CoreError::ArtifactTooLarge {
                         artifact: ArtifactId::generate(),
