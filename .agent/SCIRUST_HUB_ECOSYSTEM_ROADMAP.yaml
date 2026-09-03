@@ -24,6 +24,7 @@ verified_current_facts:
   - Hub_supports_local_and_authenticated_remote_process_execution
   - workflows_support_bounded_parallelism_retries_and_cancellation
   - SciCapsule_execution_is_integrated_through_a_published_versioned_process_contract
+  - SOUP_offline_ship_evidence_replay_is_integrated_through_llm_ship_1_0_0
   - Hub_records_immutable_artifacts_and_execution_provenance
   - Hub_has_read_only_MCP_introspection
   - Hub_has_bearer_authentication_and_optional_native_TLS
@@ -65,6 +66,7 @@ ownership:
     - FLAT_ATTENTION_attention_kernel_semantics
     - NNIS_native_inference_runtime_internals
     - SLHAv2_compressed_KV_semantics
+    - SOUP_training_evaluation_model_loading_or_verdict_semantics
     - nonlocal_relativity_scientific_models_or_interpretation
 
 ecosystem_graph:
@@ -84,6 +86,9 @@ ecosystem_graph:
   optimization_search:
     Memorithm/forge:
       role: execution_driven_candidate_search_engine
+  llm_post_training:
+    MakazhanAlpamys/Soup:
+      role: independent_LLM_post_training_evaluation_and_export_product
   verification:
     Memorithm/SciRust-Verify:
       role: evidence_dossier_integrity_scope_and_verdict_layer
@@ -110,6 +115,23 @@ current_and_target_interfaces:
     status: active_published_contract
     capability: capsule.execute
     rule: Hub_materializes_inputs_and_owns_outer_orchestration_while_SciCapsule_validates_trust_and_executes_the_capsule
+  MakazhanAlpamys/Soup:
+    status: active_published_contract
+    capability: llm.ship
+    contract_version: 1.0.0
+    source_release: v0.73.3
+    reviewed_upstream_main: 2137035bc6279b32fc7c1e04e1c70aec3584290a
+    hub_pull_request: 26
+    final_exact_head: a01464ae51f17dfa513bce902e9db5a1f5732abf
+    merge_commit: 87546e00c0ae255b47013182d97e06db43a24721
+    required_CI: CI_success_on_final_exact_head
+    rule: >-
+      Hub preserves SOUP offline SHIP and DONT_SHIP verdict artifacts through a
+      narrow process adapter without absorbing SOUP evaluation semantics.
+    next_contract_blockers:
+      - large_and_directory_artifact_lineage_for_models_adapters_and_checkpoints
+      - versioned_ML_device_dtype_memory_and_backend_requirements
+      - measured_SciRust_interoperability_before_any_acceleration_claim
   Memorithm/scirust:
     status: contract_inventory_needed
     desired:
@@ -180,7 +202,7 @@ roadmap:
           - strict_inspect_control_metrics_permission_vocabulary
           - legacy_single_token_full_control_compatibility
           - fail_closed_versioned_multi_principal_configuration
-          - unauthorized_401_distinct_from_forbidden_403
+          - unauthorized_401_distinct_from_authenticated_forbidden_403
           - all_current_mutation_categories_covered_by_read_only_403_tests
           - health_and_ready_remain_unauthenticated_and_metrics_permission_is_explicit
           - principal_spoof_headers_do_not_elevate_authority
@@ -202,6 +224,21 @@ roadmap:
   - id: HUB4
     name: Ecosystem component contract catalog
     status: active
+    completed_slices:
+      - id: HUB4_SOUP_offline_ship_v1
+        status: complete
+        capability: llm.ship
+        contract_version: 1.0.0
+        pull_request: 26
+        final_exact_head: a01464ae51f17dfa513bce902e9db5a1f5732abf
+        merge_commit: 87546e00c0ae255b47013182d97e06db43a24721
+        required_CI: CI_success_on_final_exact_head
+        guarantees:
+          - SHIP_and_DONT_SHIP_are_preserved_as_semantic_verdict_artifacts
+          - SOUP_runtime_usage_signal_and_unknown_exits_fail_closed
+          - adapter_does_not_reinterpret_SOUP_verdict_payloads
+          - input_and_output_symlinks_are_rejected_at_the_SOUP_adapter_boundary
+          - manifest_is_validated_by_Hub_ComponentManifest
     sequence:
       - preserve_and_version_SciCapsule_contract
       - define_SciRust_selected_capabilities
@@ -210,6 +247,7 @@ roadmap:
       - define_Forge_contract
       - define_SLHAv2_FLAT_and_NNIS_contracts_as_their_surfaces_stabilize
       - define_nonlocal_relativity_experiment_contract
+      - expand_SOUP_beyond_llm_ship_only_after_HML0_and_HML3_contracts_exist
     exit_criteria:
       - each_active_edge_has_schema_version_compatibility_tests_and_failure_semantics
   - id: HUB5
