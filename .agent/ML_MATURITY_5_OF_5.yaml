@@ -1,7 +1,7 @@
 schema_version: 1
 kind: memorithm_ml_maturity_program
 status: active
-last_updated: "2026-08-31"
+last_updated: "2026-09-03"
 repository: Memorithm/scirust-hub
 objective: >-
   Raise the ML orchestration/control-plane contribution to evidence-backed 5/5:
@@ -19,10 +19,35 @@ score_policy:
     - implementing_DDP_or_model_execution_inside_Hub
     - scheduling_on_unverified_capabilities
     - silently_replaying_ambiguous_side_effecting_training_attempts
+verified_slices:
+  - id: SOUP_HML0_resource_declaration_v1
+    status: complete
+    pull_request: 28
+    final_exact_head: 50acbc69fabf657e75a7dc25f4bf40b25470777c
+    merge_commit: 3317300d33cfb412f90dede64257833d3e8cdfd2
+    contract: hub.ml.resource-requirements@1.0.0
+    scope: >-
+      SOUP train/eval/export publish backend, device, dtype, accelerator and
+      memory resolution semantics while explicitly leaving compatible-worker
+      placement to HML1.
+  - id: SOUP_HML3_streamed_bundle_lineage_v1
+    status: complete
+    artifact_streaming_pull_request: 27
+    artifact_streaming_final_exact_head: d2b9c57d4dafcfe530424ef075324608da5e17da
+    artifact_streaming_merge_commit: b20b2f66ae8c82f996590d65500c4aff950b3423
+    contracts_pull_request: 28
+    contracts_final_exact_head: 50acbc69fabf657e75a7dc25f4bf40b25470777c
+    contracts_merge_commit: 3317300d33cfb412f90dede64257833d3e8cdfd2
+    scope: >-
+      Declared ML outputs stream into content-addressed storage and SOUP
+      directory-shaped model/export outputs are normalized into deterministic,
+      bounded, fail-closed bundle artifacts. Full generic optimizer/checkpoint
+      graph semantics remain future HML3 work.
 priority_program:
   - id: HML0
     name: ML capability schema
     priority: P0
+    status: active_with_SOUP_v1_reference_contract
     goals:
       - register_training_inference_benchmark_and_verification_capabilities_with_versioned_ports
       - express_device_dtype_memory_accelerator_and_backend_requirements
@@ -30,6 +55,7 @@ priority_program:
   - id: HML1
     name: Resource aware worker pool
     priority: P0
+    status: planned
     goals:
       - dynamic_worker_registration_lease_expiry_and_liveness
       - advertise_CPU_GPU_memory_driver_and_runtime_capabilities
@@ -38,6 +64,7 @@ priority_program:
   - id: HML2
     name: Distributed ML orchestration
     priority: P1
+    status: planned
     goals:
       - orchestrate_multi_process_or_multi_host_training_components_without_implementing_collectives
       - allocate_coherent_worker_groups_and_publish_rendezvous_inputs_as_explicit_artifacts_or_parameters
@@ -45,6 +72,7 @@ priority_program:
   - id: HML3
     name: Model data checkpoint artifact lineage
     priority: P0
+    status: active_with_SOUP_bundle_v1_reference_contract
     goals:
       - support_large_immutable_artifact_metadata_and_content_addressed_identity
       - preserve_model_config_tokenizer_weights_dataset_manifest_checkpoint_and_optimizer_lineage
@@ -52,6 +80,7 @@ priority_program:
   - id: HML4
     name: Qualification campaign orchestration
     priority: P0
+    status: planned
     goals:
       - run_same_workload_SciRust_Burn_Candle_PyTorch_comparison_components_when_registered
       - collect_machine_readable_outputs_without_reinterpreting_measurement_semantics
