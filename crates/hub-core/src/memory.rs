@@ -5,6 +5,7 @@
 //! domain change.
 
 use std::collections::BTreeMap;
+use std::io::{Read, Write};
 use std::sync::Mutex;
 
 use crate::artifact::ArtifactMeta;
@@ -181,6 +182,118 @@ impl ArtifactStore for FileSystemArtifactStore {
         std::fs::rename(&tmp, &path)
             .map_err(|e| CoreError::Storage(format!("publishing blob: {e}")))?;
         Ok(digest)
+    }
+
+    fn put_file(
+        &self,
+        source_path: &std::path::Path,
+        max_bytes: u64,
+        domain: &[u8],
+    ) -> Result<(ContentDigest, u64), CoreError> {
+        let source_meta = std::fs::symlink_metadata(source_path).map_err(|e| {
+            CoreError::Storage(format!("stating source artifact {source_path:?}: {e}"))
+        })?;
+        if source_meta.file_type().is_symlink() {
+            return Err(CoreError::Storage(format!(
+                "refusing symbolic-link artifact source {source_path:?}"
+            )));
+        }
+        if !source_meta.is_file() {
+            return Err(CoreError::Storage(format!(
+                "artifact source {source_path:?} is not a regular file"
+            )));
+        }
+
+        let mut source = std::fs::File::open(source_path).map_err(|e| {
+            CoreError::Storage(format!("opening source artifact {source_path:?}: {e}"))
+        })?;
+        if !source
+            .metadata()
+            .map_err(|e| CoreError::Storage(format!("stating opened artifact: {e}")))?
+            .is_file()
+        {
+            return Err(CoreError::Storage(format!(
+                "opened artifact source {source_path:?} is not a regular file"
+            )));
+        }
+
+        let incoming = self.root.join("incoming");
+        std::fs::create_dir_all(&incoming)
+            .map_err(|e| CoreError::Storage(format!("creating incoming blob dir: {e}")))?;
+        let tmp = incoming.join(format!("{}.tmp", uuid::Uuid::new_v4()));
+        let mut staged = std::fs::OpenOptions::new()
+            .write(true)
+            .create_new(true)
+            .open(&tmp)
+            .map_err(|e| CoreError::Storage(format!("creating staged blob: {e}")))?;
+
+        let result = (|| -> Result<(ContentDigest, u64), CoreError> {
+            let mut state = crate::digest::DigestState::new(domain);
+            let mut size = 0u64;
+            let mut buf = [0u8; 64 * 1024];
+            loop {
+                let read = match source.read(&mut buf) {
+                    Ok(0) => break,
+                    Ok(read) => read,
+                    Err(e) if e.kind() == std::io::ErrorKind::Interrupted => continue,
+                    Err(e) => {
+                        return Err(CoreError::Storage(format!(
+                            "reading source artifact {source_path:?}: {e}"
+                        )))
+                    }
+                };
+                size =
+                    size.checked_add(read as u64)
+                        .ok_or_else(|| CoreError::ArtifactTooLarge {
+                            artifact: ArtifactId::generate(),
+                            size: u64::MAX,
+                            limit: max_bytes,
+                        })?;
+                if size > max_bytes {
+                    return Err(CoreError::ArtifactTooLarge {
+                        artifact: ArtifactId::generate(),
+                        size,
+                        limit: max_bytes,
+                    });
+                }
+                state.update(&buf[..read]);
+                staged
+                    .write_all(&buf[..read])
+                    .map_err(|e| CoreError::Storage(format!("writing staged blob: {e}")))?;
+            }
+            staged
+                .sync_all()
+                .map_err(|e| CoreError::Storage(format!("syncing staged blob: {e}")))?;
+            Ok((state.finalize(), size))
+        })();
+
+        let (digest, size) = match result {
+            Ok(result) => result,
+            Err(error) => {
+                drop(staged);
+                let _ = std::fs::remove_file(&tmp);
+                return Err(error);
+            }
+        };
+        drop(staged);
+
+        let destination = self.blob_path(&digest);
+        if destination.exists() {
+            let _ = std::fs::remove_file(&tmp);
+            return Ok((digest, size));
+        }
+        if let Some(parent) = destination.parent() {
+            std::fs::create_dir_all(parent)
+                .map_err(|e| CoreError::Storage(format!("creating shard dir: {e}")))?;
+        }
+        if let Err(e) = std::fs::rename(&tmp, &destination) {
+            let _ = std::fs::remove_file(&tmp);
+            if destination.exists() {
+                return Ok((digest, size));
+            }
+            return Err(CoreError::Storage(format!("publishing streamed blob: {e}")));
+        }
+        Ok((digest, size))
     }
 
     fn read(&self, digest: &ContentDigest) -> Result<Vec<u8>, CoreError> {
@@ -522,6 +635,55 @@ mod tests {
         store.copy_to_path(&d1, &dest).expect("copy");
         assert_eq!(std::fs::read(&dest).expect("copied"), data);
         drop(store);
+        std::fs::remove_dir_all(&dir).expect("cleanup");
+    }
+
+    #[test]
+    fn file_blob_store_streams_and_round_trips() {
+        let dir = std::env::temp_dir().join(format!("hub-core-file-test-{}", uuid::Uuid::new_v4()));
+        let store = FileSystemArtifactStore::open(&dir).expect("open");
+        let source = dir.join("source.bin");
+        let data = vec![0x5Au8; 200_000];
+        std::fs::write(&source, &data).expect("source");
+        let (digest, size) = store
+            .put_file(&source, 300_000, crate::digest::DOMAIN_ARTIFACT_BLOB)
+            .expect("put file");
+        assert_eq!(size, data.len() as u64);
+        assert_eq!(
+            digest,
+            crate::digest::hash_bytes(crate::digest::DOMAIN_ARTIFACT_BLOB, &data)
+        );
+        assert_eq!(store.read(&digest).expect("read"), data);
+        std::fs::remove_dir_all(&dir).expect("cleanup");
+    }
+
+    #[test]
+    fn file_blob_store_enforces_limit_while_streaming() {
+        let dir = std::env::temp_dir().join(format!("hub-core-file-test-{}", uuid::Uuid::new_v4()));
+        let store = FileSystemArtifactStore::open(&dir).expect("open");
+        let source = dir.join("oversize.bin");
+        std::fs::write(&source, vec![0u8; 128]).expect("source");
+        assert!(matches!(
+            store.put_file(&source, 64, crate::digest::DOMAIN_ARTIFACT_BLOB),
+            Err(CoreError::ArtifactTooLarge { limit: 64, .. })
+        ));
+        std::fs::remove_dir_all(&dir).expect("cleanup");
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn file_blob_store_rejects_symbolic_links() {
+        use std::os::unix::fs::symlink;
+        let dir = std::env::temp_dir().join(format!("hub-core-file-test-{}", uuid::Uuid::new_v4()));
+        let store = FileSystemArtifactStore::open(&dir).expect("open");
+        let source = dir.join("source.bin");
+        let link = dir.join("link.bin");
+        std::fs::write(&source, b"payload").expect("source");
+        symlink(&source, &link).expect("symlink");
+        assert!(matches!(
+            store.put_file(&link, 1024, crate::digest::DOMAIN_ARTIFACT_BLOB),
+            Err(CoreError::Storage(message)) if message.contains("symbolic-link")
+        ));
         std::fs::remove_dir_all(&dir).expect("cleanup");
     }
 
