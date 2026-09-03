@@ -24,7 +24,10 @@ verified_current_facts:
   - Hub_supports_local_and_authenticated_remote_process_execution
   - workflows_support_bounded_parallelism_retries_and_cancellation
   - SciCapsule_execution_is_integrated_through_a_published_versioned_process_contract
-  - SOUP_offline_ship_evidence_replay_is_integrated_through_llm_ship_1_0_0
+  - SOUP_ship_train_eval_and_export_are_integrated_through_versioned_llm_contracts
+  - Hub_streams_declared_output_artifacts_into_content_addressed_storage
+  - SOUP_model_and_export_directories_are_normalized_into_deterministic_bounded_bundles
+  - SOUP_ML_capabilities_publish_hub_ml_resource_requirements_1_0_0_resolution_metadata
   - Hub_records_immutable_artifacts_and_execution_provenance
   - Hub_has_read_only_MCP_introspection
   - Hub_has_bearer_authentication_and_optional_native_TLS
@@ -32,6 +35,7 @@ verified_current_facts:
   - Hub_distinguishes_unauthorized_401_from_authenticated_forbidden_403
   - legacy_SCIRUST_HUB_TOKEN_mode_remains_backward_compatible_full_control
   - process_execution_is_supervised_but_not_an_OS_sandbox
+  - Hub_HML1_resource_aware_worker_placement_is_not_yet_established
   - current_BOUNDARIES_md_contains_historical_not_yet_established_notes_that_must_be_reconciled_against_newer_published_contracts_before_relying_on_them
 
 invariants:
@@ -66,7 +70,7 @@ ownership:
     - FLAT_ATTENTION_attention_kernel_semantics
     - NNIS_native_inference_runtime_internals
     - SLHAv2_compressed_KV_semantics
-    - SOUP_training_evaluation_model_loading_or_verdict_semantics
+    - SOUP_training_evaluation_model_loading_export_or_verdict_semantics
     - nonlocal_relativity_scientific_models_or_interpretation
 
 ecosystem_graph:
@@ -116,22 +120,39 @@ current_and_target_interfaces:
     capability: capsule.execute
     rule: Hub_materializes_inputs_and_owns_outer_orchestration_while_SciCapsule_validates_trust_and_executes_the_capsule
   MakazhanAlpamys/Soup:
-    status: active_published_contract
-    capability: llm.ship
-    contract_version: 1.0.0
-    source_release: v0.73.3
-    reviewed_upstream_main: 2137035bc6279b32fc7c1e04e1c70aec3584290a
-    hub_pull_request: 26
-    final_exact_head: a01464ae51f17dfa513bce902e9db5a1f5732abf
-    merge_commit: 87546e00c0ae255b47013182d97e06db43a24721
-    required_CI: CI_success_on_final_exact_head
+    status: active_published_contracts
+    capabilities:
+      - name: llm.ship
+        contract_version: 1.0.0
+      - name: llm.train
+        contract_version: 1.0.0
+      - name: llm.eval
+        contract_version: 1.0.0
+      - name: llm.export
+        contract_version: 1.0.0
+    source_release_reference: v0.73.3
+    ship_reviewed_upstream_main: 2137035bc6279b32fc7c1e04e1c70aec3584290a
+    ml_qualified_upstream_commit: 05b646523727925990530667e7012ede50bd30b2
+    artifact_streaming_pull_request: 27
+    artifact_streaming_final_exact_head: d2b9c57d4dafcfe530424ef075324608da5e17da
+    artifact_streaming_merge_commit: b20b2f66ae8c82f996590d65500c4aff950b3423
+    full_contracts_pull_request: 28
+    full_contracts_final_exact_head: 50acbc69fabf657e75a7dc25f4bf40b25470777c
+    full_contracts_merge_commit: 3317300d33cfb412f90dede64257833d3e8cdfd2
+    required_CI: CI_success_on_each_final_exact_head
+    resource_profile: hub.ml.resource-requirements@1.0.0
+    placement_enforcement: component_preflight
     rule: >-
-      Hub preserves SOUP offline SHIP and DONT_SHIP verdict artifacts through a
-      narrow process adapter without absorbing SOUP evaluation semantics.
-    next_contract_blockers:
-      - large_and_directory_artifact_lineage_for_models_adapters_and_checkpoints
-      - versioned_ML_device_dtype_memory_and_backend_requirements
-      - measured_SciRust_interoperability_before_any_acceleration_claim
+      Hub orchestrates SOUP and preserves immutable inputs, deterministic model
+      bundles, reports and verdict artifacts without absorbing SOUP training,
+      evaluation, model-loading, export or verdict semantics. Worker resource
+      placement remains an HML1 responsibility; registration is not execution
+      qualification.
+    remaining_cross_repository_work:
+      - integrate_SciRust_deterministic_verifier_reward_as_a_separate_versioned_edge
+      - integrate_Forge_execution_driven_SOUP_recipe_search_as_a_separate_versioned_edge
+      - integrate_ElasticXxx_adaptive_resource_policy_as_a_separate_versioned_edge
+      - qualify_real_target_hardware_before_any_Jetson_or_ARM64_compatibility_claim
   Memorithm/scirust:
     status: contract_inventory_needed
     desired:
@@ -233,12 +254,35 @@ roadmap:
         final_exact_head: a01464ae51f17dfa513bce902e9db5a1f5732abf
         merge_commit: 87546e00c0ae255b47013182d97e06db43a24721
         required_CI: CI_success_on_final_exact_head
+      - id: HUB4_SOUP_streamed_artifacts_v1
+        status: complete
+        pull_request: 27
+        final_exact_head: d2b9c57d4dafcfe530424ef075324608da5e17da
+        merge_commit: b20b2f66ae8c82f996590d65500c4aff950b3423
+        required_CI: CI_success_on_final_exact_head
         guarantees:
-          - SHIP_and_DONT_SHIP_are_preserved_as_semantic_verdict_artifacts
-          - SOUP_runtime_usage_signal_and_unknown_exits_fail_closed
-          - adapter_does_not_reinterpret_SOUP_verdict_payloads
-          - input_and_output_symlinks_are_rejected_at_the_SOUP_adapter_boundary
-          - manifest_is_validated_by_Hub_ComponentManifest
+          - declared_output_files_are_streamed_into_content_addressed_storage
+          - size_limits_are_enforced_during_copy
+          - symlink_and_non_regular_outputs_are_rejected_generically
+      - id: HUB4_SOUP_train_eval_export_v1
+        status: complete
+        capabilities:
+          - llm.train@1.0.0
+          - llm.eval@1.0.0
+          - llm.export@1.0.0
+        pull_request: 28
+        final_exact_head: 50acbc69fabf657e75a7dc25f4bf40b25470777c
+        merge_commit: 3317300d33cfb412f90dede64257833d3e8cdfd2
+        required_CI: CI_success_on_final_exact_head
+        resource_profile: hub.ml.resource-requirements@1.0.0
+        guarantees:
+          - deterministic_bounded_model_and_export_bundle_lineage
+          - tar_traversal_links_devices_fifos_duplicates_and_unbounded_payloads_fail_closed
+          - training_dataset_and_output_paths_are_explicit_Hub_tokens
+          - unknown_Hub_parameters_fail_closed
+          - trust_remote_code_is_opt_in
+          - backend_device_dtype_accelerator_and_memory_resolution_are_declared
+          - resource_aware_worker_placement_is_not_falsely_claimed
     sequence:
       - preserve_and_version_SciCapsule_contract
       - define_SciRust_selected_capabilities
@@ -247,7 +291,6 @@ roadmap:
       - define_Forge_contract
       - define_SLHAv2_FLAT_and_NNIS_contracts_as_their_surfaces_stabilize
       - define_nonlocal_relativity_experiment_contract
-      - expand_SOUP_beyond_llm_ship_only_after_HML0_and_HML3_contracts_exist
     exit_criteria:
       - each_active_edge_has_schema_version_compatibility_tests_and_failure_semantics
   - id: HUB5
