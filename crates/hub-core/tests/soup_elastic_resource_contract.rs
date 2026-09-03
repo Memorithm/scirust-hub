@@ -85,14 +85,13 @@ fn soup_elastic_training_contract_is_explicit_and_versioned() {
         Some(ELASTIC_SOURCE_MERGE)
     );
 
-    let ExecutionBinding::Process(binding) = manifest.execution.as_ref().expect("execution binding");
+    let ExecutionBinding::Process(binding) =
+        manifest.execution.as_ref().expect("execution binding");
     assert_eq!(binding.program, "python3");
-    assert!(
-        binding
-            .args
-            .iter()
-            .any(|arg| arg == "/opt/scirust-hub/libexec/soup_elastic_hub_adapter.py")
-    );
+    assert!(binding
+        .args
+        .iter()
+        .any(|arg| arg == "/opt/scirust-hub/libexec/soup_elastic_hub_adapter.py"));
     for expected in [
         "{input:config}",
         "{input:dataset}",
@@ -109,10 +108,9 @@ fn soup_elastic_training_contract_is_explicit_and_versioned() {
 
 #[test]
 fn legacy_soup_training_contract_does_not_silently_gain_an_elastic_input() {
-    let manifest: ComponentManifest = serde_json::from_str(include_str!(
-        "../../../examples/soup-train-component.json"
-    ))
-    .expect("legacy SOUP training manifest must deserialize");
+    let manifest: ComponentManifest =
+        serde_json::from_str(include_str!("../../../examples/soup-train-component.json"))
+            .expect("legacy SOUP training manifest must deserialize");
     manifest.validate().expect("legacy manifest remains valid");
 
     let capability_name = CapabilityName::parse("llm.train").expect("capability name");
