@@ -10,7 +10,6 @@ members = [
     "apps/scirust-hub",
     "apps/scirust-hubd",
     "apps/scirust-hub-worker",
-    "apps/scirust-hub-soup-adapter",
 ]
 
 [workspace.package]
