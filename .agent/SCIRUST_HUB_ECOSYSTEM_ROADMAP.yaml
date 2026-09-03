@@ -25,6 +25,7 @@ verified_current_facts:
   - workflows_support_bounded_parallelism_retries_and_cancellation
   - SciCapsule_execution_is_integrated_through_a_published_versioned_process_contract
   - SOUP_ship_train_eval_and_export_are_integrated_through_versioned_llm_contracts
+  - SOUP_Elastic_preexecution_resource_plan_handoff_is_integrated_through_llm_train_elastic_1_0_0
   - Hub_streams_declared_output_artifacts_into_content_addressed_storage
   - SOUP_model_and_export_directories_are_normalized_into_deterministic_bounded_bundles
   - SOUP_ML_capabilities_publish_hub_ml_resource_requirements_1_0_0_resolution_metadata
@@ -126,6 +127,8 @@ current_and_target_interfaces:
         contract_version: 1.0.0
       - name: llm.train
         contract_version: 1.0.0
+      - name: llm.train.elastic
+        contract_version: 1.0.0
       - name: llm.eval
         contract_version: 1.0.0
       - name: llm.export
@@ -139,19 +142,24 @@ current_and_target_interfaces:
     full_contracts_pull_request: 28
     full_contracts_final_exact_head: 50acbc69fabf657e75a7dc25f4bf40b25470777c
     full_contracts_merge_commit: 3317300d33cfb412f90dede64257833d3e8cdfd2
+    elastic_resource_plan_pull_request: 30
+    elastic_resource_plan_final_exact_head: f4a8336622a8383f1a7df3610e87d200356e1ddb
+    elastic_resource_plan_merge_commit: 66fcd61a8b7d8ad39425b1725b94919f5abc210f
+    elastic_resource_plan_contract: elastic.soup.run-resource-plan@1.0.0
+    elastic_resource_plan_media_type: application/vnd.elastic.soup.run-resource-plan.v1+json
+    elastic_source_merge: 6e0952e59842eb9c14f808266d6f3eb0b1f33014
     required_CI: CI_success_on_each_final_exact_head
     resource_profile: hub.ml.resource-requirements@1.0.0
     placement_enforcement: component_preflight
     rule: >-
       Hub orchestrates SOUP and preserves immutable inputs, deterministic model
-      bundles, reports and verdict artifacts without absorbing SOUP training,
-      evaluation, model-loading, export or verdict semantics. Worker resource
-      placement remains an HML1 responsibility; registration is not execution
-      qualification.
+      bundles, reports, verdict artifacts, and optional ElasticXxx resource-plan
+      artifacts without absorbing SOUP training or Elastic adaptation policy.
+      Worker resource placement remains an HML1 responsibility; registration and
+      component preflight are not execution qualification.
     remaining_cross_repository_work:
       - integrate_SciRust_deterministic_verifier_reward_as_a_separate_versioned_edge
       - integrate_Forge_execution_driven_SOUP_recipe_search_as_a_separate_versioned_edge
-      - integrate_ElasticXxx_adaptive_resource_policy_as_a_separate_versioned_edge
       - qualify_real_target_hardware_before_any_Jetson_or_ARM64_compatibility_claim
   Memorithm/scirust:
     status: contract_inventory_needed
@@ -164,11 +172,20 @@ current_and_target_interfaces:
       - retain_dossier_as_immutable_artifact
       - keep_Verify_verdict_semantics_outside_Hub
   Memorithm/ElasticXxx:
-    status: planned
+    status: active_published_SOUP_resource_plan_edge
+    published:
+      - contract: elastic.soup.run-resource-plan@1.0.0
+        media_type: application/vnd.elastic.soup.run-resource-plan.v1+json
+        source_merge: 6e0952e59842eb9c14f808266d6f3eb0b1f33014
+        hub_capability: llm.train.elastic@1.0.0
+        hub_merge: 66fcd61a8b7d8ad39425b1725b94919f5abc210f
     desired:
-      - orchestrate_Elastic_runtime_jobs_or_daemons
+      - orchestrate_Elastic_runtime_jobs_or_daemons_when_a_separate_runtime_component_contract_is_published
       - retain_plan_cycle_and_evidence_artifacts
       - never_move_Elastic_adaptation_policy_into_Hub_scheduler
+    limits:
+      - current_SOUP_edge_consumes_an_immutable_preexecution_plan_and_does_not_run_the_Elastic_control_loop_inside_Hub
+      - HML1_dynamic_worker_placement_remains_unimplemented
   Memorithm/forge:
     status: planned
     desired:
@@ -283,6 +300,24 @@ roadmap:
           - trust_remote_code_is_opt_in
           - backend_device_dtype_accelerator_and_memory_resolution_are_declared
           - resource_aware_worker_placement_is_not_falsely_claimed
+      - id: HUB4_SOUP_Elastic_resource_plan_v1
+        status: complete
+        capability: llm.train.elastic@1.0.0
+        elastic_contract: elastic.soup.run-resource-plan@1.0.0
+        elastic_media_type: application/vnd.elastic.soup.run-resource-plan.v1+json
+        elastic_source_merge: 6e0952e59842eb9c14f808266d6f3eb0b1f33014
+        pull_request: 30
+        final_exact_head: f4a8336622a8383f1a7df3610e87d200356e1ddb
+        merge_commit: 66fcd61a8b7d8ad39425b1725b94919f5abc210f
+        required_CI: CI_78_success_on_final_exact_head
+        guarantees:
+          - legacy_llm_train_1_0_0_contract_is_unchanged
+          - Elastic_plan_is_a_first_class_immutable_input_artifact
+          - duplicate_unknown_or_incompatible_wire_shapes_fail_closed
+          - only_explicit_task_and_resource_template_seams_are_materialized
+          - Hub_does_not_choose_Elastic_policy
+          - SOUP_remains_final_config_and_runtime_validator
+          - ml_placement_enforcement_remains_component_preflight_not_HML1
     sequence:
       - preserve_and_version_SciCapsule_contract
       - define_SciRust_selected_capabilities
