@@ -20,9 +20,8 @@ fn soup_ship_component_contract_is_valid_and_versioned() {
     assert_eq!(capability.outputs.len(), 1);
     assert_eq!(capability.outputs[0].name, "verdict");
 
-    let binding = match manifest.execution.as_ref().expect("execution binding") {
-        ExecutionBinding::Process(binding) => binding,
-    };
+    let ExecutionBinding::Process(binding) =
+        manifest.execution.as_ref().expect("execution binding");
     assert_eq!(binding.program, "python3");
     assert!(binding.args.iter().any(|arg| arg == "{input:evidence}"));
     assert!(binding.args.iter().any(|arg| arg == "{output:verdict}"));
