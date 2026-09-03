@@ -117,6 +117,24 @@ pub trait ArtifactStore: Send + Sync {
     /// otherwise.
     fn put(&self, bytes: &[u8], max_bytes: u64, domain: &[u8]) -> Result<ContentDigest, CoreError>;
 
+    /// Streams one regular file into content-addressed storage without loading
+    /// its complete contents into memory. The returned size is the exact byte
+    /// count that was hashed and stored, not a pre-open metadata estimate.
+    ///
+    /// Implementations must reject symbolic links and non-regular files. They
+    /// must also enforce `max_bytes` while reading so a file that grows after a
+    /// preflight stat cannot bypass the resource bound.
+    ///
+    /// # Errors
+    /// [`CoreError::ArtifactTooLarge`] beyond `max_bytes`; [`CoreError::Storage`]
+    /// for symlinks, non-regular files, or backend IO errors.
+    fn put_file(
+        &self,
+        path: &std::path::Path,
+        max_bytes: u64,
+        domain: &[u8],
+    ) -> Result<(ContentDigest, u64), CoreError>;
+
     /// Reads a whole blob back. Blob sizes are capped upstream, so buffering
     /// is bounded.
     ///
