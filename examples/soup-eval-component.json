@@ -24,7 +24,14 @@
         "execution_mode": "local_process",
         "bundle_schema": "application/vnd.scirust-hub.soup-bundle.v1+tar",
         "default_benchmark": "mmlu",
-        "unknown_parameters": "rejected"
+        "unknown_parameters": "rejected",
+        "ml.resource_contract": "hub.ml.resource-requirements@1.0.0",
+        "ml.backend": "soup",
+        "ml.device": "parameter:device",
+        "ml.dtype": "model_defined",
+        "ml.accelerator": "optional",
+        "ml.memory": "runtime_preflight",
+        "ml.placement_enforcement": "component_preflight"
       }
     }
   ],
