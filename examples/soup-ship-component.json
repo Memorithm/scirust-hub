@@ -1,0 +1,58 @@
+{
+  "schema_version": 1,
+  "id": "00000000-0000-0000-0000-000000000002",
+  "name": "SOUP Ship Gate",
+  "version": "0.73.3",
+  "kind": "tool",
+  "capabilities": [
+    {
+      "name": "llm.ship",
+      "contract_version": "1.0.0",
+      "inputs": [
+        {
+          "name": "evidence",
+          "description": "application/vnd.soup.ship-evidence.v1+json"
+        }
+      ],
+      "outputs": [
+        {
+          "name": "verdict",
+          "description": "application/vnd.soup.ship-verdict.v1+json"
+        }
+      ],
+      "properties": {
+        "execution_mode": "offline_evidence_replay",
+        "network_required": "false",
+        "semantic_exit_0": "ship",
+        "semantic_exit_2": "dont_ship",
+        "adapter": "soup_hub_adapter.py"
+      }
+    }
+  ],
+  "execution": {
+    "type": "process",
+    "program": "python3",
+    "args": [
+      "/opt/scirust-hub/libexec/soup_hub_adapter.py",
+      "ship-offline",
+      "--evidence",
+      "{input:evidence}",
+      "--verdict",
+      "{output:verdict}"
+    ],
+    "outputs": [
+      {
+        "name": "verdict",
+        "path": "outputs/soup-ship-verdict.json",
+        "media_type": "application/vnd.soup.ship-verdict.v1+json",
+        "required": true
+      }
+    ]
+  },
+  "metadata": {
+    "upstream_repository": "https://github.com/MakazhanAlpamys/Soup",
+    "upstream_reference": "v0.73.3",
+    "upstream_main_reviewed_commit": "2137035bc6279b32fc7c1e04e1c70aec3584290a",
+    "contract": "soup-ship-offline-v1"
+  }
+}
