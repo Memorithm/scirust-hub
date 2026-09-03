@@ -64,7 +64,10 @@ fn soup_ml_component_contracts_are_valid_and_versioned() {
             case.outputs
         );
         assert_eq!(
-            manifest.metadata.get("upstream_qualified_commit").map(String::as_str),
+            manifest
+                .metadata
+                .get("upstream_qualified_commit")
+                .map(String::as_str),
             Some("05b646523727925990530667e7012ede50bd30b2")
         );
 
