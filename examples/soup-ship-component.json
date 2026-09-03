@@ -25,14 +25,15 @@
         "network_required": "false",
         "semantic_exit_0": "ship",
         "semantic_exit_2": "dont_ship",
-        "adapter": "scirust-hub-soup-adapter"
+        "adapter": "soup_hub_adapter.py"
       }
     }
   ],
   "execution": {
     "type": "process",
-    "program": "/opt/scirust-hub/bin/scirust-hub-soup-adapter",
+    "program": "python3",
     "args": [
+      "/opt/scirust-hub/libexec/soup_hub_adapter.py",
       "ship-offline",
       "--evidence",
       "{input:evidence}",
