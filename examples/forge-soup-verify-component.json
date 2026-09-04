@@ -1,0 +1,79 @@
+{
+  "schema_version": 1,
+  "id": "00000000-0000-0000-0000-000000000009",
+  "name": "SciRust-Verify Forge SOUP Evidence",
+  "version": "1.0.0",
+  "kind": "tool",
+  "capabilities": [
+    {
+      "name": "llm.verify.forge_soup",
+      "contract_version": "1.0.0",
+      "inputs": [
+        {
+          "name": "report",
+          "description": "application/vnd.scirust-hub.forge-soup-campaign-report.v1+json; immutable Forge campaign report emitted by llm.optimize.forge_soup@1.0.0"
+        },
+        {
+          "name": "evidence_bundle",
+          "description": "application/vnd.scirust-hub.forge-soup-evidence.v1+tar; immutable executed SOUP verification/measurement evidence emitted by llm.optimize.forge_soup@1.0.0"
+        }
+      ],
+      "outputs": [
+        {
+          "name": "dossier",
+          "description": "application/vnd.scirust-verify.dossier.v1+tar; integrity-sealed SciRust-Verify evidence dossier"
+        }
+      ],
+      "properties": {
+        "execution_mode": "local_process",
+        "verify.contract": "scirust-verify.forge-soup-dossier@1.0.0",
+        "verify.process_path": "/opt/scirust-hub/libexec/scirust-verify-forge-soup",
+        "verify.adapter_merge": "89f485633e842017781778eb1568b5306e0a5570",
+        "verify.process_merge": "4c2db0832d8148f62261e67254f8bf00f80e808c",
+        "verify.process_final_exact_head": "71062d4b28ff1ed8bd26bbb76a643d15e07354cb",
+        "verify.model_quality_claim": "not_established",
+        "verify.performance_claim": "not_established",
+        "forge.domain_merge": "1385c71a541419f15a558a5e94bc8a4a60567a4a",
+        "forge.runner_merge": "9e1f3fc568c176f401735c121780d9fbe6834f5d",
+        "hub.forge_soup_merge": "074cf2c6e00a0b142fe46d1558c8b32df9228859",
+        "soup.qualified_commit": "05b646523727925990530667e7012ede50bd30b2",
+        "dossier.media_type": "application/vnd.scirust-verify.dossier.v1+tar"
+      }
+    }
+  ],
+  "execution": {
+    "type": "process",
+    "program": "/opt/scirust-hub/libexec/scirust-verify-forge-soup",
+    "args": [
+      "--report",
+      "{input:report}",
+      "--evidence-bundle",
+      "{input:evidence_bundle}",
+      "--output",
+      "{output:dossier}"
+    ],
+    "outputs": [
+      {
+        "name": "dossier",
+        "path": "outputs/forge-soup-verification-dossier.tar",
+        "media_type": "application/vnd.scirust-verify.dossier.v1+tar",
+        "required": true
+      }
+    ]
+  },
+  "metadata": {
+    "verify_repository": "https://github.com/Memorithm/SciRust-Verify",
+    "verify_adapter_pull_request": "29",
+    "verify_adapter_merge": "89f485633e842017781778eb1568b5306e0a5570",
+    "verify_process_pull_request": "30",
+    "verify_process_final_exact_head": "71062d4b28ff1ed8bd26bbb76a643d15e07354cb",
+    "verify_process_merge": "4c2db0832d8148f62261e67254f8bf00f80e808c",
+    "forge_soup_hub_pull_request": "32",
+    "forge_soup_hub_merge": "074cf2c6e00a0b142fe46d1558c8b32df9228859",
+    "forge_domain_merge": "1385c71a541419f15a558a5e94bc8a4a60567a4a",
+    "forge_runner_merge": "9e1f3fc568c176f401735c121780d9fbe6834f5d",
+    "soup_repository": "https://github.com/MakazhanAlpamys/Soup",
+    "soup_qualified_commit": "05b646523727925990530667e7012ede50bd30b2",
+    "contract": "scirust-verify-forge-soup-hub-v1"
+  }
+}
