@@ -16,10 +16,10 @@ fn soup_scirust_symbolic_training_contract_is_explicit_and_versioned() {
         .expect("SOUP SciRust symbolic manifest must satisfy Hub v1 validation");
 
     let capability_name =
-        CapabilityName::parse("llm.train.scirust-symbolic").expect("capability name");
+        CapabilityName::parse("llm.train.scirust_symbolic").expect("capability name");
     let capability = manifest
         .capability(&capability_name)
-        .expect("manifest must publish llm.train.scirust-symbolic");
+        .expect("manifest must publish llm.train.scirust_symbolic");
     assert_eq!(capability.contract_version.to_string(), "1.0.0");
     assert_eq!(
         capability
