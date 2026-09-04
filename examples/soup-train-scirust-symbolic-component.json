@@ -6,7 +6,7 @@
   "kind": "tool",
   "capabilities": [
     {
-      "name": "llm.train.scirust-symbolic",
+      "name": "llm.train.scirust_symbolic",
       "contract_version": "1.0.0",
       "inputs": [
         {
