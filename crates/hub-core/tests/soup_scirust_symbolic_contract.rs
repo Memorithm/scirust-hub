@@ -123,7 +123,9 @@ fn existing_soup_training_contracts_remain_separate() {
     .expect("SOUP Elastic train manifest");
 
     for (manifest, name) in [(legacy, "llm.train"), (elastic, "llm.train.elastic")] {
-        manifest.validate().expect("existing manifest remains valid");
+        manifest
+            .validate()
+            .expect("existing manifest remains valid");
         let capability_name = CapabilityName::parse(name).expect("capability name");
         let capability = manifest
             .capability(&capability_name)
