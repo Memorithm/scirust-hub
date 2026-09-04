@@ -1,0 +1,100 @@
+{
+  "schema_version": 1,
+  "id": "00000000-0000-0000-0000-000000000007",
+  "name": "SOUP GRPO with SciRust Symbolic Reward",
+  "version": "0.73.3",
+  "kind": "tool",
+  "capabilities": [
+    {
+      "name": "llm.train.scirust_symbolic",
+      "contract_version": "1.0.0",
+      "inputs": [
+        {
+          "name": "config",
+          "description": "text/yaml; SOUP template containing ${SOUP_HUB_DATASET}, ${SOUP_HUB_OUTPUT}, root task: ${SOUP_HUB_SCIRUST_SYMBOLIC_TASK}, and a two-space-indented ${SOUP_HUB_SCIRUST_SYMBOLIC_REWARD} line under training:"
+        },
+        {
+          "name": "dataset",
+          "description": "Immutable SOUP GRPO dataset; rows consumed by the SciRust reward bridge must expose the trusted answer column expected by the published bridge"
+        }
+      ],
+      "outputs": [
+        {
+          "name": "model_bundle",
+          "description": "application/vnd.scirust-hub.soup-bundle.v1+tar"
+        },
+        {
+          "name": "report",
+          "description": "application/vnd.scirust-hub.soup-train-report.v1+json"
+        }
+      ],
+      "properties": {
+        "execution_mode": "local_process",
+        "dataset_placeholder": "${SOUP_HUB_DATASET}",
+        "output_placeholder": "${SOUP_HUB_OUTPUT}",
+        "scirust.task_placeholder": "${SOUP_HUB_SCIRUST_SYMBOLIC_TASK}",
+        "scirust.reward_placeholder": "${SOUP_HUB_SCIRUST_SYMBOLIC_REWARD}",
+        "scirust.source_head": "58d850899cee1d62449cc02816b787b7f8a8a3de",
+        "scirust.source_merge": "f6bdadb6234129e14e9ea4d69f46901c6dcecbd0",
+        "scirust.reward_process": "scirust-reward",
+        "scirust.reward_schema_version": "1",
+        "scirust.reward_kind": "symbolic_equivalence",
+        "scirust.reward_bridge_path": "/opt/scirust-hub/libexec/scirust_symbolic_reward.py",
+        "scirust.reward_binary_path": "/opt/scirust-hub/libexec/scirust-reward",
+        "soup.task": "grpo",
+        "bundle_schema": "application/vnd.scirust-hub.soup-bundle.v1+tar",
+        "trust_remote_code_default": "false",
+        "ml.resource_contract": "hub.ml.resource-requirements@1.0.0",
+        "ml.backend": "soup",
+        "ml.device": "runtime_configured",
+        "ml.dtype": "runtime_configured",
+        "ml.accelerator": "runtime_configured",
+        "ml.memory": "runtime_preflight",
+        "ml.placement_enforcement": "component_preflight"
+      }
+    }
+  ],
+  "execution": {
+    "type": "process",
+    "program": "python3",
+    "args": [
+      "/opt/scirust-hub/libexec/soup_scirust_symbolic_hub_adapter.py",
+      "train",
+      "--config",
+      "{input:config}",
+      "--dataset",
+      "{input:dataset}",
+      "--bundle",
+      "{output:model_bundle}",
+      "--report",
+      "{output:report}",
+      "--params",
+      "{params}"
+    ],
+    "outputs": [
+      {
+        "name": "model_bundle",
+        "path": "outputs/soup-model-bundle.tar",
+        "media_type": "application/vnd.scirust-hub.soup-bundle.v1+tar",
+        "required": true
+      },
+      {
+        "name": "report",
+        "path": "outputs/soup-train-report.json",
+        "media_type": "application/vnd.scirust-hub.soup-train-report.v1+json",
+        "required": true
+      }
+    ]
+  },
+  "metadata": {
+    "upstream_repository": "https://github.com/MakazhanAlpamys/Soup",
+    "upstream_release_reference": "v0.73.3",
+    "upstream_qualified_commit": "05b646523727925990530667e7012ede50bd30b2",
+    "scirust_repository": "https://github.com/Memorithm/scirust",
+    "scirust_source_head": "58d850899cee1d62449cc02816b787b7f8a8a3de",
+    "scirust_source_merge": "f6bdadb6234129e14e9ea4d69f46901c6dcecbd0",
+    "scirust_reward_schema_version": "1",
+    "scirust_reward_kind": "symbolic_equivalence",
+    "contract": "soup-train-scirust-symbolic-v1"
+  }
+}
