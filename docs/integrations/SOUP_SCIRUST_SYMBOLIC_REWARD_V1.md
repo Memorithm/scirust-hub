@@ -2,7 +2,7 @@
 
 Status: versioned Hub component edge for deterministic symbolic-equivalence reward during SOUP GRPO.
 
-Hub capability: `llm.train.scirust-symbolic@1.0.0`
+Hub capability: `llm.train.scirust_symbolic@1.0.0`
 
 SciRust source PR: `Memorithm/scirust#1361`
 
