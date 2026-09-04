@@ -1,0 +1,64 @@
+{
+  "schema_version": 1,
+  "id": "00000000-0000-0000-0000-000000000010",
+  "name": "ElasticXxx Runtime",
+  "version": "1.0.0",
+  "kind": "tool",
+  "capabilities": [
+    {
+      "name": "resource.elastic.run",
+      "contract_version": "1.0.0",
+      "inputs": [
+        {
+          "name": "config",
+          "description": "application/vnd.elastic.operator-config.v1+json; immutable ElasticXxx OperatorConfig v1"
+        }
+      ],
+      "outputs": [
+        {
+          "name": "evidence",
+          "description": "application/vnd.elastic.runtime-evidence.v1+json; bounded elastic-runtime-evidence-v1 emitted by the ElasticXxx runtime"
+        }
+      ],
+      "properties": {
+        "execution_mode": "local_process",
+        "elastic.contract": "elastic.hub.run@1.0.0",
+        "elastic.process_path": "/opt/scirust-hub/libexec/elastic",
+        "elastic.source_merge": "9e51879b96e54c812b6a265fe5901e960bbe6250",
+        "elastic.source_final_exact_head": "571d0deb8921df54502fbb35909dd8830cbf4fb4",
+        "elastic.evidence_schema": "elastic-runtime-evidence-v1",
+        "elastic.evidence_media_type": "application/vnd.elastic.runtime-evidence.v1+json",
+        "elastic.policy_owner": "ElasticXxx",
+        "elastic.commit_rollback_owner": "ElasticXxx",
+        "hub.policy_interpretation": "forbidden",
+        "sandbox": "none"
+      }
+    }
+  ],
+  "execution": {
+    "type": "process",
+    "program": "/opt/scirust-hub/libexec/elastic",
+    "args": [
+      "hub-run",
+      "--config",
+      "{input:config}",
+      "--evidence-output",
+      "{output:evidence}"
+    ],
+    "outputs": [
+      {
+        "name": "evidence",
+        "path": "outputs/elastic-runtime-evidence.json",
+        "media_type": "application/vnd.elastic.runtime-evidence.v1+json",
+        "required": true
+      }
+    ]
+  },
+  "metadata": {
+    "elastic_repository": "https://github.com/Memorithm/ElasticXxx",
+    "elastic_process_pull_request": "54",
+    "elastic_process_final_exact_head": "571d0deb8921df54502fbb35909dd8830cbf4fb4",
+    "elastic_process_merge": "9e51879b96e54c812b6a265fe5901e960bbe6250",
+    "contract": "elastic-runtime-hub-v1"
+  }
+}
