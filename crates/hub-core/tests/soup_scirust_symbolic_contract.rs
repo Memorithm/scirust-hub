@@ -92,11 +92,13 @@ fn soup_scirust_symbolic_training_contract_is_explicit_and_versioned() {
         Some(SCIRUST_SOURCE_MERGE)
     );
 
-    let ExecutionBinding::Process(binding) = manifest.execution.as_ref().expect("execution binding");
+    let ExecutionBinding::Process(binding) =
+        manifest.execution.as_ref().expect("execution binding");
     assert_eq!(binding.program, "python3");
-    assert!(binding.args.iter().any(|arg| {
-        arg == "/opt/scirust-hub/libexec/soup_scirust_symbolic_hub_adapter.py"
-    }));
+    assert!(binding
+        .args
+        .iter()
+        .any(|arg| arg == "/opt/scirust-hub/libexec/soup_scirust_symbolic_hub_adapter.py"));
     for expected in [
         "{input:config}",
         "{input:dataset}",
