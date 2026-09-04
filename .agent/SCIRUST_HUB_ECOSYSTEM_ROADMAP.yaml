@@ -1,7 +1,7 @@
 schema_version: 1
 kind: scirust_hub_ecosystem_agent_roadmap
 status: active
-last_updated: "2026-09-03"
+last_updated: "2026-09-04"
 repository: Memorithm/scirust-hub
 intended_consumer: autonomous_coding_agent
 merge_policy: never_merge_this_file_to_default_branch_unless_user_explicitly_requests
@@ -26,6 +26,7 @@ verified_current_facts:
   - SciCapsule_execution_is_integrated_through_a_published_versioned_process_contract
   - SOUP_ship_train_eval_and_export_are_integrated_through_versioned_llm_contracts
   - SOUP_Elastic_preexecution_resource_plan_handoff_is_integrated_through_llm_train_elastic_1_0_0
+  - SOUP_SciRust_symbolic_reward_handoff_is_integrated_through_llm_train_scirust_symbolic_1_0_0
   - Hub_streams_declared_output_artifacts_into_content_addressed_storage
   - SOUP_model_and_export_directories_are_normalized_into_deterministic_bounded_bundles
   - SOUP_ML_capabilities_publish_hub_ml_resource_requirements_1_0_0_resolution_metadata
@@ -129,6 +130,8 @@ current_and_target_interfaces:
         contract_version: 1.0.0
       - name: llm.train.elastic
         contract_version: 1.0.0
+      - name: llm.train.scirust_symbolic
+        contract_version: 1.0.0
       - name: llm.eval
         contract_version: 1.0.0
       - name: llm.export
@@ -148,23 +151,42 @@ current_and_target_interfaces:
     elastic_resource_plan_contract: elastic.soup.run-resource-plan@1.0.0
     elastic_resource_plan_media_type: application/vnd.elastic.soup.run-resource-plan.v1+json
     elastic_source_merge: 6e0952e59842eb9c14f808266d6f3eb0b1f33014
+    scirust_symbolic_pull_request: 31
+    scirust_symbolic_final_exact_head: 76fd1571aa8d2189d540e47e8b58dd3d6a48a0d8
+    scirust_symbolic_merge_commit: ee9df7306ef2573e350c55cd14bf85ea3cbbd841
+    scirust_symbolic_source_head: 58d850899cee1d62449cc02816b787b7f8a8a3de
+    scirust_symbolic_source_merge: f6bdadb6234129e14e9ea4d69f46901c6dcecbd0
+    scirust_symbolic_schema_version: 1
+    scirust_symbolic_kind: symbolic_equivalence
     required_CI: CI_success_on_each_final_exact_head
     resource_profile: hub.ml.resource-requirements@1.0.0
     placement_enforcement: component_preflight
     rule: >-
       Hub orchestrates SOUP and preserves immutable inputs, deterministic model
-      bundles, reports, verdict artifacts, and optional ElasticXxx resource-plan
-      artifacts without absorbing SOUP training or Elastic adaptation policy.
-      Worker resource placement remains an HML1 responsibility; registration and
-      component preflight are not execution qualification.
+      bundles, reports, verdict artifacts, optional ElasticXxx resource-plan
+      artifacts, and optional SciRust symbolic-reward provenance without
+      absorbing SOUP training, Elastic adaptation policy, or SciRust symbolic
+      proof semantics. Worker resource placement remains an HML1 responsibility;
+      registration and component preflight are not execution qualification.
     remaining_cross_repository_work:
-      - integrate_SciRust_deterministic_verifier_reward_as_a_separate_versioned_edge
       - integrate_Forge_execution_driven_SOUP_recipe_search_as_a_separate_versioned_edge
       - qualify_real_target_hardware_before_any_Jetson_or_ARM64_compatibility_claim
   Memorithm/scirust:
-    status: contract_inventory_needed
+    status: active_published_SOUP_symbolic_reward_edge
+    published:
+      - process: scirust-reward
+        schema_version: 1
+        kind: symbolic_equivalence
+        source_head: 58d850899cee1d62449cc02816b787b7f8a8a3de
+        source_merge: f6bdadb6234129e14e9ea4d69f46901c6dcecbd0
+        hub_capability: llm.train.scirust_symbolic@1.0.0
+        hub_merge: ee9df7306ef2573e350c55cd14bf85ea3cbbd841
     desired:
-      - publish_selected_process_or_service_capabilities_without_putting_Hub_logic_in_SciRust_core
+      - publish_additional_selected_process_or_service_capabilities_only_when_shared_and_versioned
+    limits:
+      - current_SOUP_edge_is_symbolic_equivalence_reward_only
+      - score_zero_not_proven_is_not_a_proof_of_inequality
+      - SciRust_is_not_a_SOUP_or_PyTorch_training_backend
   Memorithm/SciRust-Verify:
     status: planned
     desired:
@@ -318,6 +340,26 @@ roadmap:
           - Hub_does_not_choose_Elastic_policy
           - SOUP_remains_final_config_and_runtime_validator
           - ml_placement_enforcement_remains_component_preflight_not_HML1
+      - id: HUB4_SOUP_SciRust_symbolic_reward_v1
+        status: complete
+        capability: llm.train.scirust_symbolic@1.0.0
+        scirust_process: scirust-reward
+        scirust_schema_version: 1
+        scirust_kind: symbolic_equivalence
+        scirust_source_head: 58d850899cee1d62449cc02816b787b7f8a8a3de
+        scirust_source_merge: f6bdadb6234129e14e9ea4d69f46901c6dcecbd0
+        pull_request: 31
+        final_exact_head: 76fd1571aa8d2189d540e47e8b58dd3d6a48a0d8
+        merge_commit: ee9df7306ef2573e350c55cd14bf85ea3cbbd841
+        required_CI: CI_85_success_on_final_exact_head
+        guarantees:
+          - legacy_llm_train_and_llm_train_elastic_contracts_are_unchanged
+          - SOUP_task_is_forced_to_grpo_for_this_opt_in_edge
+          - trusted_reward_bridge_and_binary_paths_are_fixed_by_the_component
+          - duplicate_or_misindented_task_and_reward_template_seams_fail_closed
+          - SciRust_symbolic_reward_provenance_is_recorded_in_the_training_report
+          - score_zero_not_proven_is_not_reinterpreted_as_inequality
+          - SciRust_is_not_claimed_as_the_SOUP_training_backend
     sequence:
       - preserve_and_version_SciCapsule_contract
       - define_SciRust_selected_capabilities
