@@ -27,6 +27,7 @@ verified_current_facts:
   - SOUP_ship_train_eval_and_export_are_integrated_through_versioned_llm_contracts
   - SOUP_Elastic_preexecution_resource_plan_handoff_is_integrated_through_llm_train_elastic_1_0_0
   - SOUP_SciRust_symbolic_reward_handoff_is_integrated_through_llm_train_scirust_symbolic_1_0_0
+  - Forge_SOUP_posttraining_search_is_integrated_through_llm_optimize_forge_soup_1_0_0
   - Hub_streams_declared_output_artifacts_into_content_addressed_storage
   - SOUP_model_and_export_directories_are_normalized_into_deterministic_bounded_bundles
   - SOUP_ML_capabilities_publish_hub_ml_resource_requirements_1_0_0_resolution_metadata
@@ -136,6 +137,8 @@ current_and_target_interfaces:
         contract_version: 1.0.0
       - name: llm.export
         contract_version: 1.0.0
+      - name: llm.optimize.forge_soup
+        contract_version: 1.0.0
     source_release_reference: v0.73.3
     ship_reviewed_upstream_main: 2137035bc6279b32fc7c1e04e1c70aec3584290a
     ml_qualified_upstream_commit: 05b646523727925990530667e7012ede50bd30b2
@@ -158,18 +161,25 @@ current_and_target_interfaces:
     scirust_symbolic_source_merge: f6bdadb6234129e14e9ea4d69f46901c6dcecbd0
     scirust_symbolic_schema_version: 1
     scirust_symbolic_kind: symbolic_equivalence
+    forge_soup_pull_request: 32
+    forge_soup_final_exact_head: b2e96b674b3c93be8ed14b6ecc47b45cbc44c8fb
+    forge_soup_merge_commit: 074cf2c6e00a0b142fe46d1558c8b32df9228859
+    forge_soup_domain_merge: 1385c71a541419f15a558a5e94bc8a4a60567a4a
+    forge_soup_runner_merge: 9e1f3fc568c176f401735c121780d9fbe6834f5d
+    forge_soup_evidence_media_type: application/vnd.scirust-hub.forge-soup-evidence.v1+tar
     required_CI: CI_success_on_each_final_exact_head
     resource_profile: hub.ml.resource-requirements@1.0.0
     placement_enforcement: component_preflight
     rule: >-
       Hub orchestrates SOUP and preserves immutable inputs, deterministic model
       bundles, reports, verdict artifacts, optional ElasticXxx resource-plan
-      artifacts, and optional SciRust symbolic-reward provenance without
-      absorbing SOUP training, Elastic adaptation policy, or SciRust symbolic
-      proof semantics. Worker resource placement remains an HML1 responsibility;
-      registration and component preflight are not execution qualification.
+      artifacts, optional SciRust symbolic-reward provenance, and Forge search
+      campaign/evidence artifacts without absorbing SOUP training, Elastic
+      adaptation policy, SciRust symbolic proof semantics, or Forge candidate
+      search/Pareto semantics. Worker resource placement remains an HML1
+      responsibility; registration and component preflight are not execution
+      qualification.
     remaining_cross_repository_work:
-      - integrate_Forge_execution_driven_SOUP_recipe_search_as_a_separate_versioned_edge
       - qualify_real_target_hardware_before_any_Jetson_or_ARM64_compatibility_claim
   Memorithm/scirust:
     status: active_published_SOUP_symbolic_reward_edge
@@ -209,10 +219,21 @@ current_and_target_interfaces:
       - current_SOUP_edge_consumes_an_immutable_preexecution_plan_and_does_not_run_the_Elastic_control_loop_inside_Hub
       - HML1_dynamic_worker_placement_remains_unimplemented
   Memorithm/forge:
-    status: planned
+    status: active_published_SOUP_search_edge
+    published:
+      - capability: llm.optimize.forge_soup@1.0.0
+        forge_domain_merge: 1385c71a541419f15a558a5e94bc8a4a60567a4a
+        forge_runner_merge: 9e1f3fc568c176f401735c121780d9fbe6834f5d
+        hub_pull_request: 32
+        hub_final_exact_head: b2e96b674b3c93be8ed14b6ecc47b45cbc44c8fb
+        hub_merge: 074cf2c6e00a0b142fe46d1558c8b32df9228859
     desired:
-      - orchestrate_campaigns_or_workers_through_published_component_contracts
       - preserve_Forge_campaign_identity_and_search_semantics
+      - integrate_distributed_campaigns_only_after_worker_trust_and_placement_contracts_are_qualified
+    limits:
+      - current_edge_is_local_process_only
+      - current_edge_refuses_campaigns_requiring_external_hostile_code_isolation
+      - HML1_resource_aware_worker_placement_and_HML2_distributed_orchestration_remain_unimplemented
   Memorithm/FLAT-ATTENTION:
     status: planned
     desired:
@@ -360,12 +381,34 @@ roadmap:
           - SciRust_symbolic_reward_provenance_is_recorded_in_the_training_report
           - score_zero_not_proven_is_not_reinterpreted_as_inequality
           - SciRust_is_not_claimed_as_the_SOUP_training_backend
+      - id: HUB4_Forge_SOUP_posttrain_search_v1
+        status: complete
+        capability: llm.optimize.forge_soup@1.0.0
+        forge_domain_merge: 1385c71a541419f15a558a5e94bc8a4a60567a4a
+        forge_runner_pull_request: 26
+        forge_runner_final_exact_head: dc3189591436da6e27734b2953e94eaad7057f1e
+        forge_runner_merge: 9e1f3fc568c176f401735c121780d9fbe6834f5d
+        soup_qualified_commit: 05b646523727925990530667e7012ede50bd30b2
+        pull_request: 32
+        final_exact_head: b2e96b674b3c93be8ed14b6ecc47b45cbc44c8fb
+        merge_commit: 074cf2c6e00a0b142fe46d1558c8b32df9228859
+        required_CI: CI_88_success_on_final_exact_head
+        guarantees:
+          - Forge_search_and_Pareto_semantics_remain_outside_Hub
+          - SOUP_train_dry_run_is_the_executed_verify_gate
+          - SOUP_train_and_benchmark_execution_are_the_measurement_source
+          - benchmark_scores_are_read_from_an_isolated_SOUP_tracker_database
+          - unsupported_or_synthetic_metrics_fail_closed
+          - deterministic_candidate_trial_evidence_is_emitted_as_an_immutable_bundle
+          - distributed_Forge_workers_remain_disabled_in_v1
+          - campaigns_requiring_external_hostile_code_isolation_are_refused
+          - HML1_HML2_and_HML4_are_not_promoted_by_this_slice
     sequence:
       - preserve_and_version_SciCapsule_contract
       - define_SciRust_selected_capabilities
       - define_SciRust_Verify_contract
       - define_ElasticXxx_contract
-      - define_Forge_contract
+      - preserve_and_extend_Forge_contract
       - define_SLHAv2_FLAT_and_NNIS_contracts_as_their_surfaces_stabilize
       - define_nonlocal_relativity_experiment_contract
     exit_criteria:
