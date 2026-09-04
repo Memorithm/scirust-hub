@@ -1,7 +1,7 @@
 schema_version: 1
 kind: memorithm_ml_maturity_program
 status: active
-last_updated: "2026-09-03"
+last_updated: "2026-09-04"
 repository: Memorithm/scirust-hub
 objective: >-
   Raise the ML orchestration/control-plane contribution to evidence-backed 5/5:
@@ -45,6 +45,23 @@ verified_slices:
       only explicit config-template seams before SOUP performs its own runtime
       validation. This does not establish HML1 worker-resource discovery or
       dynamic compatible placement and does not run Elastic policy inside Hub.
+  - id: SOUP_SciRust_symbolic_reward_edge_v1
+    status: complete
+    pull_request: 31
+    final_exact_head: 76fd1571aa8d2189d540e47e8b58dd3d6a48a0d8
+    merge_commit: ee9df7306ef2573e350c55cd14bf85ea3cbbd841
+    capability: llm.train.scirust_symbolic@1.0.0
+    scirust_source_head: 58d850899cee1d62449cc02816b787b7f8a8a3de
+    scirust_source_merge: f6bdadb6234129e14e9ea4d69f46901c6dcecbd0
+    scirust_schema_version: 1
+    scirust_kind: symbolic_equivalence
+    scope: >-
+      Hub exposes a separate SOUP GRPO capability wired to the qualified SciRust
+      symbolic-equivalence reward process, fixes the trusted bridge and binary
+      deployment paths, and records exact SciRust reward provenance. This does
+      not make SciRust a SOUP or PyTorch training backend, does not turn a
+      not_proven reward into an inequality verdict, and does not establish HML1
+      resource-aware placement or HML4 qualification-campaign maturity.
   - id: SOUP_HML3_streamed_bundle_lineage_v1
     status: complete
     artifact_streaming_pull_request: 27
@@ -62,7 +79,7 @@ priority_program:
   - id: HML0
     name: ML capability schema
     priority: P0
-    status: active_with_SOUP_and_Elastic_resource_plan_reference_contracts
+    status: active_with_SOUP_Elastic_and_SciRust_reward_reference_contracts
     goals:
       - register_training_inference_benchmark_and_verification_capabilities_with_versioned_ports
       - express_device_dtype_memory_accelerator_and_backend_requirements
@@ -74,7 +91,7 @@ priority_program:
     goals:
       - dynamic_worker_registration_lease_expiry_and_liveness
       - advertise_CPU_GPU_memory_driver_and_runtime_capabilities
-      - deterministic_compatible_placement_with_bounded_parallelism
+      - deterministic_resource_aware_placement_with_bounded_parallelism
       - preserve_worker_identity_and_attempt_identity_across_retries
   - id: HML2
     name: Distributed ML orchestration
