@@ -119,7 +119,9 @@ fn forge_soup_edge_remains_separate_from_direct_soup_training() {
         serde_json::from_str(include_str!("../../../examples/soup-train-component.json"))
             .expect("SOUP train manifest");
 
-    forge_manifest.validate().expect("Forge SOUP manifest valid");
+    forge_manifest
+        .validate()
+        .expect("Forge SOUP manifest valid");
     soup_manifest.validate().expect("SOUP train manifest valid");
 
     let forge_name = CapabilityName::parse("llm.optimize.forge_soup").expect("Forge capability");
