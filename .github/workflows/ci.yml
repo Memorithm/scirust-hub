@@ -41,7 +41,7 @@ jobs:
         run: cargo fmt --all -- --check
 
       - name: SOUP adapter contracts
-        run: python3 -m unittest scripts/test_soup_hub_adapter.py scripts/test_soup_elastic_hub_adapter.py scripts/test_soup_scirust_symbolic_hub_adapter.py
+        run: python3 -m unittest scripts/test_soup_hub_adapter.py scripts/test_soup_elastic_hub_adapter.py scripts/test_soup_scirust_symbolic_hub_adapter.py scripts/test_forge_soup_hub_adapter.py
 
       - name: Clippy
         run: cargo clippy --workspace --all-targets --all-features --locked -- -D warnings
