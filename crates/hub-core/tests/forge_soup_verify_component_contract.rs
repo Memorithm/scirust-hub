@@ -113,7 +113,9 @@ fn forge_soup_verify_edge_remains_separate_from_search_and_training() {
 
     verify_manifest.validate().expect("Verify manifest valid");
     forge_manifest.validate().expect("Forge manifest valid");
-    train_manifest.validate().expect("SOUP train manifest valid");
+    train_manifest
+        .validate()
+        .expect("SOUP train manifest valid");
 
     let verify_name = CapabilityName::parse("llm.verify.forge_soup").expect("Verify capability");
     let forge_name = CapabilityName::parse("llm.optimize.forge_soup").expect("Forge capability");
