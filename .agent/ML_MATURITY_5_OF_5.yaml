@@ -1,7 +1,7 @@
 schema_version: 1
 kind: memorithm_ml_maturity_program
 status: active
-last_updated: "2026-09-04"
+last_updated: "2026-09-05"
 repository: Memorithm/scirust-hub
 objective: >-
   Raise the ML orchestration/control-plane contribution to evidence-backed 5/5:
@@ -79,6 +79,36 @@ verified_slices:
       tracker database and wall-time objectives are measured around executed
       subprocesses. Distributed Forge workers and external hostile-code isolation
       remain disabled/unclaimed, so HML1, HML2 and HML4 are not promoted.
+  - id: NNIS_parity_validation_Verify_handoff_v1
+    status: complete
+    hub_pull_request: 37
+    hub_final_exact_head: 9e95e7d6a141b3f06bfc9effac51007bdfe9b1c2
+    hub_merge_commit: 0e484d9f9903fe0f0fcb7111e0191dfb14d958b4
+    required_CI: CI_102_success_on_final_exact_head
+    nnis_pull_request: 114
+    nnis_final_exact_head: c74b6b04c45e320c86cdd973b31f49f43c720681
+    nnis_merge_commit: 0ae4b0d4659c8de9b8a8322ed6ab7f8e110b53f2
+    verify_pull_request: 33
+    verify_final_exact_head: a120c54ed05b058d9347691d0036eaaaa831df41
+    verify_merge_commit: 593692aea76b90e50899e733344ffa4cf61ba380
+    capabilities:
+      - inference.nnis.parity_validate@1.0.0
+      - inference.nnis.parity_verify@1.0.0
+    source_contract: nnis.nnml1.parity-validation@1.0.0
+    source_media_type: application/vnd.nnis.nnml1.parity-evidence.v1+json
+    validation_media_type: application/vnd.nnis.nnml1.parity-validation.v1+json
+    dossier_media_type: application/vnd.scirust-verify.dossier.v1+tar
+    scope: >-
+      Hub can orchestrate the qualified NNIS parity-validation process and pass
+      both the immutable original parity evidence and immutable validation result
+      to SciRust-Verify, retaining the sealed dossier as a separate immutable
+      artifact. NNIS remains authoritative for checkpoint, tokenizer, greedy,
+      logit, same-head and promotion semantics; Verify remains authoritative for
+      dossier and scoped verdict semantics. This is a typed HML0 capability and
+      HML3-style evidence-lineage slice only: it does not execute a new physical
+      CUDA/model campaign, establish resource-aware placement, distributed ML,
+      serving performance, general model-family support, Jetson/ARM64 support, or
+      HML4 qualification-campaign maturity.
   - id: SOUP_HML3_streamed_bundle_lineage_v1
     status: complete
     artifact_streaming_pull_request: 27
@@ -96,7 +126,7 @@ priority_program:
   - id: HML0
     name: ML capability schema
     priority: P0
-    status: active_with_SOUP_Elastic_SciRust_reward_and_Forge_search_reference_contracts
+    status: active_with_SOUP_Elastic_SciRust_reward_Forge_search_and_NNIS_parity_Verify_reference_contracts
     goals:
       - register_training_inference_benchmark_and_verification_capabilities_with_versioned_ports
       - express_device_dtype_memory_accelerator_and_backend_requirements
@@ -121,7 +151,7 @@ priority_program:
   - id: HML3
     name: Model data checkpoint artifact lineage
     priority: P0
-    status: active_with_SOUP_bundle_v1_reference_contract
+    status: active_with_SOUP_bundle_and_NNIS_evidence_dossier_lineage_reference_contracts
     goals:
       - support_large_immutable_artifact_metadata_and_content_addressed_identity
       - preserve_model_config_tokenizer_weights_dataset_manifest_checkpoint_and_optimizer_lineage
