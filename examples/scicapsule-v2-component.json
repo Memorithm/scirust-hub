@@ -1,0 +1,75 @@
+{
+  "schema_version": 1,
+  "id": "00000000-0000-0000-0000-000000000012",
+  "name": "SciCapsule Execution Evidence v2",
+  "version": "0.1.0",
+  "kind": "tool",
+  "capabilities": [
+    {
+      "name": "capsule.execute",
+      "contract_version": "2.0.0",
+      "inputs": [
+        {
+          "name": "capsule",
+          "description": "application/vnd.scirust.scicap"
+        },
+        {
+          "name": "policy",
+          "description": "application/vnd.scicapsule.trust-policy.v1+json"
+        },
+        {
+          "name": "request",
+          "description": "application/vnd.scicapsule.hub-run-request.v1+json"
+        }
+      ],
+      "outputs": [
+        {
+          "name": "result",
+          "description": "application/vnd.scicapsule.hub-run-result.v2+json"
+        }
+      ],
+      "properties": {
+        "authorization": "local_trust_policy",
+        "request_media_type": "application/vnd.scicapsule.hub-run-request.v1+json",
+        "result_media_type": "application/vnd.scicapsule.hub-run-result.v2+json",
+        "sandbox": "none",
+        "execution_mode": "bounded_process_unix",
+        "trust_decision_owner": "SciCapsule",
+        "trust_is_scientific_verdict": "false",
+        "scicapsule.source_head": "bb79eea787f0d9562585b27dd38f5f57fa5b5ea9",
+        "scicapsule.source_merge": "31e4a825c8a45837ce4f8ff69f936b46e53d3b82"
+      }
+    }
+  ],
+  "execution": {
+    "type": "process",
+    "program": "/opt/scicapsule/bin/scicapsule-hub-evidence-v2",
+    "args": [
+      "--capsule",
+      "{input:capsule}",
+      "--policy",
+      "{input:policy}",
+      "--request",
+      "{input:request}",
+      "--result",
+      "{output:result}",
+      "--scicapsule-program",
+      "/opt/scicapsule/bin/scicapsule"
+    ],
+    "outputs": [
+      {
+        "name": "result",
+        "path": "outputs/scicapsule-result-v2.json",
+        "media_type": "application/vnd.scicapsule.hub-run-result.v2+json",
+        "required": true
+      }
+    ]
+  },
+  "metadata": {
+    "canonical_capsule_owner": "scirust",
+    "contract": "scicapsule-hub-v2",
+    "scicapsule_pull_request": "30",
+    "scicapsule_final_exact_head": "bb79eea787f0d9562585b27dd38f5f57fa5b5ea9",
+    "scicapsule_merge": "31e4a825c8a45837ce4f8ff69f936b46e53d3b82"
+  }
+}
