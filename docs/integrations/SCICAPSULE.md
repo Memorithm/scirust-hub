@@ -1,59 +1,37 @@
 # SciCapsule integration
 
-SciRust Hub can orchestrate trusted SciCapsule execution through the Hub's
-existing version-1 `process` component binding. This integration deliberately
-does not teach Hub to parse, redefine or own `.scicap`; the canonical capsule
-format remains in the SciRust capsule crates and the SciCapsule product remains
-responsible for integrity, trust-policy evaluation and bounded capsule
-execution.
+SciRust Hub orchestrates SciCapsule through explicit versioned `process`
+component bindings. Hub does not decode, redefine or own `.scicap`; the
+canonical capsule format remains in the SciRust capsule crates and SciCapsule
+remains responsible for integrity, local trust-policy evaluation and bounded
+capsule execution.
 
-## Contract ownership
-
-SciCapsule owns the versioned adapter contract documented in its
-`docs/HUB_CONTRACT.md`. Hub validates and preserves the corresponding component
-manifest shape as an integration regression.
-
-The v1 capability is:
+Two execution contracts are supported additively:
 
 ```text
 capsule.execute@1.0.0
+capsule.execute@2.0.0
 ```
 
-It declares these immutable Hub input artifacts:
+Version 1 remains backward compatible. Version 2 adds a reproducible execution
+evidence envelope and is the required source for the published SciRust-Verify
+edge.
+
+## Shared immutable inputs
+
+Both versions declare the same Hub input artifacts:
 
 - `capsule` — `application/vnd.scirust.scicap`;
 - `policy` — `application/vnd.scicapsule.trust-policy.v1+json`;
 - `request` — `application/vnd.scicapsule.hub-run-request.v1+json`.
 
-It produces one required artifact:
+The request contains detached signatures and bounded execution options. Hub
+materializes these immutable artifacts and passes paths to SciCapsule. Hub does
+not evaluate their trust semantics.
 
-- `result` — `application/vnd.scicapsule.hub-run-result.v1+json`.
+## Version 1
 
-The request artifact contains detached signatures and the bounded execution
-options. Keeping signatures in the request allows SciCapsule trust policies to
-require an arbitrary supported threshold without changing the fixed Hub port
-shape.
-
-## Registration
-
-Install a compatible SciCapsule binary at a known absolute path, then use
-SciCapsule itself to generate the Hub manifest. Example:
-
-```text
-scicapsule hub-manifest \
-  --component-id 00000000-0000-0000-0000-000000000001 \
-  --program /opt/scicapsule/bin/scicapsule \
-  --output scicapsule-component.json
-```
-
-Register the resulting manifest using the normal Hub component-registration
-path. The repository fixture at `examples/scicapsule-component.json` is a
-contract test/example; operators should generate a manifest using their actual
-absolute SciCapsule installation path and chosen stable component UUID.
-
-## Execution binding
-
-The generated process binding is structurally equivalent to:
+The v1 process binding remains:
 
 ```text
 /opt/scicapsule/bin/scicapsule
@@ -64,11 +42,95 @@ The generated process binding is structurally equivalent to:
   --result {output:result}
 ```
 
-Hub resolves the input/output placeholders using its existing artifact
-materialization rules and passes the resulting argv directly to the OS. No
-shell is introduced by this integration.
+It emits:
 
-Before submission, create the request artifact with SciCapsule, for example:
+```text
+application/vnd.scicapsule.hub-run-result.v1+json
+```
+
+The repository fixture is `examples/scicapsule-component.json`.
+
+## Version 2 reproducible execution evidence
+
+The v2 producer was qualified from SciCapsule PR #30:
+
+- final exact head: `bb79eea787f0d9562585b27dd38f5f57fa5b5ea9`;
+- merge: `31e4a825c8a45837ce4f8ff69f936b46e53d3b82`;
+- required CI: SciCapsule CI #79, success on that exact head.
+
+The Hub fixture `examples/scicapsule-v2-component.json` invokes:
+
+```text
+/opt/scicapsule/bin/scicapsule-hub-evidence-v2
+  --capsule {input:capsule}
+  --policy {input:policy}
+  --request {input:request}
+  --result {output:result}
+  --scicapsule-program /opt/scicapsule/bin/scicapsule
+```
+
+It emits:
+
+```text
+application/vnd.scicapsule.hub-run-result.v2+json
+```
+
+SciCapsule v2 snapshots the three caller-provided inputs, preserves the existing
+v1 trust/execution path as authority, and binds the result to exact SHA-256
+identities for the capsule, policy, serialized request, launcher, invoked
+SciCapsule binary and source v1 result. It also records deterministic signature
+envelope value identities and the producer OS/architecture scope.
+
+The Hub contract guard requires `execution_mode=bounded_process_unix`,
+`sandbox=none`, `trust_decision_owner=SciCapsule`, and
+`trust_is_scientific_verdict=false`. Unknown future versions fail closed at run
+submission.
+
+## SciRust-Verify edge
+
+SciRust-Verify PR #32 qualified a separate source-preserving consumer:
+
+- final exact head: `bfca2aa4eca00d9a41a369284d95a07a38841f48`;
+- merge: `0d319ef157922635932a7b1591b6c364f46b9106`;
+- required CI: Verify CI #106, success including repository dogfood on that exact head.
+
+Hub publishes the separate capability:
+
+```text
+capsule.verify.scicapsule@1.0.0
+```
+
+The fixture `examples/scicapsule-verify-component.json` accepts the immutable v2
+result and invokes:
+
+```text
+/opt/scirust-hub/libexec/scirust-verify-scicapsule
+  --evidence {input:evidence}
+  --output {output:dossier}
+```
+
+It emits an integrity-sealed dossier:
+
+```text
+application/vnd.scirust-verify.dossier.v1+tar
+```
+
+The Verify verdict is limited to structural conformance of the qualified v2
+evidence envelope. Verify preserves the producer-reported capsule, policy,
+request, signature, runtime and source-result identities, but does not claim to
+have independently rehashed referenced bytes that were not supplied as inputs.
+Hub stores and routes the dossier; Hub does not recompute or reinterpret Verify
+verdict semantics.
+
+## Registration and execution
+
+Register v1, v2 and Verify manifests through the normal component-registration
+path using stable component UUIDs and absolute deployment paths. The examples in
+this repository pin the qualified deployment contract; operators that relocate
+binaries must generate equivalent manifests that are accepted by the Hub
+contract guard or update the qualified deployment contract explicitly.
+
+Before execution, create the request artifact with SciCapsule, for example:
 
 ```text
 scicapsule create-hub-request \
@@ -80,56 +142,54 @@ scicapsule create-hub-request \
   -- --example literal-argument
 ```
 
-Store the capsule, policy and request through Hub's bounded artifact-ingress
-endpoint (or `scirust-hub artifact put`), bind the returned artifact ids to the
-three capability inputs, and submit the run through the ordinary Hub API/CLI.
-The Hub process executor controls the outer process lifecycle and captures its
-streams/provenance. SciCapsule performs the inner canonical capsule validation,
-local trust authorization, private materialization and bounded entrypoint
-execution.
+Ingest capsule, policy and request through Hub's bounded artifact ingress, bind
+the returned artifact IDs to `capsule.execute`, execute the v2 run, then bind the
+result artifact to `capsule.verify.scicapsule` when a Verify dossier is required.
+Each stage remains a separate Hub run with immutable artifact lineage.
 
-## Reproducibility boundary
+## Reproducibility and ownership boundary
 
-Hub records the exact input artifact digests and component version under its
-normal run provenance model. The SciCapsule result additionally records the
-SHA-256 of the exact capsule bytes, canonical manifest name/entrypoint, matched
-trusted signer names and required signature threshold.
+Hub records component version, exact input artifact digests, attempts, output
+artifacts and process provenance. SciCapsule owns capsule format, signatures,
+trust policy and bounded entrypoint execution. SciRust-Verify owns dossier,
+claim, limitation and verdict semantics. Hub owns orchestration and immutable
+artifact flow.
 
-The contract deliberately contains no timestamp, random run identifier, host
-path or process identifier in the SciCapsule result. Hub remains responsible
-for its own run identity/timing/provenance metadata.
+This separation is intentional:
+
+- capsule integrity is not authenticity;
+- authenticity under a trust policy is not scientific correctness;
+- an integrity-sealed Verify dossier does not strengthen the underlying claim;
+- process supervision or `bounded_process_unix` is not an OS sandbox.
 
 ## Security boundary
 
-This integration is **not an OS sandbox**. Hub's process executor and
-SciCapsule's runner provide explicit environment construction, direct argv,
-timeouts and process lifecycle controls, but they do not by themselves isolate
-filesystem access, networking, syscalls, privileges, CPU or memory. Run hostile
-capsules only behind an appropriate container/VM/sandbox boundary.
+Neither Hub process execution nor the qualified SciCapsule v2 contract claims
+filesystem, network, syscall, privilege, CPU, memory or device isolation. The
+v2 evidence explicitly records `sandbox=none`. Hostile capsules require an
+external qualified isolation boundary; absence of that boundary must not be
+silently relabeled as sandboxed execution.
 
-Trust also stays local to SciCapsule. Hub does not infer authorization from a
-capsule, signature envelope or provenance statement. The explicit policy
-artifact is evaluated by SciCapsule against the exact canonical capsule bytes
-before payload process creation.
+Hub never infers authorization from capsule bytes, signature envelopes,
+provenance metadata or a Verify dossier. Local trust authorization remains a
+SciCapsule decision over the exact pinned capsule bytes and supplied policy.
 
-## Regression guarantee
+## Regression guarantees
 
-`crates/hub-core/tests/scicapsule_contract.rs` parses
-`examples/scicapsule-component.json` through Hub's real public domain types and
-validates the process binding and capability contract. A breaking Hub manifest
-change or a drifting SciCapsule adapter shape therefore fails Hub CI instead of
-silently changing interoperability.
+`crates/hub-core/tests/scicapsule_contract.rs` parses the v1 and v2 execution
+fixtures through Hub's public domain types and invokes the real
+`validate_execution_contract` guard. It verifies backward compatibility, the
+qualified v2 process shape and fail-closed future-version behavior.
 
+`crates/hub-core/tests/scicapsule_verify_contract.rs` pins the separate Verify
+process boundary, qualified source/consumer commits, trust ownership and
+`hub.policy_interpretation=forbidden` rule.
 
 ## Artifact ingress
 
 Hub accepts external immutable input bytes at `POST /api/v1/artifacts`. The raw
 request body is bounded by Hub's configured `max_artifact_bytes`; callers must
-send `x-scirust-artifact-name` and `content-type`. The response is normal Hub
-artifact metadata. This is a generic control-plane primitive and is not coupled
-to `.scicap`.
-
-The CLI equivalent is:
+send `x-scirust-artifact-name` and `content-type`. The CLI equivalent is:
 
 ```text
 scirust-hub --output json artifact put demo.scicap \
@@ -137,8 +197,6 @@ scirust-hub --output json artifact put demo.scicap \
   --media-type application/vnd.scirust.scicap
 ```
 
-Hub does not inspect capsule bytes on ingress. At run submission it does,
-however, fail closed if a component claiming `capsule.execute` does not match
-the published SciCapsule Hub contract `1.0.0`. Canonical capsule format/version
-rejection remains delegated to SciCapsule's own `Capsule::decode` path during
-`hub-run`.
+Hub does not inspect capsule bytes on ingress. Contract validation occurs at run
+submission; canonical capsule validation remains delegated to SciCapsule during
+execution.
