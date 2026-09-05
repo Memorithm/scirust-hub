@@ -1,0 +1,69 @@
+{
+  "schema_version": 1,
+  "id": "00000000-0000-0000-0000-000000000014",
+  "name": "NNIS NNML1 Parity Validation",
+  "version": "1.0.0",
+  "kind": "tool",
+  "capabilities": [
+    {
+      "name": "inference.nnis.parity_validate",
+      "contract_version": "1.0.0",
+      "inputs": [
+        {
+          "name": "parity_evidence",
+          "description": "application/vnd.nnis.nnml1.parity-evidence.v1+json; immutable NNIS NNML1 exact-checkpoint parity record or same-head suite"
+        }
+      ],
+      "outputs": [
+        {
+          "name": "validation",
+          "description": "application/vnd.nnis.nnml1.parity-validation.v1+json; deterministic NNIS validation result bound to the exact parity-evidence bytes"
+        }
+      ],
+      "properties": {
+        "execution_mode": "local_process",
+        "nnis.contract": "nnis.nnml1.parity-validation@1.0.0",
+        "nnis.process_path": "/opt/nnis/libexec/nnis_hub_nnml1_parity_validate.py",
+        "nnis.python_path": "/usr/bin/python3",
+        "nnis.source_head": "c74b6b04c45e320c86cdd973b31f49f43c720681",
+        "nnis.source_merge": "0ae4b0d4659c8de9b8a8322ed6ab7f8e110b53f2",
+        "nnis.input_media_type": "application/vnd.nnis.nnml1.parity-evidence.v1+json",
+        "nnis.validation_media_type": "application/vnd.nnis.nnml1.parity-validation.v1+json",
+        "nnis.validation_scope": "nnml1_exact_checkpoint_parity_contract_only",
+        "nnis.semantics_owner": "NNIS",
+        "nnis.promotion_authorized": "false",
+        "nnis.serving_performance_verified": "false",
+        "nnis.general_model_family_support_verified": "false",
+        "nnis.new_physical_evidence_created": "false",
+        "hub.policy_interpretation": "forbidden",
+        "sandbox": "none"
+      }
+    }
+  ],
+  "execution": {
+    "type": "process",
+    "program": "/usr/bin/python3",
+    "args": [
+      "/opt/nnis/libexec/nnis_hub_nnml1_parity_validate.py",
+      "--evidence",
+      "{input:parity_evidence}",
+      "--result",
+      "{output:validation}"
+    ],
+    "outputs": [
+      {
+        "name": "validation",
+        "path": "outputs/nnis-nnml1-parity-validation.json",
+        "media_type": "application/vnd.nnis.nnml1.parity-validation.v1+json",
+        "required": true
+      }
+    ]
+  },
+  "metadata": {
+    "nnis_repository": "https://github.com/Memorithm/NNIS",
+    "nnis_process_pull_request": "114",
+    "nnis_process_final_exact_head": "c74b6b04c45e320c86cdd973b31f49f43c720681",
+    "nnis_process_merge": "0ae4b0d4659c8de9b8a8322ed6ab7f8e110b53f2",
+    "contract": "nnis-nnml1-parity-validation-hub-v1"
+  }
+}
