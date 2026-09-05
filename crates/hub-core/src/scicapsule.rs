@@ -76,7 +76,9 @@ fn validate_common(
         ("request", REQUEST_MEDIA_TYPE),
     ];
     if inputs != expected_inputs {
-        return Err(unsupported("input ports do not match SciCapsule Hub contract"));
+        return Err(unsupported(
+            "input ports do not match SciCapsule Hub contract",
+        ));
     }
     let outputs = capability
         .outputs
@@ -84,7 +86,9 @@ fn validate_common(
         .map(|port| (port.name.as_str(), port.description.as_str()))
         .collect::<Vec<_>>();
     if outputs != vec![("result", expected_output_media_type)] {
-        return Err(unsupported("result output media type does not match contract"));
+        return Err(unsupported(
+            "result output media type does not match contract",
+        ));
     }
 
     for (key, expected) in [
@@ -137,7 +141,11 @@ fn validate_v1(manifest: &ComponentManifest, capability: &Capability) -> Result<
     if process.args.iter().map(String::as_str).collect::<Vec<_>>() != expected_args {
         return Err(unsupported("process argv does not match SciCapsule Hub v1"));
     }
-    validate_single_output(process, "outputs/scicapsule-result.json", RESULT_MEDIA_TYPE_V1)
+    validate_single_output(
+        process,
+        "outputs/scicapsule-result.json",
+        RESULT_MEDIA_TYPE_V1,
+    )
 }
 
 fn validate_v2(manifest: &ComponentManifest, capability: &Capability) -> Result<(), CoreError> {
