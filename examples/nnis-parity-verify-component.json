@@ -1,0 +1,81 @@
+{
+  "schema_version": 1,
+  "id": "00000000-0000-0000-0000-000000000015",
+  "name": "SciRust-Verify NNIS Parity Evidence",
+  "version": "1.0.0",
+  "kind": "tool",
+  "capabilities": [
+    {
+      "name": "inference.nnis.parity_verify",
+      "contract_version": "1.0.0",
+      "inputs": [
+        {
+          "name": "parity_evidence",
+          "description": "application/vnd.nnis.nnml1.parity-evidence.v1+json; immutable original NNIS parity-evidence bytes"
+        },
+        {
+          "name": "validation",
+          "description": "application/vnd.nnis.nnml1.parity-validation.v1+json; immutable result from inference.nnis.parity_validate@1.0.0"
+        }
+      ],
+      "outputs": [
+        {
+          "name": "dossier",
+          "description": "application/vnd.scirust-verify.dossier.v1+tar; integrity-sealed SciRust-Verify evidence dossier"
+        }
+      ],
+      "properties": {
+        "execution_mode": "local_process",
+        "verify.contract": "scirust-verify.nnis-parity-dossier@1.0.0",
+        "verify.process_path": "/opt/scirust-hub/libexec/scirust-verify-nnis-parity",
+        "verify.process_merge": "593692aea76b90e50899e733344ffa4cf61ba380",
+        "verify.process_final_exact_head": "a120c54ed05b058d9347691d0036eaaaa831df41",
+        "verify.contract_verdict_scope": "exact_byte_binding_and_validation_envelope_only",
+        "verify.model_quality_claim": "not_established",
+        "verify.serving_performance_claim": "not_established",
+        "verify.general_model_family_support_claim": "not_established",
+        "verify.promotion_authorization_claim": "not_established",
+        "nnis.contract": "nnis.nnml1.parity-validation@1.0.0",
+        "nnis.source_head": "c74b6b04c45e320c86cdd973b31f49f43c720681",
+        "nnis.source_merge": "0ae4b0d4659c8de9b8a8322ed6ab7f8e110b53f2",
+        "nnis.semantics_owner": "NNIS",
+        "nnis.promotion_authorized": "false",
+        "nnis.serving_performance_verified": "false",
+        "nnis.general_model_family_support_verified": "false",
+        "hub.policy_interpretation": "forbidden",
+        "dossier.media_type": "application/vnd.scirust-verify.dossier.v1+tar"
+      }
+    }
+  ],
+  "execution": {
+    "type": "process",
+    "program": "/opt/scirust-hub/libexec/scirust-verify-nnis-parity",
+    "args": [
+      "--parity-evidence",
+      "{input:parity_evidence}",
+      "--validation",
+      "{input:validation}",
+      "--output",
+      "{output:dossier}"
+    ],
+    "outputs": [
+      {
+        "name": "dossier",
+        "path": "outputs/nnis-parity-verification-dossier.tar",
+        "media_type": "application/vnd.scirust-verify.dossier.v1+tar",
+        "required": true
+      }
+    ]
+  },
+  "metadata": {
+    "verify_repository": "https://github.com/Memorithm/SciRust-Verify",
+    "verify_process_pull_request": "33",
+    "verify_process_final_exact_head": "a120c54ed05b058d9347691d0036eaaaa831df41",
+    "verify_process_merge": "593692aea76b90e50899e733344ffa4cf61ba380",
+    "nnis_repository": "https://github.com/Memorithm/NNIS",
+    "nnis_process_pull_request": "114",
+    "nnis_process_final_exact_head": "c74b6b04c45e320c86cdd973b31f49f43c720681",
+    "nnis_process_merge": "0ae4b0d4659c8de9b8a8322ed6ab7f8e110b53f2",
+    "contract": "scirust-verify-nnis-parity-hub-v1"
+  }
+}
