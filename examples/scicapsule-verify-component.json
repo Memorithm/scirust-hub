@@ -1,0 +1,73 @@
+{
+  "schema_version": 1,
+  "id": "00000000-0000-0000-0000-000000000013",
+  "name": "SciRust-Verify SciCapsule Execution Evidence",
+  "version": "1.0.0",
+  "kind": "tool",
+  "capabilities": [
+    {
+      "name": "capsule.verify.scicapsule",
+      "contract_version": "1.0.0",
+      "inputs": [
+        {
+          "name": "evidence",
+          "description": "application/vnd.scicapsule.hub-run-result.v2+json; immutable SciCapsule capsule.execute@2.0.0 execution evidence"
+        }
+      ],
+      "outputs": [
+        {
+          "name": "dossier",
+          "description": "application/vnd.scirust-verify.dossier.v1+tar; integrity-sealed SciRust-Verify evidence dossier"
+        }
+      ],
+      "properties": {
+        "execution_mode": "local_process",
+        "verify.contract": "scirust-verify.scicapsule-execution-dossier@1.0.0",
+        "verify.process_path": "/opt/scirust-hub/libexec/scirust-verify-scicapsule",
+        "verify.process_merge": "0d319ef157922635932a7b1591b6c364f46b9106",
+        "verify.process_final_exact_head": "bfca2aa4eca00d9a41a369284d95a07a38841f48",
+        "verify.contract_verdict_scope": "structural_evidence_conformance_only",
+        "verify.scientific_correctness_claim": "not_established",
+        "verify.sandbox_claim": "not_established",
+        "verify.model_quality_claim": "not_established",
+        "verify.performance_claim": "not_established",
+        "scicapsule.contract": "capsule.execute@2.0.0",
+        "scicapsule.source_head": "bb79eea787f0d9562585b27dd38f5f57fa5b5ea9",
+        "scicapsule.source_merge": "31e4a825c8a45837ce4f8ff69f936b46e53d3b82",
+        "scicapsule.trust_decision_owner": "SciCapsule",
+        "scicapsule.trust_is_scientific_verdict": "false",
+        "hub.policy_interpretation": "forbidden",
+        "dossier.media_type": "application/vnd.scirust-verify.dossier.v1+tar"
+      }
+    }
+  ],
+  "execution": {
+    "type": "process",
+    "program": "/opt/scirust-hub/libexec/scirust-verify-scicapsule",
+    "args": [
+      "--evidence",
+      "{input:evidence}",
+      "--output",
+      "{output:dossier}"
+    ],
+    "outputs": [
+      {
+        "name": "dossier",
+        "path": "outputs/scicapsule-verification-dossier.tar",
+        "media_type": "application/vnd.scirust-verify.dossier.v1+tar",
+        "required": true
+      }
+    ]
+  },
+  "metadata": {
+    "verify_repository": "https://github.com/Memorithm/SciRust-Verify",
+    "verify_process_pull_request": "32",
+    "verify_process_final_exact_head": "bfca2aa4eca00d9a41a369284d95a07a38841f48",
+    "verify_process_merge": "0d319ef157922635932a7b1591b6c364f46b9106",
+    "scicapsule_repository": "https://github.com/Memorithm/SciCapsule",
+    "scicapsule_pull_request": "30",
+    "scicapsule_final_exact_head": "bb79eea787f0d9562585b27dd38f5f57fa5b5ea9",
+    "scicapsule_merge": "31e4a825c8a45837ce4f8ff69f936b46e53d3b82",
+    "contract": "scirust-verify-scicapsule-hub-v1"
+  }
+}
