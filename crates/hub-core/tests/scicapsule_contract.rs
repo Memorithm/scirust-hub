@@ -144,11 +144,9 @@ fn scicapsule_execution_contract_rejects_future_version_until_supported() {
     let capability = manifest.capability(&name).unwrap();
     let error = hub_core::scicapsule::validate_execution_contract(&manifest, capability)
         .expect_err("future contract must fail closed");
-    assert!(
-        error
-            .to_string()
-            .contains("supported versions are 1.0.0 and 2.0.0")
-    );
+    assert!(error
+        .to_string()
+        .contains("supported versions are 1.0.0 and 2.0.0"));
 }
 
 #[test]
