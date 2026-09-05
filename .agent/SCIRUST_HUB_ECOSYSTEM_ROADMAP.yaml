@@ -1,7 +1,7 @@
 schema_version: 1
 kind: scirust_hub_ecosystem_agent_roadmap
 status: active
-last_updated: "2026-09-04"
+last_updated: "2026-09-05"
 repository: Memorithm/scirust-hub
 intended_consumer: autonomous_coding_agent
 merge_policy: never_merge_this_file_to_default_branch_unless_user_explicitly_requests
@@ -23,7 +23,9 @@ verified_current_facts:
   - Hub_has_durable_SQLite_metadata_and_append_only_lifecycle_events
   - Hub_supports_local_and_authenticated_remote_process_execution
   - workflows_support_bounded_parallelism_retries_and_cancellation
-  - SciCapsule_execution_is_integrated_through_a_published_versioned_process_contract
+  - SciCapsule_execution_is_integrated_through_published_versioned_v1_and_v2_process_contracts
+  - SciRust_Verify_scoped_dossier_process_edges_are_published_for_selected_ecosystem_sources
+  - NNIS_NNML1_parity_validation_and_Verify_handoff_are_published_as_separate_versioned_capabilities
   - SOUP_ship_train_eval_and_export_are_integrated_through_versioned_llm_contracts
   - SOUP_Elastic_preexecution_resource_plan_handoff_is_integrated_through_llm_train_elastic_1_0_0
   - SOUP_SciRust_symbolic_reward_handoff_is_integrated_through_llm_train_scirust_symbolic_1_0_0
@@ -39,6 +41,8 @@ verified_current_facts:
   - legacy_SCIRUST_HUB_TOKEN_mode_remains_backward_compatible_full_control
   - process_execution_is_supervised_but_not_an_OS_sandbox
   - Hub_HML1_resource_aware_worker_placement_is_not_yet_established
+  - Hub_HML2_distributed_ML_orchestration_is_not_yet_established
+  - Hub_HML4_qualification_campaign_orchestration_is_not_yet_established
   - current_BOUNDARIES_md_contains_historical_not_yet_established_notes_that_must_be_reconciled_against_newer_published_contracts_before_relying_on_them
 
 invariants:
@@ -71,7 +75,7 @@ ownership:
     - Forge_candidate_search_strategy
     - ElasticXxx_adaptive_resource_control_loop
     - FLAT_ATTENTION_attention_kernel_semantics
-    - NNIS_native_inference_runtime_internals
+    - NNIS_native_inference_runtime_parity_or_promotion_semantics
     - SLHAv2_compressed_KV_semantics
     - SOUP_training_evaluation_model_loading_export_or_verdict_semantics
     - nonlocal_relativity_scientific_models_or_interpretation
@@ -116,12 +120,25 @@ contract_policy:
     - Hub_adapters_validate_known_contract_versions_but_do_not_reimplement_component_semantics
     - every_component_run_records_component_version_input_artifact_identity_and_execution_provenance
     - cross_component_workflows_pass_immutable_artifacts_or_explicit_typed_parameters_not_hidden_shared_state
+    - producer_validation_results_must_be_passed_as_immutable_artifacts_not_reconstructed_from_stdout_or_Hub_metadata
 
 current_and_target_interfaces:
   Memorithm/SciCapsule:
-    status: active_published_contract
-    capability: capsule.execute
-    rule: Hub_materializes_inputs_and_owns_outer_orchestration_while_SciCapsule_validates_trust_and_executes_the_capsule
+    status: active_published_contracts
+    capabilities:
+      - capsule.execute@1.0.0
+      - capsule.execute@2.0.0
+      - capsule.verify.scicapsule@1.0.0
+    latest_execution_edge:
+      scicapsule_source_head: bb79eea787f0d9562585b27dd38f5f57fa5b5ea9
+      scicapsule_source_merge: 31e4a825c8a45837ce4f8ff69f936b46e53d3b82
+      hub_pull_request: 36
+      hub_final_exact_head: 9baa87d175b1282df547a218849b81f090882244
+      hub_merge: 4591869ab10835708d18c836d0c97a73bc868d9c
+      required_CI: CI_99_success_on_final_exact_head
+    rule: >-
+      Hub materializes inputs and owns outer orchestration while SciCapsule owns
+      trust/execution semantics and SciRust-Verify owns the scoped dossier verdict.
   MakazhanAlpamys/Soup:
     status: active_published_contracts
     capabilities:
@@ -198,11 +215,26 @@ current_and_target_interfaces:
       - score_zero_not_proven_is_not_a_proof_of_inequality
       - SciRust_is_not_a_SOUP_or_PyTorch_training_backend
   Memorithm/SciRust-Verify:
-    status: planned
+    status: active_published_scoped_process_edges
+    published:
+      - capability: capsule.verify.scicapsule@1.0.0
+        hub_pull_request: 36
+        hub_merge: 4591869ab10835708d18c836d0c97a73bc868d9c
+      - capability: inference.nnis.parity_verify@1.0.0
+        verify_contract: scirust-verify.nnis-parity-dossier@1.0.0
+        verify_pull_request: 33
+        verify_final_exact_head: a120c54ed05b058d9347691d0036eaaaa831df41
+        verify_merge: 593692aea76b90e50899e733344ffa4cf61ba380
+        hub_pull_request: 37
+        hub_final_exact_head: 9e95e7d6a141b3f06bfc9effac51007bdfe9b1c2
+        hub_merge: 0e484d9f9903fe0f0fcb7111e0191dfb14d958b4
     desired:
-      - run_or_ingest_verification_components
-      - retain_dossier_as_immutable_artifact
+      - preserve_and_extend_scoped_Verify_process_components_only_from_versioned_source_contracts
+      - retain_each_dossier_as_an_immutable_artifact
       - keep_Verify_verdict_semantics_outside_Hub
+    limits:
+      - Hub_does_not_recompute_or_upgrade_Verify_verdict_scope
+      - HML4_qualification_campaign_orchestration_remains_unimplemented
   Memorithm/ElasticXxx:
     status: active_published_SOUP_resource_plan_edge
     published:
@@ -239,9 +271,27 @@ current_and_target_interfaces:
     desired:
       - register_benchmark_or_attention_execution_capabilities_when_a_stable_contract_exists
   Memorithm/NVIDIA-Native-Inference-Stack:
-    status: planned
+    status: active_published_NNML1_parity_validation_Verify_edge
+    published:
+      - capability: inference.nnis.parity_validate@1.0.0
+        source_contract: nnis.nnml1.parity-validation@1.0.0
+        source_media_type: application/vnd.nnis.nnml1.parity-evidence.v1+json
+        validation_media_type: application/vnd.nnis.nnml1.parity-validation.v1+json
+        nnis_pull_request: 114
+        nnis_final_exact_head: c74b6b04c45e320c86cdd973b31f49f43c720681
+        nnis_merge: 0ae4b0d4659c8de9b8a8322ed6ab7f8e110b53f2
+        hub_pull_request: 37
+        hub_final_exact_head: 9e95e7d6a141b3f06bfc9effac51007bdfe9b1c2
+        hub_merge: 0e484d9f9903fe0f0fcb7111e0191dfb14d958b4
+      - capability: inference.nnis.parity_verify@1.0.0
+        verify_merge: 593692aea76b90e50899e733344ffa4cf61ba380
     desired:
-      - register_model_runtime_or_benchmark_capabilities_when_their_process_contract_is_stable
+      - preserve_NNIS_parity_and_promotion_semantics_outside_Hub
+      - register_additional_runtime_or_benchmark_capabilities_only_when_their_process_contracts_are_stable
+    limits:
+      - current_edge_validates_already_produced_parity_evidence_and_does_not_execute_a_new_CUDA_model_campaign
+      - no_serving_performance_general_model_family_Jetson_ARM64_or_promotion_claim_is_established
+      - HML1_HML2_and_HML4_remain_unimplemented
   Memorithm/SLHAv2:
     status: planned
     desired:
@@ -403,13 +453,52 @@ roadmap:
           - distributed_Forge_workers_remain_disabled_in_v1
           - campaigns_requiring_external_hostile_code_isolation_are_refused
           - HML1_HML2_and_HML4_are_not_promoted_by_this_slice
+      - id: HUB4_SciCapsule_v2_Verify_edge
+        status: complete
+        capabilities:
+          - capsule.execute@2.0.0
+          - capsule.verify.scicapsule@1.0.0
+        pull_request: 36
+        final_exact_head: 9baa87d175b1282df547a218849b81f090882244
+        merge_commit: 4591869ab10835708d18c836d0c97a73bc868d9c
+        required_CI: CI_99_success_on_final_exact_head
+        guarantees:
+          - SciCapsule_trust_and_execution_semantics_remain_outside_Hub
+          - Verify_verdict_semantics_remain_outside_Hub
+          - v1_execution_contract_remains_available_additively
+          - no_OS_sandbox_claim_is_inferred_from_bounded_process_execution
+      - id: HUB4_NNIS_NNML1_parity_validation_Verify_v1
+        status: complete
+        capabilities:
+          - inference.nnis.parity_validate@1.0.0
+          - inference.nnis.parity_verify@1.0.0
+        nnis_contract: nnis.nnml1.parity-validation@1.0.0
+        nnis_pull_request: 114
+        nnis_final_exact_head: c74b6b04c45e320c86cdd973b31f49f43c720681
+        nnis_merge_commit: 0ae4b0d4659c8de9b8a8322ed6ab7f8e110b53f2
+        verify_pull_request: 33
+        verify_final_exact_head: a120c54ed05b058d9347691d0036eaaaa831df41
+        verify_merge_commit: 593692aea76b90e50899e733344ffa4cf61ba380
+        pull_request: 37
+        final_exact_head: 9e95e7d6a141b3f06bfc9effac51007bdfe9b1c2
+        merge_commit: 0e484d9f9903fe0f0fcb7111e0191dfb14d958b4
+        required_CI: CI_102_success_on_final_exact_head
+        guarantees:
+          - NNIS_parity_checkpoint_tokenizer_reference_logit_same_head_and_promotion_semantics_remain_outside_Hub
+          - original_parity_evidence_and_validation_result_are_separate_immutable_artifacts
+          - Verify_checks_exact_byte_binding_and_scoped_validation_envelope_without_reimplementing_NNIS_semantics
+          - validation_is_not_reconstructed_from_stdout_or_Hub_metadata
+          - no_new_physical_CUDA_model_evidence_is_created_by_the_edge
+          - no_serving_performance_general_model_family_Jetson_ARM64_or_promotion_claim_is_established
+          - HML1_HML2_and_HML4_are_not_promoted_by_this_slice
     sequence:
-      - preserve_and_version_SciCapsule_contract
+      - preserve_and_version_SciCapsule_contracts
       - define_SciRust_selected_capabilities
-      - define_SciRust_Verify_contract
-      - define_ElasticXxx_contract
+      - preserve_and_extend_SciRust_Verify_contracts
+      - define_ElasticXxx_runtime_contract_when_published
       - preserve_and_extend_Forge_contract
-      - define_SLHAv2_FLAT_and_NNIS_contracts_as_their_surfaces_stabilize
+      - define_SLHAv2_and_FLAT_contracts_as_their_surfaces_stabilize
+      - preserve_and_extend_NNIS_contracts_from_published_process_surfaces
       - define_nonlocal_relativity_experiment_contract
     exit_criteria:
       - each_active_edge_has_schema_version_compatibility_tests_and_failure_semantics
