@@ -1,0 +1,46 @@
+{
+  "schema_version": 1,
+  "workflow": {
+    "schema_version": 1,
+    "name": "nnis-nnml1-parity-validate-and-verify",
+    "max_concurrency": 1,
+    "steps": [
+      {
+        "key": "validate",
+        "component": "00000000-0000-0000-0000-000000000014",
+        "capability": "inference.nnis.parity_validate",
+        "parameters": {},
+        "inputs": {
+          "parity_evidence": {
+            "artifact": {
+              "artifact": "00000000-0000-0000-0000-00000000e001"
+            }
+          }
+        },
+        "timeout_ms": 60000,
+        "after": []
+      },
+      {
+        "key": "verify",
+        "component": "00000000-0000-0000-0000-000000000015",
+        "capability": "inference.nnis.parity_verify",
+        "parameters": {},
+        "inputs": {
+          "parity_evidence": {
+            "artifact": {
+              "artifact": "00000000-0000-0000-0000-00000000e001"
+            }
+          },
+          "validation": {
+            "from_step": {
+              "key": "validate",
+              "output": "file:validation"
+            }
+          }
+        },
+        "timeout_ms": 60000,
+        "after": []
+      }
+    ]
+  }
+}
