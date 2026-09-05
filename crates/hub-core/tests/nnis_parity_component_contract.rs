@@ -1,7 +1,6 @@
 use hub_core::{CapabilityName, ComponentManifest, ExecutionBinding};
 
-const NNIS_MANIFEST: &str =
-    include_str!("../../../examples/nnis-parity-validation-component.json");
+const NNIS_MANIFEST: &str = include_str!("../../../examples/nnis-parity-validation-component.json");
 
 #[test]
 fn nnis_parity_validation_component_preserves_nnis_semantics_and_non_claims() {
