@@ -1,0 +1,93 @@
+{
+  "schema_version": 1,
+  "id": "6df1e39d-b861-4eb9-a2a6-4d696c74bc75",
+  "name": "SOUP NNIS Dense F32 Merge",
+  "version": "1.0.0",
+  "kind": "tool",
+  "capabilities": [
+    {
+      "name": "llm.merge.nnis",
+      "contract_version": "1.0.0",
+      "inputs": [
+        {
+          "name": "adapter_bundle",
+          "description": "application/vnd.scirust-hub.soup-bundle.v1+tar; deterministic Hub bundle whose resolved model root is a SOUP/PEFT LoRA adapter containing adapter_config.json"
+        }
+      ],
+      "outputs": [
+        {
+          "name": "merged_model_bundle",
+          "description": "application/vnd.scirust-hub.soup-bundle.v1+tar; deterministic bundle of the exact directory produced by SOUP merge"
+        },
+        {
+          "name": "report",
+          "description": "application/vnd.scirust-hub.soup-nnis-merge-report.v1+json; Hub orchestration record of the fixed SOUP merge invocation and bundle capture"
+        }
+      ],
+      "properties": {
+        "execution_mode": "local_process",
+        "bundle_schema": "application/vnd.scirust-hub.soup-bundle.v1+tar",
+        "unknown_parameters": "rejected",
+        "soup.operation": "merge",
+        "soup.semantics_owner": "SOUP",
+        "soup.source_head": "9f1e48b33a5fcda7e621e612ec9305cb52a38e07",
+        "soup.merge_dtype": "float32",
+        "soup.merge_save_format": "fp16",
+        "soup.merge_hub": "hf",
+        "soup.base_resolution": "adapter_config_auto_detect",
+        "soup.trust_remote_code": "false",
+        "soup.network_access": "environment_dependent_base_resolution",
+        "nnis.consumer_contract": "nnis.hf-preflight@1",
+        "nnis.consumer_capability": "inference.nnis.hf_preflight@1.0.0",
+        "nnis.admission_owner": "NNIS",
+        "hub.merge_implementation": "forbidden",
+        "hub.output_validation": "directory_and_deterministic_bundle_only",
+        "ml.resource_contract": "hub.ml.resource-requirements@1.0.0",
+        "ml.backend": "soup",
+        "ml.device": "cpu",
+        "ml.dtype": "float32",
+        "ml.accelerator": "none",
+        "ml.memory": "operation_defined",
+        "ml.placement_enforcement": "component_preflight",
+        "sandbox": "none"
+      }
+    }
+  ],
+  "execution": {
+    "type": "process",
+    "program": "python3",
+    "args": [
+      "/opt/scirust-hub/libexec/soup_nnis_merge_hub_adapter.py",
+      "--adapter-bundle",
+      "{input:adapter_bundle}",
+      "--merged-bundle",
+      "{output:merged_model_bundle}",
+      "--report",
+      "{output:report}",
+      "--params",
+      "{params}"
+    ],
+    "outputs": [
+      {
+        "name": "merged_model_bundle",
+        "path": "outputs/soup-nnis-merged-f32.tar",
+        "media_type": "application/vnd.scirust-hub.soup-bundle.v1+tar",
+        "required": true
+      },
+      {
+        "name": "report",
+        "path": "outputs/soup-nnis-merge-report.json",
+        "media_type": "application/vnd.scirust-hub.soup-nnis-merge-report.v1+json",
+        "required": true
+      }
+    ]
+  },
+  "metadata": {
+    "soup_repository": "https://github.com/MakazhanAlpamys/Soup",
+    "soup_reviewed_head": "9f1e48b33a5fcda7e621e612ec9305cb52a38e07",
+    "nnis_repository": "https://github.com/Memorithm/NNIS",
+    "nnis_preflight_merge": "b1e2766ace9a2076d4a5721f6dca2d2c7d48d04d",
+    "hub_nnis_preflight_merge": "0eb9b9ba96c1f5d98ab6fe50c77d2767b1eed197",
+    "contract": "soup-nnis-dense-f32-merge-hub-v1"
+  }
+}
