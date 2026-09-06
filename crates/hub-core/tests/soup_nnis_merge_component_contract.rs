@@ -10,7 +10,9 @@ fn soup_nnis_merge_component_keeps_merge_in_soup_and_admission_in_nnis() {
     manifest.validate().expect("validate manifest");
 
     let name = CapabilityName::parse("llm.merge.nnis").expect("capability name");
-    let capability = manifest.capability(&name).expect("SOUP NNIS merge capability");
+    let capability = manifest
+        .capability(&name)
+        .expect("SOUP NNIS merge capability");
     assert_eq!(capability.contract_version.as_str(), "1.0.0");
 
     assert_eq!(capability.inputs.len(), 1);
