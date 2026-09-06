@@ -1,0 +1,81 @@
+{
+  "schema_version": 1,
+  "id": "9f13791c-0a54-4c2c-8abf-0d0644d33437",
+  "name": "NNIS Hugging Face Preflight",
+  "version": "1.0.0",
+  "kind": "tool",
+  "capabilities": [
+    {
+      "name": "inference.nnis.hf_preflight",
+      "contract_version": "1.0.0",
+      "inputs": [
+        {
+          "name": "model_bundle",
+          "description": "application/vnd.scirust-hub.soup-bundle.v1+tar; deterministic Hub model bundle containing a local Hugging Face-style config, Safetensors weights, and tokenizer"
+        }
+      ],
+      "outputs": [
+        {
+          "name": "preflight",
+          "description": "application/json; schema=nnis.hf-preflight@1; exact producer bytes from nnis-hf validate"
+        }
+      ],
+      "properties": {
+        "execution_mode": "local_process",
+        "bundle_schema": "application/vnd.scirust-hub.soup-bundle.v1+tar",
+        "unknown_parameters": "rejected",
+        "nnis.contract": "nnis.hf-preflight@1",
+        "nnis.report_schema": "nnis.hf-preflight@1",
+        "nnis.source_head": "5975b4a01c7c0825ad8ca97ce4c9e384d0cc4b67",
+        "nnis.source_merge": "b1e2766ace9a2076d4a5721f6dca2d2c7d48d04d",
+        "nnis.cli_surface": "nnis-hf validate --json --output",
+        "nnis.semantics_owner": "NNIS",
+        "nnis.direct_execution_readiness_owner": "NNIS",
+        "nnis.cuda_used_by_preflight": "false",
+        "nnis.network_used_by_preflight": "false",
+        "nnis.promotion_authorized": "false",
+        "nnis.serving_performance_verified": "false",
+        "nnis.general_model_family_support_verified": "false",
+        "nnis.new_physical_evidence_created": "false",
+        "hub.policy_interpretation": "forbidden",
+        "hub.report_contract_validation": "schema_only",
+        "ml.resource_contract": "hub.ml.resource-requirements@1.0.0",
+        "ml.backend": "nnis",
+        "ml.device": "operation_defined",
+        "ml.dtype": "model_defined",
+        "ml.accelerator": "none",
+        "ml.memory": "runtime_preflight",
+        "ml.placement_enforcement": "component_preflight",
+        "sandbox": "none"
+      }
+    }
+  ],
+  "execution": {
+    "type": "process",
+    "program": "python3",
+    "args": [
+      "/opt/scirust-hub/libexec/nnis_hf_preflight_hub_adapter.py",
+      "--bundle",
+      "{input:model_bundle}",
+      "--report",
+      "{output:preflight}",
+      "--params",
+      "{params}"
+    ],
+    "outputs": [
+      {
+        "name": "preflight",
+        "path": "outputs/nnis-hf-preflight.json",
+        "media_type": "application/json",
+        "required": true
+      }
+    ]
+  },
+  "metadata": {
+    "nnis_repository": "https://github.com/Memorithm/NNIS",
+    "nnis_preflight_pull_request": "124",
+    "nnis_preflight_final_exact_head": "5975b4a01c7c0825ad8ca97ce4c9e384d0cc4b67",
+    "nnis_preflight_merge": "b1e2766ace9a2076d4a5721f6dca2d2c7d48d04d",
+    "contract": "nnis-hf-preflight-hub-v1"
+  }
+}
