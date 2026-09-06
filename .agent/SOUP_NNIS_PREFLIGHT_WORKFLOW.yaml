@@ -1,0 +1,60 @@
+schema_version: 1
+kind: scirust_hub_cross_product_workflow_record
+status: complete
+recorded_at: "2026-09-06"
+merge_policy: never_merge_this_file_to_default_branch_unless_user_explicitly_requests
+
+workflow:
+  name: soup-train-merge-nnis-preflight
+  reference: examples/soup-nnis-preflight-workflow.json
+  schema_version: 1
+  max_concurrency: 1
+  steps:
+    - key: train
+      component: 00000000-0000-0000-0000-000000000003
+      capability: llm.train@1.0.0
+      external_inputs:
+        - config
+        - dataset
+    - key: merge
+      component: 6df1e39d-b861-4eb9-a2a6-4d696c74bc75
+      capability: llm.merge.nnis@1.0.0
+      input_binding:
+        adapter_bundle: train:file:model_bundle
+    - key: preflight
+      component: 9f13791c-0a54-4c2c-8abf-0d0644d33437
+      capability: inference.nnis.hf_preflight@1.0.0
+      input_binding:
+        model_bundle: merge:file:merged_model_bundle
+
+verified_delivery:
+  pull_request: 40
+  final_exact_head: 91eeab46f665bb84f58b777246c8181c6cfc9f8a
+  exact_head_ci: CI_111_success
+  merge_commit: 9aa345e669c102ee559a1b949d7b89f6393a6fba
+  post_merge_ci: CI_112_success
+
+dependencies:
+  - train_to_merge_is_immutable_Hub_artifact_file_model_bundle
+  - merge_to_preflight_is_immutable_Hub_artifact_file_merged_model_bundle
+  - data_dependencies_define_the_DAG_order_without_hidden_shared_state
+
+guarantees:
+  - reference_JSON_parses_as_real_WorkflowSpec_v1
+  - workflow_validation_and_topological_order_are_regression_tested
+  - component_and_capability_identities_are_pinned
+  - SOUP_owns_training_and_merge_semantics
+  - NNIS_owns_hf_preflight_admission_semantics
+  - Hub_only_schedules_and_transports_immutable_artifacts
+
+non_claims:
+  - workflow_does_not_execute_a_new_NNIS_CUDA_model_campaign
+  - no_numerical_equivalence_model_quality_or_serving_performance_claim
+  - no_promotion_general_model_family_Jetson_or_ARM64_claim
+  - no_HML1_resource_aware_placement_claim
+  - no_HML2_distributed_orchestration_claim
+  - no_HML4_qualification_campaign_claim
+
+next_slice:
+  goal: inspect_current_NNIS_main_for_a_stable_versioned_execution_or_qualification_surface_after_hf_preflight
+  fail_closed: do_not_invent_a_runtime_contract_if_NNIS_does_not_publish_one
