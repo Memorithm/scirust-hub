@@ -18,7 +18,6 @@ import tempfile
 from typing import Sequence
 
 from soup_hub_adapter import (
-    BUNDLE_SCHEMA,
     _parse_params,
     _require_regular_input,
     _require_under,
