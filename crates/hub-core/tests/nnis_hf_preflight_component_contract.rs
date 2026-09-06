@@ -5,12 +5,14 @@ const NNIS_HF_PREFLIGHT_MANIFEST: &str =
 
 #[test]
 fn nnis_hf_preflight_component_preserves_nnis_semantics_and_artifact_boundary() {
-    let manifest: ComponentManifest = serde_json::from_str(NNIS_HF_PREFLIGHT_MANIFEST)
-        .expect("parse NNIS HF preflight manifest");
+    let manifest: ComponentManifest =
+        serde_json::from_str(NNIS_HF_PREFLIGHT_MANIFEST).expect("parse NNIS HF preflight manifest");
     manifest.validate().expect("validate manifest");
 
     let name = CapabilityName::parse("inference.nnis.hf_preflight").expect("capability name");
-    let capability = manifest.capability(&name).expect("NNIS HF preflight capability");
+    let capability = manifest
+        .capability(&name)
+        .expect("NNIS HF preflight capability");
     assert_eq!(capability.contract_version.as_str(), "1.0.0");
 
     assert_eq!(capability.inputs.len(), 1);
@@ -21,13 +23,18 @@ fn nnis_hf_preflight_component_preserves_nnis_semantics_and_artifact_boundary() 
 
     assert_eq!(capability.outputs.len(), 1);
     assert_eq!(capability.outputs[0].name, "preflight");
-    assert!(capability.outputs[0].description.starts_with("application/json"));
+    assert!(capability.outputs[0]
+        .description
+        .starts_with("application/json"));
     assert!(capability.outputs[0]
         .description
         .contains("schema=nnis.hf-preflight@1"));
 
     for (key, expected) in [
-        ("bundle_schema", "application/vnd.scirust-hub.soup-bundle.v1+tar"),
+        (
+            "bundle_schema",
+            "application/vnd.scirust-hub.soup-bundle.v1+tar",
+        ),
         ("unknown_parameters", "rejected"),
         ("nnis.contract", "nnis.hf-preflight@1"),
         ("nnis.report_schema", "nnis.hf-preflight@1"),
@@ -83,6 +90,9 @@ fn nnis_hf_preflight_component_preserves_nnis_semantics_and_artifact_boundary() 
     assert_eq!(process.outputs.len(), 1);
     assert_eq!(process.outputs[0].name, "preflight");
     assert_eq!(process.outputs[0].path, "outputs/nnis-hf-preflight.json");
-    assert_eq!(process.outputs[0].media_type.as_deref(), Some("application/json"));
+    assert_eq!(
+        process.outputs[0].media_type.as_deref(),
+        Some("application/json")
+    );
     assert!(process.outputs[0].required);
 }
