@@ -1,0 +1,93 @@
+schema_version: 1
+kind: scirust_hub_nnis_hf_preflight_edge
+status: merged_post_merge_ci_green
+last_updated: "2026-09-06"
+repository: Memorithm/scirust-hub
+merge_policy: never_merge_this_file_to_default_branch_unless_user_explicitly_requests
+
+hub_implementation:
+  pull_request: 38
+  final_exact_head: 28ea62d2206dd5846ffeb0cb261cd406cfaa43c4
+  merge_commit: 0eb9b9ba96c1f5d98ab6fe50c77d2767b1eed197
+  required_ci: CI_105_success_on_retry_same_exact_head
+  post_merge_ci: CI_106_success
+  note_on_initial_CI_attempt: >-
+    The first exact-head attempt failed in the pre-existing
+    declared_output_files_round_trip_through_http test after an exit-zero demo
+    process did not expose its required output file. The NNIS component contract,
+    Python adapter suite, formatting, Clippy and build gates were green before
+    that point. A no-code rerun on the same exact head passed the full workspace
+    test suite and rustdoc, and post-merge CI passed the same full suite.
+
+published_capability:
+  name: inference.nnis.hf_preflight
+  contract_version: 1.0.0
+  input:
+    name: model_bundle
+    media_type: application/vnd.scirust-hub.soup-bundle.v1+tar
+  output:
+    name: preflight
+    media_type: application/json
+    schema: nnis.hf-preflight@1
+  execution:
+    type: local_process
+    adapter: /opt/scirust-hub/libexec/nnis_hf_preflight_hub_adapter.py
+    producer: nnis-hf
+    producer_resolution: NNIS_HF_BIN_or_PATH
+
+qualified_nnis_producer:
+  pull_request: 124
+  final_exact_head: 5975b4a01c7c0825ad8ca97ce4c9e384d0cc4b67
+  merge_commit: b1e2766ace9a2076d4a5721f6dca2d2c7d48d04d
+  exact_head_ci: CI_376_success_including_Rust_1_77
+  post_merge_ci: CI_377_success_including_Rust_1_77
+  report_schema: nnis.hf-preflight@1
+
+verified_boundary:
+  - Hub_reuses_existing_deterministic_bounded_SOUP_bundle_extraction_contract
+  - Hub_reuses_existing_model_root_resolution_and_optional_model_subpath
+  - Hub_invokes_NNIS_without_shell_and_does_not_capture_stdout_as_authoritative_result
+  - NNIS_publishes_the_exact_report_bytes_to_the_declared_Hub_output_path
+  - Hub_validates_only_regular_file_size_JSON_object_and_exact_top_level_schema_version
+  - Hub_does_not_parse_config_tensor_dtype_tokenizer_graph_or_direct_execution_readiness_semantics
+  - any_nonzero_NNIS_exit_remains_a_Hub_process_failure
+  - unknown_Hub_parameters_and_unknown_NNIS_report_schema_versions_fail_closed
+  - report_bytes_are_not_rewritten_by_Hub
+
+resource_contract:
+  schema: hub.ml.resource-requirements@1.0.0
+  backend: nnis
+  device: operation_defined
+  dtype: model_defined
+  accelerator: none
+  memory: runtime_preflight
+  placement_enforcement: component_preflight
+  maturity_boundary: HML0_only_not_HML1_worker_placement
+
+non_claims:
+  - no_general_Hugging_Face_or_SOUP_model_support
+  - no_FP16_direct_execution_admission
+  - no_4bit_or_other_quantized_representation_admission
+  - no_adapter_native_NNIS_execution
+  - no_numerical_or_logit_equivalence
+  - no_model_quality_evidence
+  - no_serving_performance_evidence
+  - no_physical_GPU_memory_evidence
+  - no_HML1_resource_aware_placement
+  - no_HML2_distributed_ML_orchestration
+  - no_HML4_qualification_campaign_maturity
+
+open_cross_repository_gap:
+  status: explicit
+  description: >-
+    Hub can now preflight an already-compatible deterministic local-HF model
+    bundle, but the current SOUP llm.train capability emits a training/adaptor
+    model bundle and must not be assumed to satisfy NNIS direct execution.
+    The currently qualified NNIS SOUP path requires a dense merged F32 local
+    Hugging Face artifact. A separately versioned SOUP-owned merge producer edge
+    is still required for an end-to-end Hub SOUP-to-NNIS workflow.
+  next: >-
+    Audit the current upstream SOUP merge CLI and the Hub SOUP adapter against
+    the real current commits, then publish the narrowest artifact-producing
+    merge capability that preserves SOUP merge semantics and outputs the existing
+    deterministic Hub model bundle for NNIS preflight consumption.
