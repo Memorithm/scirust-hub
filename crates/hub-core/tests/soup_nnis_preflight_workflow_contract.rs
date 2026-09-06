@@ -4,7 +4,8 @@ const WORKFLOW: &str = include_str!("../../../examples/soup-nnis-preflight-workf
 
 #[test]
 fn soup_nnis_preflight_workflow_preserves_typed_artifact_chain() {
-    let envelope: serde_json::Value = serde_json::from_str(WORKFLOW).expect("parse workflow envelope");
+    let envelope: serde_json::Value =
+        serde_json::from_str(WORKFLOW).expect("parse workflow envelope");
     assert_eq!(envelope["schema_version"], 1);
 
     let workflow: WorkflowSpec =
@@ -21,14 +22,26 @@ fn soup_nnis_preflight_workflow_preserves_typed_artifact_chain() {
 
     let train = &workflow.steps[0];
     assert_eq!(train.key, "train");
-    assert_eq!(train.component.to_string(), "00000000-0000-0000-0000-000000000003");
+    assert_eq!(
+        train.component.to_string(),
+        "00000000-0000-0000-0000-000000000003"
+    );
     assert_eq!(train.capability.as_str(), "llm.train");
-    assert!(matches!(train.inputs.get("config"), Some(InputSource::Artifact { .. })));
-    assert!(matches!(train.inputs.get("dataset"), Some(InputSource::Artifact { .. })));
+    assert!(matches!(
+        train.inputs.get("config"),
+        Some(InputSource::Artifact { .. })
+    ));
+    assert!(matches!(
+        train.inputs.get("dataset"),
+        Some(InputSource::Artifact { .. })
+    ));
 
     let merge = &workflow.steps[1];
     assert_eq!(merge.key, "merge");
-    assert_eq!(merge.component.to_string(), "6df1e39d-b861-4eb9-a2a6-4d696c74bc75");
+    assert_eq!(
+        merge.component.to_string(),
+        "6df1e39d-b861-4eb9-a2a6-4d696c74bc75"
+    );
     assert_eq!(merge.capability.as_str(), "llm.merge.nnis");
     match merge.inputs.get("adapter_bundle") {
         Some(InputSource::FromStep { key, output }) => {
@@ -55,7 +68,13 @@ fn soup_nnis_preflight_workflow_preserves_typed_artifact_chain() {
 
     let dependencies = workflow.dependencies();
     assert!(dependencies["train"].is_empty());
-    assert_eq!(dependencies["merge"].iter().map(String::as_str).collect::<Vec<_>>(), vec!["train"]);
+    assert_eq!(
+        dependencies["merge"]
+            .iter()
+            .map(String::as_str)
+            .collect::<Vec<_>>(),
+        vec!["train"]
+    );
     assert_eq!(
         dependencies["preflight"]
             .iter()
