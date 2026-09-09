@@ -1,0 +1,84 @@
+{
+  "schema_version": 1,
+  "workflow": {
+    "schema_version": 1,
+    "name": "soup-train-merge-nnis-preflight-generate",
+    "max_concurrency": 1,
+    "steps": [
+      {
+        "key": "train",
+        "component": "00000000-0000-0000-0000-000000000003",
+        "capability": "llm.train",
+        "parameters": {},
+        "inputs": {
+          "config": {
+            "artifact": {
+              "artifact": "11111111-1111-1111-1111-111111111111"
+            }
+          },
+          "dataset": {
+            "artifact": {
+              "artifact": "22222222-2222-2222-2222-222222222222"
+            }
+          }
+        },
+        "timeout_ms": 86400000,
+        "after": []
+      },
+      {
+        "key": "merge",
+        "component": "6df1e39d-b861-4eb9-a2a6-4d696c74bc75",
+        "capability": "llm.merge.nnis",
+        "parameters": {},
+        "inputs": {
+          "adapter_bundle": {
+            "from_step": {
+              "key": "train",
+              "output": "file:model_bundle"
+            }
+          }
+        },
+        "timeout_ms": 86400000,
+        "after": []
+      },
+      {
+        "key": "preflight",
+        "component": "9f13791c-0a54-4c2c-8abf-0d0644d33437",
+        "capability": "inference.nnis.hf_preflight",
+        "parameters": {},
+        "inputs": {
+          "model_bundle": {
+            "from_step": {
+              "key": "merge",
+              "output": "file:merged_model_bundle"
+            }
+          }
+        },
+        "timeout_ms": 300000,
+        "after": []
+      },
+      {
+        "key": "generate",
+        "component": "0e52d02f-f74f-40cf-a74e-37edc0427f41",
+        "capability": "inference.nnis.hf_generate",
+        "parameters": {
+          "prompt": "Hello from SOUP to NNIS",
+          "device": 0,
+          "max_new_tokens": 16
+        },
+        "inputs": {
+          "model_bundle": {
+            "from_step": {
+              "key": "merge",
+              "output": "file:merged_model_bundle"
+            }
+          }
+        },
+        "timeout_ms": 300000,
+        "after": [
+          "preflight"
+        ]
+      }
+    ]
+  }
+}
