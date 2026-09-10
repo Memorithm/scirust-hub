@@ -12,10 +12,7 @@ fn soup_nnis_generation_workflow_orders_preflight_before_cuda_generation() {
         serde_json::from_value(envelope["workflow"].clone()).expect("parse workflow spec");
     workflow.validate().expect("validate workflow spec");
 
-    assert_eq!(
-        workflow.name,
-        "soup-train-merge-nnis-preflight-generate"
-    );
+    assert_eq!(workflow.name, "soup-train-merge-nnis-preflight-generate");
     assert_eq!(workflow.max_concurrency, 1);
     assert_eq!(workflow.steps.len(), 4);
     assert_eq!(
