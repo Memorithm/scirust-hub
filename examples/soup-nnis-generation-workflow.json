@@ -22,7 +22,7 @@
             }
           }
         },
-        "timeout_ms": 86400000,
+        "timeout_ms": 3600000,
         "after": []
       },
       {
@@ -38,7 +38,7 @@
             }
           }
         },
-        "timeout_ms": 86400000,
+        "timeout_ms": 3600000,
         "after": []
       },
       {
