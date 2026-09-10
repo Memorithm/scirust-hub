@@ -40,7 +40,7 @@ The adapter never reconstructs the NNIS JSON document.
 
 The v1 Hub adapter accepts only:
 
-- `prompt`: required UTF-8 string, 1 byte through 1 MiB;
+- `prompt`: required UTF-8 string, 1 through 16,000 bytes; this intentionally leaves headroom inside Hub's 16,384-byte serialized parameter envelope for JSON encoding and companion parameters;
 - `device`: optional non-negative CUDA device ordinal, default `0`;
 - `max_new_tokens`: optional integer `1..=65536`, default `16`;
 - `model_subpath`: optional model root inside a deterministic bundle.
@@ -78,7 +78,7 @@ The checked-in recipe is:
 examples/soup-nnis-generation-workflow.json
 ```
 
-It uses placeholder immutable artifact IDs for the external SOUP config and dataset. Operators must replace those IDs with real Hub artifacts before submitting the workflow.
+It uses placeholder immutable artifact IDs for the external SOUP config and dataset. Operators must replace those IDs with real Hub artifacts before submitting the workflow. Its train and merge step timeouts are capped at 3,600,000 ms, matching Hub's current default per-run limit; longer operations require an explicitly configured compatible Hub limit rather than an example that cannot execute under defaults.
 
 ## Deployment paths
 
@@ -103,7 +103,7 @@ The paths can be overridden for controlled deployment/testing through the adapte
 The capability publishes `hub.ml.resource-requirements@1.0.0` with:
 
 - backend: `nnis`;
-- device resolution: `operation_defined`;
+- device resolution: `parameter:device`;
 - dtype resolution: `operation_defined`;
 - accelerator: `required`;
 - memory fit: `runtime_preflight`;
