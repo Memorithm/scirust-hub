@@ -45,7 +45,7 @@
         "hub.preflight_ordering": "workflow_dependency",
         "ml.resource_contract": "hub.ml.resource-requirements@1.0.0",
         "ml.backend": "nnis",
-        "ml.device": "operation_defined",
+        "ml.device": "parameter:device",
         "ml.dtype": "operation_defined",
         "ml.accelerator": "required",
         "ml.memory": "runtime_preflight",
