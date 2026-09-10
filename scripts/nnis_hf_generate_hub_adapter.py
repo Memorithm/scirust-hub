@@ -32,7 +32,10 @@ NNIS_GENERATION_MEDIA_TYPE = "application/vnd.nnis.hf-generation.v1+json"
 NNIS_GENERATION_SCHEMA_VERSION = 1
 MAX_RESULT_BYTES = 40 * 1024 * 1024
 MAX_ERROR_TEXT = 4096
-MAX_PROMPT_BYTES = 1024 * 1024
+# Hub's default serialized parameter envelope is 16,384 bytes. Keep the prompt
+# below it with deterministic headroom for JSON keys, escaping and companion
+# parameters instead of advertising a value the orchestrator cannot submit.
+MAX_PROMPT_BYTES = 16_000
 MAX_NEW_TOKENS = 65_536
 MAX_DEVICE_ORDINAL = 2_147_483_647
 
