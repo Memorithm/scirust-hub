@@ -1,0 +1,89 @@
+schema_version: 1
+kind: hub_soup_nnis_generation_hardening_record
+recorded_on: "2026-09-14"
+status: merged_software_contract_verified
+repository: Memorithm/scirust-hub
+merge_policy: never_merge_this_file_to_main_unless_user_explicitly_requests
+
+prior_chain:
+  generation_edge_pull_request: 41
+  generation_edge_merge: ee6bcaae866792215775ee9ce2fe55f25297dc53
+  reference_workflow: examples/soup-nnis-generation-workflow.json
+  steps:
+    - llm.train
+    - llm.merge.nnis
+    - inference.nnis.hf_preflight
+    - inference.nnis.hf_generate
+  invariant: generation_uses_same_merged_model_bundle_and_waits_for_successful_preflight
+
+implementation:
+  pull_request: 44
+  pull_request_url: https://github.com/Memorithm/scirust-hub/pull/44
+  exact_head: 5d1c7d38e0dd9dd6958d33d5ac5838427976d21b
+  merge_commit: 4bf6186841e1ea70ed15cd84faf33de9b48429cd
+  hub_capability: inference.nnis.hf_generate@1.0.0
+  nnis_contract: nnis.hf-generation@1.0.0
+  successful_wire_contract_changed: false
+  model_cuda_dtype_or_sampling_semantics_changed: false
+  scheduler_or_workflow_semantics_changed: false
+
+verification:
+  exact_head_ci:
+    number: 125
+    run_id: 34900796515
+    job_id: 104166010408
+    conclusion: success
+    python_ml_adapter_tests_passed: 59
+    catalog_tests_passed: 3
+    gates: [format, ml_adapter_contracts, catalog, clippy, locked_build, rust_tests, rustdoc]
+  post_merge_ci:
+    number: 126
+    run_id: 34900990882
+    job_id: 104166637731
+    conclusion: success
+    all_job_steps_success: true
+  new_cpu_transport_tests: 12
+  local_python_syntax: passed
+  local_full_hub_suite_executed: false
+  real_soup_training_executed_in_this_slice: false
+  real_cuda_generation_executed_in_this_slice: false
+
+repairs:
+  - bounded_single_read_of_regular_producer_result
+  - publish_exact_validated_snapshot_without_reopening_source
+  - reject_boolean_float_or_future_schema_versions
+  - reject_duplicate_JSON_keys_and_nonfinite_constants
+  - enforce_16384_byte_serialized_parameter_envelope_in_addition_to_raw_prompt_limit
+  - reject_NUL_prompt_before_subprocess
+  - stage_sync_and_atomically_publish_via_no_replace_hard_link
+  - do_not_overwrite_or_delete_concurrent_publishers
+  - do_not_expose_partial_final_destination_on_IO_failure
+
+cross_repository_transfer:
+  repository: Memorithm/NNIS
+  pull_request: 148
+  pull_request_url: https://github.com/Memorithm/NNIS/pull/148
+  exact_head: ef976ac8936e8c10ba7b2ebca46ee9b5004e3fca
+  merge_commit: 5436736002834dd6dd7d5ace8c1c044b47aed18f
+  exact_head_ci: {number: 434, run_id: 34899987445, conclusion: success}
+  post_merge_ci: {number: 435, run_id: 34900319878, conclusion: success}
+  new_cpu_transport_tests: 12
+  purpose: live_bounded_POSIX_pipe_capture_native_deadline_and_atomic_producer_JSON_publication
+  deployment_required_for_new_producer_protections: true
+
+limits:
+  - only_wire_envelope_validation_not_NNIS_model_admission_or_claim_validation
+  - trusted_run_directories_and_hard_link_capable_storage_required
+  - 40_MiB_serialized_result_limit_is_distinct_from_native_raw_stream_limits
+  - no_total_process_RSS_or_hostile_filesystem_isolation_claim
+  - no_directory_entry_durability_after_power_loss_claim
+  - no_detection_of_every_concurrent_same_size_source_edit_during_read_claim
+  - private_temporary_cleanup_is_best_effort
+  - no_new_physical_GPU_model_quality_numerical_equivalence_or_performance_evidence
+  - no_HML1_HML2_HML4_or_runtime_promotion
+
+next_evidence_gate: >-
+  Deploy the verified Hub adapter and NNIS wrapper/native binary, submit real
+  config/dataset/model artifacts, and retain the separate immutable preflight
+  and generation outputs. The reference DAG and CPU tests are not proof that a
+  complete SOUP-training-to-CUDA-generation campaign ran on the user's hardware.
