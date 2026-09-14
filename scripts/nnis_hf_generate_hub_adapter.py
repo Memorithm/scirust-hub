@@ -12,7 +12,7 @@ import argparse
 import json
 import os
 from pathlib import Path
-import shutil
+import stat
 import sys
 import tarfile
 import tempfile
@@ -32,27 +32,58 @@ NNIS_GENERATION_MEDIA_TYPE = "application/vnd.nnis.hf-generation.v1+json"
 NNIS_GENERATION_SCHEMA_VERSION = 1
 MAX_RESULT_BYTES = 40 * 1024 * 1024
 MAX_ERROR_TEXT = 4096
-# Hub's default serialized parameter envelope is 16,384 bytes. Keep the prompt
-# below it with deterministic headroom for JSON keys, escaping and companion
-# parameters instead of advertising a value the orchestrator cannot submit.
+# Both limits apply: JSON escaping can expand a prompt's serialized envelope.
+MAX_PARAMS_BYTES = 16_384
 MAX_PROMPT_BYTES = 16_000
 MAX_NEW_TOKENS = 65_536
 MAX_DEVICE_ORDINAL = 2_147_483_647
 
 
-def validate_result_contract(result: Path) -> None:
-    """Validate only the known producer wire envelope, not NNIS semantics."""
+def _unique_object(pairs: list[tuple[str, object]]) -> dict[str, object]:
+    """Reject duplicate keys rather than selecting an ambiguous wire value."""
+    result: dict[str, object] = {}
+    for key, value in pairs:
+        if key in result:
+            raise ValueError(f"duplicate JSON key: {key!r}")
+        result[key] = value
+    return result
+
+
+def _reject_constant(value: str) -> None:
+    raise ValueError(f"non-finite JSON constant: {value}")
+
+
+def validate_result_contract(result: Path) -> bytes:
+    """Read bounded bytes once, validate only the wire envelope, and retain them.
+
+    Returning those exact bytes prevents a second read from publishing different
+    content after validation. This does not recompute NNIS model semantics.
+    """
     _require_regular_input(result, "NNIS generation result")
-    size = result.stat().st_size
-    if size <= 0 or size > MAX_RESULT_BYTES:
-        raise ValueError(f"NNIS generation result size must be 1..={MAX_RESULT_BYTES} bytes")
+    flags = os.O_RDONLY | getattr(os, "O_BINARY", 0)
+    flags |= getattr(os, "O_NOFOLLOW", 0) | getattr(os, "O_NONBLOCK", 0)
+    with os.fdopen(os.open(result, flags), "rb") as handle:
+        metadata = os.fstat(handle.fileno())
+        if not stat.S_ISREG(metadata.st_mode):
+            raise ValueError("NNIS generation result must be a regular file")
+        if not 0 < metadata.st_size <= MAX_RESULT_BYTES:
+            raise ValueError(f"NNIS generation result size must be 1..={MAX_RESULT_BYTES} bytes")
+        raw = handle.read(MAX_RESULT_BYTES + 1)
+    if len(raw) != metadata.st_size or len(raw) > MAX_RESULT_BYTES:
+        raise ValueError("NNIS generation result size changed or exceeded its byte limit")
     try:
-        payload = json.loads(result.read_text(encoding="utf-8"))
-    except json.JSONDecodeError as exc:
+        payload = json.loads(
+            raw.decode("utf-8"), object_pairs_hook=_unique_object,
+            parse_constant=_reject_constant,
+        )
+    except (ValueError, UnicodeError, RecursionError) as exc:
         raise ValueError(f"NNIS generation result is not valid JSON: {exc}") from exc
     if not isinstance(payload, dict):
         raise ValueError("NNIS generation result must be a JSON object")
-    if payload.get("schema_version") != NNIS_GENERATION_SCHEMA_VERSION:
+    if (
+        type(payload.get("schema_version")) is not int
+        or payload["schema_version"] != NNIS_GENERATION_SCHEMA_VERSION
+    ):
         raise ValueError(
             "unsupported NNIS generation schema_version: "
             f"{payload.get('schema_version')!r}; expected {NNIS_GENERATION_SCHEMA_VERSION}"
@@ -72,18 +103,32 @@ def validate_result_contract(result: Path) -> None:
             "unsupported NNIS generation status: "
             f"{payload.get('status')!r}; expected 'generated'"
         )
+    return raw
 
 
 def _copy_new_exact(source: Path, destination: Path) -> None:
-    """Copy producer bytes without rewriting the producer-owned JSON document."""
-    destination.parent.mkdir(parents=True, exist_ok=True)
+    """Publish the validated snapshot atomically without replacing any destination."""
     if destination.exists() or destination.is_symlink():
         raise ValueError(f"generation output already exists: {destination}")
+    raw = validate_result_contract(source)
+    destination.parent.mkdir(parents=True, exist_ok=True)
+    temporary: Path | None = None
     try:
-        with source.open("rb") as reader, destination.open("xb") as writer:
-            shutil.copyfileobj(reader, writer, length=1024 * 1024)
+        with tempfile.NamedTemporaryFile(mode="wb", dir=destination.parent, prefix=".hub-nnis-result-", delete=False) as writer:
+            temporary = Path(writer.name)
+            writer.write(raw)
+            writer.flush()
+            os.fsync(writer.fileno())
+        os.link(temporary, destination)
     except FileExistsError as exc:
         raise ValueError(f"generation output already exists: {destination}") from exc
+    finally:
+        if temporary is not None:
+            try:
+                temporary.unlink()
+            except OSError:
+                # Never mask the primary error or remove another publisher's result.
+                pass
 
 
 def run_generation(
@@ -97,6 +142,8 @@ def run_generation(
 ) -> None:
     """Materialize one Hub bundle and delegate all generation semantics to NNIS."""
     _require_regular_input(bundle, "model bundle")
+    if len(params_raw.encode("utf-8")) > MAX_PARAMS_BYTES:
+        raise ValueError(f"serialized parameters exceed {MAX_PARAMS_BYTES} UTF-8 bytes")
     params = _parse_params(params_raw, {"model_subpath", "prompt", "device", "max_new_tokens"})
 
     model_subpath = params.get("model_subpath")
@@ -104,8 +151,8 @@ def run_generation(
         raise ValueError("model_subpath must be a string")
 
     prompt = params.get("prompt")
-    if not isinstance(prompt, str):
-        raise ValueError("prompt is required and must be a string")
+    if not isinstance(prompt, str) or "\0" in prompt:
+        raise ValueError("prompt is required and must be a string without NUL bytes")
     prompt_bytes = prompt.encode("utf-8")
     if not prompt_bytes or len(prompt_bytes) > MAX_PROMPT_BYTES:
         raise ValueError(f"prompt must encode to 1..={MAX_PROMPT_BYTES} UTF-8 bytes")
@@ -170,7 +217,6 @@ def run_generation(
                 )
             raise RuntimeError(f"NNIS HF generation process failed with exit {returncode}{suffix}")
 
-        validate_result_contract(producer_result)
         _copy_new_exact(producer_result, generation)
 
 
