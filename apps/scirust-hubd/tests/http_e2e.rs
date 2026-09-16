@@ -210,6 +210,29 @@ fn walking_skeleton_through_the_real_daemon() {
     assert_eq!(artifact_digest.len(), 64);
     assert_ne!(artifact_digest, digest);
 
+    let (status, portable) = http(
+        port,
+        "GET",
+        &format!("/api/v1/artifacts/{artifact_id}/portable-digest"),
+        None,
+    )
+    .expect("portable artifact digest");
+    assert_eq!(status, 200, "body: {portable}");
+    assert_eq!(
+        json_field(&portable, "\"raw_sha256\":\"").as_deref(),
+        Some("ff6867918e1dadfdd8979acdf1a98ec7fa36882a8bfa4f60802c29da722cfc89")
+    );
+    assert_eq!(
+        json_field(&portable, "\"hub_digest\":\"").as_deref(),
+        Some(artifact_digest.as_str())
+    );
+    assert!(portable.contains("\"size\":14"), "body: {portable}");
+    assert_ne!(
+        json_field(&portable, "\"raw_sha256\":\"").as_deref(),
+        Some(artifact_digest.as_str()),
+        "portable SHA-256 must not be treated as the Hub CAS digest"
+    );
+
     // 7. Unknown resources produce structured 404s.
     let (status, body) =
         http(port, "GET", &format!("/api/v1/runs/{}", uuid_v4()), None).expect("missing run");

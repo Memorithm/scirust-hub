@@ -127,6 +127,10 @@ pub fn router(state: HubState) -> Router {
             post(upload_artifact).get(list_artifacts),
         )
         .route("/api/v1/artifacts/{id}", get(get_artifact))
+        .route(
+            "/api/v1/artifacts/{id}/portable-digest",
+            get(get_artifact_portable_digest),
+        )
         .route("/api/v1/events", get(list_lifecycle_events))
         .route("/metrics", get(prometheus_metrics))
         .route_layer(middleware::from_fn_with_state(
@@ -651,6 +655,26 @@ async fn execute_workflow(State(state): State<HubState>, Path(id): Path<String>)
     match joined(tokio::task::spawn_blocking(move || orch.execute_workflow(parsed)).await) {
         Ok(record) => Json(proto::WorkflowDto::from(&record)).into_response(),
         // WorkflowNotFound maps to 404 through core_error already.
+        Err(response) => response,
+    }
+}
+
+async fn get_artifact_portable_digest(
+    State(state): State<HubState>,
+    Path(id): Path<String>,
+) -> Response {
+    let Some(parsed) = typed_id::<ArtifactId>(&id) else {
+        return not_found("artifact", &id);
+    };
+    let orch = state.orchestrator.clone();
+    match joined(tokio::task::spawn_blocking(move || orch.artifact_raw_sha256(&parsed)).await) {
+        Ok((meta, raw_sha256)) => Json(proto::ArtifactPortableDigestDto {
+            id: meta.id,
+            hub_digest: meta.digest,
+            raw_sha256,
+            size: meta.size,
+        })
+        .into_response(),
         Err(response) => response,
     }
 }

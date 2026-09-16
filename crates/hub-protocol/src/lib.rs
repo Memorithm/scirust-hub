@@ -519,6 +519,16 @@ pub struct ArtifactListResponse {
     pub artifacts: Vec<ArtifactDto>,
 }
 
+/// Cross-repository artifact digest bridge. `raw_sha256` is ordinary SHA-256
+/// over payload bytes; `hub_digest` remains the domain-separated Hub CAS key.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ArtifactPortableDigestDto {
+    pub id: ArtifactId,
+    pub hub_digest: ContentDigest,
+    pub raw_sha256: hub_core::RawSha256,
+    pub size: u64,
+}
+
 // ----------------------------------------------------------------------
 // Lifecycle events
 // ----------------------------------------------------------------------

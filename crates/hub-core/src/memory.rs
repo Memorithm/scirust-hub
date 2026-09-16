@@ -10,7 +10,7 @@ use std::sync::Mutex;
 
 use crate::artifact::ArtifactMeta;
 use crate::component::ComponentManifest;
-use crate::digest::ContentDigest;
+use crate::digest::{self, ContentDigest, RawSha256};
 use crate::error::CoreError;
 use crate::event::{
     artifact_recorded_event, component_registered_event, derive_run_events, derive_workflow_events,
@@ -155,6 +155,23 @@ impl FileSystemArtifactStore {
     fn blob_path(&self, digest: &ContentDigest) -> std::path::PathBuf {
         let hex = digest.to_hex();
         self.root.join("blobs").join(&hex[..2]).join(hex)
+    }
+
+    /// Streams the stored blob through ordinary SHA-256 without loading it into memory.
+    ///
+    /// # Errors
+    /// [`CoreError::BlobNotFound`] when the Hub CAS digest is unknown; storage errors otherwise.
+    pub fn raw_sha256(&self, content_digest: &ContentDigest) -> Result<RawSha256, CoreError> {
+        let path = self.blob_path(content_digest);
+        if !path.exists() {
+            return Err(CoreError::BlobNotFound {
+                hex: content_digest.to_string(),
+            });
+        }
+        let mut file = std::fs::File::open(&path)
+            .map_err(|e| CoreError::Storage(format!("opening blob for raw SHA-256: {e}")))?;
+        digest::raw_sha256_reader(&mut file)
+            .map_err(|e| CoreError::Storage(format!("hashing blob with raw SHA-256: {e}")))
     }
 }
 

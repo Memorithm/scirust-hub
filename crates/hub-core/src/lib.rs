@@ -41,7 +41,7 @@ pub use component::{
     MANIFEST_SCHEMA_VERSION,
 };
 pub use dag::{Dag, DagLimits};
-pub use digest::ContentDigest;
+pub use digest::{ContentDigest, RawSha256};
 pub use error::{CoreError, ExecutorFailure};
 pub use event::{
     InMemoryLifecycleEvents, LifecycleEntityType, LifecycleEvent, LifecycleEventKind,
