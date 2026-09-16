@@ -597,8 +597,12 @@ async fn submit_workflow(
         return protocol_error(e);
     }
     let orch = state.orchestrator.clone();
-    match joined(tokio::task::spawn_blocking(move || orch.submit_workflow(request.workflow)).await)
-    {
+    let submitted = tokio::task::spawn_blocking(move || match request.admission {
+        Some(admission) => orch.submit_workflow_pinned(request.workflow, admission),
+        None => orch.submit_workflow(request.workflow),
+    })
+    .await;
+    match joined(submitted) {
         Ok(record) => {
             let mut response = Json(proto::SubmitWorkflowResponse {
                 workflow: proto::WorkflowDto::from(&record),

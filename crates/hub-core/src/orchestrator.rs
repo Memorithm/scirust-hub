@@ -1002,18 +1002,92 @@ impl Orchestrator {
         &self,
         spec: crate::workflow::WorkflowSpec,
     ) -> Result<crate::workflow::WorkflowRecord, CoreError> {
+        self.submit_workflow_internal(spec, None)
+    }
+
+    /// Validates and persists a workflow whose every step is bound to an
+    /// exact immutable registry identity.
+    ///
+    /// # Errors
+    /// Ordinary workflow submission errors plus [`CoreError::Validation`]
+    /// when any exact version, manifest digest, or capability contract pin
+    /// disagrees with the registry.
+    pub fn submit_workflow_pinned(
+        &self,
+        spec: crate::workflow::WorkflowSpec,
+        admission: crate::workflow::WorkflowAdmissionPins,
+    ) -> Result<crate::workflow::WorkflowRecord, CoreError> {
+        self.submit_workflow_internal(spec, Some(admission))
+    }
+
+    fn submit_workflow_internal(
+        &self,
+        spec: crate::workflow::WorkflowSpec,
+        admission: Option<crate::workflow::WorkflowAdmissionPins>,
+    ) -> Result<crate::workflow::WorkflowRecord, CoreError> {
         spec.validate()?;
-        for step in &spec.steps {
-            if self.components.latest(&step.component)?.is_none() {
-                return Err(CoreError::ComponentNotFound(step.component));
+        if let Some(pins) = &admission {
+            pins.validate(&spec)?;
+            for step in &spec.steps {
+                let pin = pins.steps.get(&step.key).ok_or_else(|| {
+                    CoreError::InvalidRunSpec(format!(
+                        "workflow step {:?} has no exact admission pin",
+                        step.key
+                    ))
+                })?;
+                self.validate_workflow_step_admission(step, pin)?;
+            }
+        } else {
+            for step in &spec.steps {
+                if self.components.latest(&step.component)?.is_none() {
+                    return Err(CoreError::ComponentNotFound(step.component));
+                }
             }
         }
         let model_version = crate::Version::parse(crate::workflow::WORKFLOW_MODEL_VERSION)?;
-        let record =
-            crate::workflow::WorkflowRecord::create(spec, model_version, self.clock.now_ms())?;
+        let record = crate::workflow::WorkflowRecord::create_with_admission(
+            spec,
+            model_version,
+            self.clock.now_ms(),
+            admission,
+        )?;
         self.workflows.put(&record)?;
-        info!(workflow = %record.id, steps = record.spec.steps.len(), "workflow submitted");
+        info!(workflow = %record.id, steps = record.spec.steps.len(), pinned = record.admission.is_some(), "workflow submitted");
         Ok(record)
+    }
+
+    fn validate_workflow_step_admission(
+        &self,
+        step: &crate::workflow::Step,
+        pin: &ComponentAdmissionPin,
+    ) -> Result<(), CoreError> {
+        let manifest = self
+            .components
+            .get(&step.component, &pin.component_version)?
+            .ok_or(CoreError::ComponentNotFound(step.component))?;
+        let digest = manifest.content_digest()?;
+        if digest != pin.manifest_digest {
+            return Err(CoreError::Validation(format!(
+                "workflow step {:?} component {} version {} manifest digest {} does not match required {}",
+                step.key, manifest.id, manifest.version, digest, pin.manifest_digest
+            )));
+        }
+        let capability = manifest.capability(&step.capability).ok_or_else(|| {
+            CoreError::CapabilityNotDeclared {
+                component: step.component,
+                capability: step.capability.to_string(),
+            }
+        })?;
+        if capability.contract_version != pin.capability_contract_version {
+            return Err(CoreError::Validation(format!(
+                "workflow step {:?} capability {} contract version {} does not match required {}",
+                step.key,
+                capability.name,
+                capability.contract_version,
+                pin.capability_contract_version
+            )));
+        }
+        Ok(())
     }
 
     /// Executes a created workflow in deterministic dependency order. A step
@@ -1266,6 +1340,14 @@ impl Orchestrator {
         shared_record: &Mutex<crate::workflow::WorkflowRecord>,
     ) -> Result<ParallelStepTerminal, CoreError> {
         let run_spec = crate::workflow::WorkflowSpec::step_run_spec(step, &resolved);
+        let admission_pin = {
+            let record = lock_workflow_record(shared_record)?;
+            record
+                .admission
+                .as_ref()
+                .and_then(|pins| pins.steps.get(&step.key))
+                .cloned()
+        };
         let max_attempts = step.retry.as_ref().map_or(1, |policy| policy.max_attempts);
         let mut attempt_number = 1u32;
 
@@ -1276,7 +1358,11 @@ impl Orchestrator {
                 ));
             }
 
-            let submitted = self.submit_run(run_spec.clone())?;
+            let submitted = if let Some(pin) = &admission_pin {
+                self.submit_run_pinned(run_spec.clone(), pin.clone())?
+            } else {
+                self.submit_run(run_spec.clone())?
+            };
             let attempt_id = AttemptId::generate();
             {
                 let mut record = lock_workflow_record(shared_record)?;

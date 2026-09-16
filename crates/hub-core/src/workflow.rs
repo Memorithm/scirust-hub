@@ -13,7 +13,7 @@ use crate::capability::CapabilityName;
 use crate::dag::{Dag, DagLimits};
 use crate::error::CoreError;
 use crate::id::{ArtifactId, ComponentId, RunId};
-use crate::run::RunSpec;
+use crate::run::{ComponentAdmissionPin, RunSpec};
 use crate::version::Version;
 
 /// Current workflow schema version understood by this build.
@@ -114,6 +114,45 @@ impl RetryPolicy {
     #[must_use]
     pub fn allows(&self, category: AttemptFailureCategory) -> bool {
         category.may_retry() && self.retry_on.contains(&category)
+    }
+}
+
+/// Schema version for exact workflow-step registry admission pins.
+pub const WORKFLOW_ADMISSION_SCHEMA_VERSION: u16 = 1;
+
+/// Exact immutable registry identities required by a pinned workflow.
+///
+/// Keys are workflow step keys. A pinned workflow is fail-closed: every step
+/// must have exactly one pin and no extra pin may name an undeclared step.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub struct WorkflowAdmissionPins {
+    pub schema_version: u16,
+    pub steps: BTreeMap<String, ComponentAdmissionPin>,
+}
+
+impl WorkflowAdmissionPins {
+    /// Validates the versioned pin envelope against one workflow spec.
+    ///
+    /// # Errors
+    /// [`CoreError::InvalidRunSpec`] for unsupported versions or incomplete/
+    /// extraneous step coverage.
+    pub fn validate(&self, spec: &WorkflowSpec) -> Result<(), CoreError> {
+        if self.schema_version != WORKFLOW_ADMISSION_SCHEMA_VERSION {
+            return Err(CoreError::InvalidRunSpec(format!(
+                "unsupported workflow admission schema_version {}: expected {}",
+                self.schema_version, WORKFLOW_ADMISSION_SCHEMA_VERSION
+            )));
+        }
+        let expected: BTreeSet<String> = spec.steps.iter().map(|step| step.key.clone()).collect();
+        let actual: BTreeSet<String> = self.steps.keys().cloned().collect();
+        if expected != actual {
+            let missing: Vec<_> = expected.difference(&actual).cloned().collect();
+            let extra: Vec<_> = actual.difference(&expected).cloned().collect();
+            return Err(CoreError::InvalidRunSpec(format!(
+                "workflow admission pins must cover every step exactly; missing={missing:?}, extra={extra:?}"
+            )));
+        }
+        Ok(())
     }
 }
 
@@ -453,6 +492,10 @@ impl WorkflowState {
 pub struct WorkflowRecord {
     pub id: crate::id::WorkflowId,
     pub spec: WorkflowSpec,
+    /// Exact registry identities frozen at workflow admission. Legacy and
+    /// explicitly unpinned workflows deserialize with `None`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub admission: Option<WorkflowAdmissionPins>,
     pub state: WorkflowState,
     /// Contract version of the workflow model itself.
     pub model_version: Version,
@@ -481,10 +524,28 @@ impl WorkflowRecord {
         model_version: Version,
         now: crate::clock::UnixMillis,
     ) -> Result<Self, CoreError> {
+        Self::create_with_admission(spec, model_version, now, None)
+    }
+
+    /// Creates a workflow record with an optional exact registry-admission
+    /// envelope persisted alongside the spec.
+    ///
+    /// # Errors
+    /// [`CoreError::InvalidRunSpec`] from the workflow or admission contract.
+    pub fn create_with_admission(
+        spec: WorkflowSpec,
+        model_version: Version,
+        now: crate::clock::UnixMillis,
+        admission: Option<WorkflowAdmissionPins>,
+    ) -> Result<Self, CoreError> {
         spec.validate()?;
+        if let Some(pins) = &admission {
+            pins.validate(&spec)?;
+        }
         Ok(Self {
             id: crate::id::WorkflowId::generate(),
             spec,
+            admission,
             state: WorkflowState::Created,
             model_version,
             created_at: now,
