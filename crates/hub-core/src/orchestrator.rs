@@ -807,7 +807,7 @@ impl Orchestrator {
             .artifacts_meta
             .get(id)?
             .ok_or(CoreError::ArtifactNotFound(*id))?;
-        let raw = self.blobs.raw_sha256(&meta.digest)?;
+        let raw = self.blobs.verified_raw_sha256(&meta.digest, meta.size)?;
         Ok((meta, raw))
     }
 
