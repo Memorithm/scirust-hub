@@ -8,6 +8,10 @@ on:
 permissions:
   contents: write
 
+env:
+  CARGO_INCREMENTAL: 0
+  CARGO_TERM_COLOR: always
+
 jobs:
   fix:
     if: github.actor != 'github-actions[bot]'
@@ -18,6 +22,8 @@ jobs:
           ref: industrialize/portable-artifact-digest
           fetch-depth: 0
       - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: rustfmt, clippy
       - name: Apply review fixes
         shell: bash
         run: |
@@ -33,7 +39,7 @@ jobs:
           )
           text = text.replace(
               '''pub struct FileSystemArtifactStore {\n    root: std::path::PathBuf,\n}\n''',
-              '''pub struct FileSystemArtifactStore {\n    root: std::path::PathBuf,\n    // Portable-digest requests stream entire artifacts to re-verify immutable\n    // CAS metadata. Share one gate across clones so repeated concurrent GETs\n    // cannot fan out into unbounded disk/CPU scans.\n    portable_digest_scan: Arc<Mutex<()>>,\n}\n''',
+              '''pub struct FileSystemArtifactStore {\n    root: std::path::PathBuf,\n    // Portable-digest requests stream entire artifacts to re-verify immutable\n    // CAS metadata. Share one gate across clones so concurrent GETs cannot\n    // multiply full-file disk/CPU scans without bound.\n    portable_digest_scan: Arc<Mutex<()>>,\n}\n''',
               1,
           )
           text = text.replace(
@@ -63,11 +69,10 @@ jobs:
           orchestrator.write_text(text.replace(old, new, 1))
           PY
 
-          cargo fmt --all -- --check || cargo fmt --all
-          cargo test -p hub-core portable_digest_reverifies_bytes_and_serializes_scans -- --exact
-          cargo test -p hub-core raw_sha256_is_portable_and_not_a_hub_digest -- --exact
-          cargo test -p hub-e2e --test real_daemon walking_skeleton_through_the_real_daemon -- --exact
-          cargo clippy --workspace --all-targets -- -D warnings
+          cargo fmt --all
+          cargo fmt --all -- --check
+          cargo clippy --workspace --all-targets --all-features --locked -- -D warnings
+          cargo test --workspace --all-features --locked
 
           rm .github/workflows/oneshot-fix-portable-digest.yml
           git config user.name 'ZEKRITI TAREK'
