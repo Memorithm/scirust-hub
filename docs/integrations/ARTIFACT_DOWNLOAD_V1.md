@@ -22,8 +22,13 @@ The raw endpoint always serves `application/octet-stream`, `attachment`,
 The text-only `?include=content` path retains its 64 KiB limit and now enforces
 that limit before reading. It uses the same verified snapshot primitive.
 Objects above the download budget require a separately qualified streaming
-transport; this endpoint does not claim large-model streaming or aggregate
-memory admission. Storage directories remain administrator-owned. Existing
+transport. Four shared download slots bound live binary snapshots to at most
+64 MiB plus bounded I/O/HTTP overhead. Admission happens before spawning a read;
+the permit follows the response byte allocation until its last clone is dropped,
+including slow-client transport buffers. Excess requests receive HTTP 429 with
+no queued read. Failed and cancelled reads release their admission. This does
+not establish a global memory budget for the rest of the Hub or large-model
+streaming. Storage directories remain administrator-owned. Existing
 Hub authorization is deployment-wide, not per-artifact scientific clearance;
 restricted research data requires a separate appropriately authorized Hub.
 

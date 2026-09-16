@@ -35,6 +35,7 @@ pub struct HubState {
     pub orchestrator: Arc<Orchestrator>,
     events: Arc<dyn LifecycleEventRepository>,
     api_principals: Vec<StaticPrincipal>,
+    download_slots: Arc<tokio::sync::Semaphore>,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -55,6 +56,7 @@ impl HubState {
             orchestrator,
             events: Arc::new(InMemoryLifecycleEvents::default()),
             api_principals: Vec::new(),
+            download_slots: Arc::new(tokio::sync::Semaphore::new(4)),
         }
     }
 
@@ -101,6 +103,19 @@ impl HubState {
 const INLINE_CONTENT_LIMIT: u64 = 64 * 1024;
 /// Maximum verified binary snapshot returned by the download endpoint.
 const DOWNLOAD_CONTENT_LIMIT: u64 = 16 * 1024 * 1024;
+
+// The permit follows the byte allocation, including transport-held clones,
+// rather than being released as soon as a blocking read or handler completes.
+struct DownloadSnapshot {
+    bytes: Vec<u8>,
+    _permit: tokio::sync::OwnedSemaphorePermit,
+}
+
+impl AsRef<[u8]> for DownloadSnapshot {
+    fn as_ref(&self) -> &[u8] {
+        &self.bytes
+    }
+}
 
 /// Builds the full router (health + versioned API).
 pub fn router(state: HubState) -> Router {
@@ -593,6 +608,16 @@ async fn download_artifact(State(state): State<HubState>, Path(id): Path<String>
     let Some(parsed) = typed_id::<ArtifactId>(&id) else {
         return not_found("artifact", &id);
     };
+    let permit = match state.download_slots.clone().try_acquire_owned() {
+        Ok(permit) => permit,
+        Err(_) => {
+            return error_response(
+                StatusCode::TOO_MANY_REQUESTS,
+                proto::ErrorCode::Validation,
+                "artifact download capacity is occupied; retry this read later",
+            )
+        }
+    };
     let orch = state.orchestrator.clone();
     match joined(
         tokio::task::spawn_blocking(move || {
@@ -607,7 +632,10 @@ async fn download_artifact(State(state): State<HubState>, Path(id): Path<String>
                 (header::CACHE_CONTROL, "no-store"),
                 (header::X_CONTENT_TYPE_OPTIONS, "nosniff"),
             ],
-            bytes,
+            axum::body::Bytes::from_owner(DownloadSnapshot {
+                bytes,
+                _permit: permit,
+            }),
         )
             .into_response(),
         Err(response) => response,
@@ -1045,6 +1073,88 @@ mod tests {
                 }}
             }}"#
         )
+    }
+
+    #[tokio::test]
+    async fn download_admission_follows_response_bytes_and_releases_on_drop() {
+        let (state, _clock, _dir) = test_state();
+        let meta = state
+            .orchestrator
+            .ingest_artifact("small".into(), "text/plain".into(), b"abc")
+            .expect("ingest");
+        let slots = state.download_slots.clone();
+        let app = router(state);
+        let path = format!("/api/v1/artifacts/{}/content", meta.id);
+        let mut buffers = Vec::new();
+        for _ in 0..4 {
+            let response = app
+                .clone()
+                .oneshot(
+                    Request::builder()
+                        .uri(&path)
+                        .body(Body::empty())
+                        .expect("request"),
+                )
+                .await
+                .expect("response");
+            assert_eq!(response.status(), StatusCode::OK);
+            buffers.push(
+                axum::body::to_bytes(response.into_body(), 100)
+                    .await
+                    .expect("buffer"),
+            );
+        }
+        assert_eq!(slots.available_permits(), 0);
+        let response = app
+            .clone()
+            .oneshot(
+                Request::builder()
+                    .uri(&path)
+                    .body(Body::empty())
+                    .expect("request"),
+            )
+            .await
+            .expect("response");
+        assert_eq!(response.status(), StatusCode::TOO_MANY_REQUESTS);
+        buffers.pop();
+        assert_eq!(slots.available_permits(), 1);
+        let response = app
+            .oneshot(
+                Request::builder()
+                    .uri(&path)
+                    .body(Body::empty())
+                    .expect("request"),
+            )
+            .await
+            .expect("response");
+        assert_eq!(response.status(), StatusCode::OK);
+        drop(response);
+        drop(buffers);
+        assert_eq!(slots.available_permits(), 4);
+    }
+
+    #[tokio::test]
+    async fn missing_blob_download_preserves_not_found_and_releases_admission() {
+        let (state, _clock, dir) = test_state();
+        let meta = state
+            .orchestrator
+            .ingest_artifact("missing".into(), "text/plain".into(), b"abc")
+            .expect("ingest");
+        let slots = state.download_slots.clone();
+        std::fs::remove_dir_all(dir.0.join("blobs")).expect("remove blob");
+        let app = router(state);
+        for suffix in ["/content", "?include=content"] {
+            let (status, _) = send(
+                app.clone(),
+                Request::builder()
+                    .uri(format!("/api/v1/artifacts/{}{suffix}", meta.id))
+                    .body(Body::empty())
+                    .expect("request"),
+            )
+            .await;
+            assert_eq!(status, StatusCode::NOT_FOUND);
+            assert_eq!(slots.available_permits(), 4);
+        }
     }
 
     #[tokio::test]

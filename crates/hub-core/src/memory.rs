@@ -196,15 +196,22 @@ impl FileSystemArtifactStore {
             ));
         }
         let path = self.blob_path(content_digest);
-        let metadata = std::fs::symlink_metadata(&path)
-            .map_err(|e| CoreError::Storage(format!("stating bounded artifact: {e}")))?;
+        let map_read_error = |error: std::io::Error| {
+            if error.kind() == std::io::ErrorKind::NotFound {
+                CoreError::BlobNotFound {
+                    hex: content_digest.to_string(),
+                }
+            } else {
+                CoreError::Storage(format!("reading bounded artifact: {error}"))
+            }
+        };
+        let metadata = std::fs::symlink_metadata(&path).map_err(map_read_error)?;
         if !metadata.file_type().is_file() {
             return Err(CoreError::Storage(
                 "artifact must be a regular non-symlink file".into(),
             ));
         }
-        let file = std::fs::File::open(&path)
-            .map_err(|e| CoreError::Storage(format!("opening bounded artifact: {e}")))?;
+        let file = std::fs::File::open(&path).map_err(map_read_error)?;
         if !file
             .metadata()
             .map_err(|e| CoreError::Storage(e.to_string()))?
