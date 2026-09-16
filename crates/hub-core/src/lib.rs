@@ -61,7 +61,8 @@ pub use publication::{
     PublicationFenceRepository, MAX_PUBLICATION_OUTPUTS, PUBLICATION_FENCE_SCHEMA_VERSION,
 };
 pub use run::{
-    InputBinding, InputProvenance, OutputRef, RunOutcome, RunRecord, RunSpec, RunState, Transition,
+    ComponentAdmissionPin, InputBinding, InputProvenance, OutputRef, RunOutcome, RunRecord,
+    RunSpec, RunState, Transition,
 };
 pub use version::Version;
 pub use workflow::{

@@ -7,6 +7,7 @@ use crate::artifact::ArtifactMeta;
 use crate::digest::ContentDigest;
 use crate::error::CoreError;
 use crate::id::{ArtifactId, ComponentId, RunId};
+use crate::version::Version;
 
 /// Repository of registered component manifests, keyed by `(id, version)`.
 pub trait ComponentRepository: Send + Sync {
@@ -28,6 +29,16 @@ pub trait ComponentRepository: Send + Sync {
     fn latest(
         &self,
         id: &ComponentId,
+    ) -> Result<Option<crate::component::ComponentManifest>, CoreError>;
+
+    /// Exact registered manifest for `(id, version)`, if present.
+    ///
+    /// # Errors
+    /// Backend failures only.
+    fn get(
+        &self,
+        id: &ComponentId,
+        version: &Version,
     ) -> Result<Option<crate::component::ComponentManifest>, CoreError>;
 
     /// All manifests, deterministically ordered by `(id, version)`.

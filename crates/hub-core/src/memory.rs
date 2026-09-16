@@ -66,6 +66,15 @@ impl ComponentRepository for InMemoryComponents {
             .map(|(_, m)| m.clone()))
     }
 
+    fn get(
+        &self,
+        id: &ComponentId,
+        version: &Version,
+    ) -> Result<Option<ComponentManifest>, CoreError> {
+        let inner = self.0.lock().map_err(poison)?;
+        Ok(inner.manifests.get(&(*id, version.clone())).cloned())
+    }
+
     fn list(&self) -> Result<Vec<ComponentManifest>, CoreError> {
         let inner = self.0.lock().map_err(poison)?;
         Ok(inner.manifests.values().cloned().collect())
@@ -490,6 +499,14 @@ impl ComponentRepository for InMemoryHubStore {
 
     fn latest(&self, id: &ComponentId) -> Result<Option<ComponentManifest>, CoreError> {
         ComponentRepository::latest(&self.components, id)
+    }
+
+    fn get(
+        &self,
+        id: &ComponentId,
+        version: &Version,
+    ) -> Result<Option<ComponentManifest>, CoreError> {
+        ComponentRepository::get(&self.components, id, version)
     }
 
     fn list(&self) -> Result<Vec<ComponentManifest>, CoreError> {
