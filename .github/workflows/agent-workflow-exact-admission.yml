@@ -1,0 +1,297 @@
+name: Agent qualify workflow exact admission pins
+
+on:
+  push:
+    branches: [feat/workflow-exact-admission-pins]
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  qualify:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+        with:
+          ref: feat/workflow-exact-admission-pins
+          fetch-depth: 0
+      - uses: dtolnay/rust-toolchain@4360b52568e2003a75bf9bc1d59f33a8e3fc893c
+        with:
+          toolchain: stable
+          components: rustfmt, clippy
+      - name: Apply workflow admission source slice
+        shell: bash
+        run: |
+          python3 - <<'PY'
+          from pathlib import Path
+
+          def replace_once(path, old, new, label):
+              p = Path(path)
+              s = p.read_text()
+              count = s.count(old)
+              if count != 1:
+                  raise SystemExit(f"{path}: {label}: expected one match, found {count}")
+              p.write_text(s.replace(old, new, 1))
+
+          # Core workflow contract and durable record.
+          replace_once(
+              'crates/hub-core/src/workflow.rs',
+              'use crate::run::RunSpec;\n',
+              'use crate::run::{ComponentAdmissionPin, RunSpec};\n',
+              'workflow run import',
+          )
+          replace_once(
+              'crates/hub-core/src/workflow.rs',
+              '/// One unit of work inside a workflow.\n',
+              '''/// Schema version for exact workflow-step registry admission pins.\npub const WORKFLOW_ADMISSION_SCHEMA_VERSION: u16 = 1;\n\n/// Exact immutable registry identities required by a pinned workflow.\n///\n/// Keys are workflow step keys. A pinned workflow is fail-closed: every step\n/// must have exactly one pin and no extra pin may name an undeclared step.\n#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]\npub struct WorkflowAdmissionPins {\n    pub schema_version: u16,\n    pub steps: BTreeMap<String, ComponentAdmissionPin>,\n}\n\nimpl WorkflowAdmissionPins {\n    /// Validates the versioned pin envelope against one workflow spec.\n    ///\n    /// # Errors\n    /// [`CoreError::InvalidRunSpec`] for unsupported versions or incomplete/\n    /// extraneous step coverage.\n    pub fn validate(&self, spec: &WorkflowSpec) -> Result<(), CoreError> {\n        if self.schema_version != WORKFLOW_ADMISSION_SCHEMA_VERSION {\n            return Err(CoreError::InvalidRunSpec(format!(\n                "unsupported workflow admission schema_version {}: expected {}",\n                self.schema_version, WORKFLOW_ADMISSION_SCHEMA_VERSION\n            )));\n        }\n        let expected: BTreeSet<String> = spec.steps.iter().map(|step| step.key.clone()).collect();\n        let actual: BTreeSet<String> = self.steps.keys().cloned().collect();\n        if expected != actual {\n            let missing: Vec<_> = expected.difference(&actual).cloned().collect();\n            let extra: Vec<_> = actual.difference(&expected).cloned().collect();\n            return Err(CoreError::InvalidRunSpec(format!(\n                "workflow admission pins must cover every step exactly; missing={missing:?}, extra={extra:?}"\n            )));\n        }\n        Ok(())\n    }\n}\n\n/// One unit of work inside a workflow.\n''',
+              'workflow admission type',
+          )
+          replace_once(
+              'crates/hub-core/src/workflow.rs',
+              '''pub struct WorkflowRecord {\n    pub id: crate::id::WorkflowId,\n    pub spec: WorkflowSpec,\n    pub state: WorkflowState,\n''',
+              '''pub struct WorkflowRecord {\n    pub id: crate::id::WorkflowId,\n    pub spec: WorkflowSpec,\n    /// Exact registry identities frozen at workflow admission. Legacy and\n    /// explicitly unpinned workflows deserialize with `None`.\n    #[serde(default, skip_serializing_if = "Option::is_none")]\n    pub admission: Option<WorkflowAdmissionPins>,\n    pub state: WorkflowState,\n''',
+              'workflow record admission',
+          )
+          replace_once(
+              'crates/hub-core/src/workflow.rs',
+              '''    pub fn create(\n        spec: WorkflowSpec,\n        model_version: Version,\n        now: crate::clock::UnixMillis,\n    ) -> Result<Self, CoreError> {\n        spec.validate()?;\n        Ok(Self {\n            id: crate::id::WorkflowId::generate(),\n            spec,\n            state: WorkflowState::Created,\n            model_version,\n            created_at: now,\n            started_at: None,\n            finished_at: None,\n            cancel_requested_at: None,\n            steps: Vec::new(),\n            failure: None,\n        })\n    }\n''',
+              '''    pub fn create(\n        spec: WorkflowSpec,\n        model_version: Version,\n        now: crate::clock::UnixMillis,\n    ) -> Result<Self, CoreError> {\n        Self::create_with_admission(spec, model_version, now, None)\n    }\n\n    /// Creates a workflow record with an optional exact registry-admission\n    /// envelope persisted alongside the spec.\n    ///\n    /// # Errors\n    /// [`CoreError::InvalidRunSpec`] from the workflow or admission contract.\n    pub fn create_with_admission(\n        spec: WorkflowSpec,\n        model_version: Version,\n        now: crate::clock::UnixMillis,\n        admission: Option<WorkflowAdmissionPins>,\n    ) -> Result<Self, CoreError> {\n        spec.validate()?;\n        if let Some(pins) = &admission {\n            pins.validate(&spec)?;\n        }\n        Ok(Self {\n            id: crate::id::WorkflowId::generate(),\n            spec,\n            admission,\n            state: WorkflowState::Created,\n            model_version,\n            created_at: now,\n            started_at: None,\n            finished_at: None,\n            cancel_requested_at: None,\n            steps: Vec::new(),\n            failure: None,\n        })\n    }\n''',
+              'workflow record constructors',
+          )
+
+          # Public re-export.
+          replace_once(
+              'crates/hub-core/src/lib.rs',
+              '''pub use workflow::{\n    AttemptFailureCategory, InputSource, RetryPolicy, Step, StepAttempt, StepResult,\n    WorkflowRecord, WorkflowSpec, WorkflowState, MAX_WORKFLOW_CONCURRENCY, WORKFLOW_SCHEMA_VERSION,\n};\n''',
+              '''pub use workflow::{\n    AttemptFailureCategory, InputSource, RetryPolicy, Step, StepAttempt, StepResult,\n    WorkflowAdmissionPins, WorkflowRecord, WorkflowSpec, WorkflowState, MAX_WORKFLOW_CONCURRENCY,\n    WORKFLOW_ADMISSION_SCHEMA_VERSION, WORKFLOW_SCHEMA_VERSION,\n};\n''',
+              'workflow exports',
+          )
+
+          # Orchestrator: exact validation at workflow submission and exact\n          # revalidation for every attempt through submit_run_pinned.
+          replace_once(
+              'crates/hub-core/src/orchestrator.rs',
+              '''    pub fn submit_workflow(\n        &self,\n        spec: crate::workflow::WorkflowSpec,\n    ) -> Result<crate::workflow::WorkflowRecord, CoreError> {\n        spec.validate()?;\n        for step in &spec.steps {\n            if self.components.latest(&step.component)?.is_none() {\n                return Err(CoreError::ComponentNotFound(step.component));\n            }\n        }\n        let model_version = crate::Version::parse(crate::workflow::WORKFLOW_MODEL_VERSION)?;\n        let record =\n            crate::workflow::WorkflowRecord::create(spec, model_version, self.clock.now_ms())?;\n        self.workflows.put(&record)?;\n        info!(workflow = %record.id, steps = record.spec.steps.len(), "workflow submitted");\n        Ok(record)\n    }\n''',
+              '''    pub fn submit_workflow(\n        &self,\n        spec: crate::workflow::WorkflowSpec,\n    ) -> Result<crate::workflow::WorkflowRecord, CoreError> {\n        self.submit_workflow_internal(spec, None)\n    }\n\n    /// Validates and persists a workflow whose every step is bound to an\n    /// exact immutable registry identity.\n    ///\n    /// # Errors\n    /// Ordinary workflow submission errors plus [`CoreError::Validation`]\n    /// when any exact version, manifest digest, or capability contract pin\n    /// disagrees with the registry.\n    pub fn submit_workflow_pinned(\n        &self,\n        spec: crate::workflow::WorkflowSpec,\n        admission: crate::workflow::WorkflowAdmissionPins,\n    ) -> Result<crate::workflow::WorkflowRecord, CoreError> {\n        self.submit_workflow_internal(spec, Some(admission))\n    }\n\n    fn submit_workflow_internal(\n        &self,\n        spec: crate::workflow::WorkflowSpec,\n        admission: Option<crate::workflow::WorkflowAdmissionPins>,\n    ) -> Result<crate::workflow::WorkflowRecord, CoreError> {\n        spec.validate()?;\n        if let Some(pins) = &admission {\n            pins.validate(&spec)?;\n            for step in &spec.steps {\n                let pin = pins.steps.get(&step.key).ok_or_else(|| {\n                    CoreError::InvalidRunSpec(format!(\n                        "workflow step {:?} has no exact admission pin",\n                        step.key\n                    ))\n                })?;\n                self.validate_workflow_step_admission(step, pin)?;\n            }\n        } else {\n            for step in &spec.steps {\n                if self.components.latest(&step.component)?.is_none() {\n                    return Err(CoreError::ComponentNotFound(step.component));\n                }\n            }\n        }\n        let model_version = crate::Version::parse(crate::workflow::WORKFLOW_MODEL_VERSION)?;\n        let record = crate::workflow::WorkflowRecord::create_with_admission(\n            spec,\n            model_version,\n            self.clock.now_ms(),\n            admission,\n        )?;\n        self.workflows.put(&record)?;\n        info!(workflow = %record.id, steps = record.spec.steps.len(), pinned = record.admission.is_some(), "workflow submitted");\n        Ok(record)\n    }\n\n    fn validate_workflow_step_admission(\n        &self,\n        step: &crate::workflow::Step,\n        pin: &ComponentAdmissionPin,\n    ) -> Result<(), CoreError> {\n        let manifest = self\n            .components\n            .get(&step.component, &pin.component_version)?\n            .ok_or(CoreError::ComponentNotFound(step.component))?;\n        let digest = manifest.content_digest()?;\n        if digest != pin.manifest_digest {\n            return Err(CoreError::Validation(format!(\n                "workflow step {:?} component {} version {} manifest digest {} does not match required {}",\n                step.key, manifest.id, manifest.version, digest, pin.manifest_digest\n            )));\n        }\n        let capability = manifest\n            .capability(&step.capability)\n            .ok_or_else(|| CoreError::CapabilityNotDeclared {\n                component: step.component,\n                capability: step.capability.to_string(),\n            })?;\n        if capability.contract_version != pin.capability_contract_version {\n            return Err(CoreError::Validation(format!(\n                "workflow step {:?} capability {} contract version {} does not match required {}",\n                step.key, capability.name, capability.contract_version, pin.capability_contract_version\n            )));\n        }\n        Ok(())\n    }\n''',
+              'workflow submission',
+          )
+          replace_once(
+              'crates/hub-core/src/orchestrator.rs',
+              '''        let run_spec = crate::workflow::WorkflowSpec::step_run_spec(step, &resolved);\n        let max_attempts = step.retry.as_ref().map_or(1, |policy| policy.max_attempts);\n''',
+              '''        let run_spec = crate::workflow::WorkflowSpec::step_run_spec(step, &resolved);\n        let admission_pin = {\n            let record = lock_workflow_record(shared_record)?;\n            record\n                .admission\n                .as_ref()\n                .and_then(|pins| pins.steps.get(&step.key))\n                .cloned()\n        };\n        let max_attempts = step.retry.as_ref().map_or(1, |policy| policy.max_attempts);\n''',
+              'step pin capture',
+          )
+          replace_once(
+              'crates/hub-core/src/orchestrator.rs',
+              '''            let submitted = self.submit_run(run_spec.clone())?;\n            let attempt_id = AttemptId::generate();\n''',
+              '''            let submitted = if let Some(pin) = &admission_pin {\n                self.submit_run_pinned(run_spec.clone(), pin.clone())?\n            } else {\n                self.submit_run(run_spec.clone())?\n            };\n            let attempt_id = AttemptId::generate();\n''',
+              'step pinned run admission',
+          )
+
+          # Wire protocol: optional additive admission envelope and read-back.
+          replace_once(
+              'crates/hub-protocol/src/lib.rs',
+              '''pub struct SubmitWorkflowRequest {\n    pub schema_version: u16,\n    /// Domain workflow spec (already serde-shaped and validated on the core\n    /// side, mirroring how run input bindings travel).\n    pub workflow: hub_core::WorkflowSpec,\n}\n''',
+              '''pub struct SubmitWorkflowRequest {\n    pub schema_version: u16,\n    /// Domain workflow spec (already serde-shaped and validated on the core\n    /// side, mirroring how run input bindings travel).\n    pub workflow: hub_core::WorkflowSpec,\n    /// Optional exact registry identity for every workflow step. Omission\n    /// preserves the legacy unpinned workflow/v1 contract.\n    #[serde(default, skip_serializing_if = "Option::is_none")]\n    pub admission: Option<hub_core::WorkflowAdmissionPins>,\n}\n''',
+              'submit workflow request admission',
+          )
+          replace_once(
+              'crates/hub-protocol/src/lib.rs',
+              '''pub struct WorkflowDto {\n    pub id: hub_core::WorkflowId,\n    pub name: String,\n    pub state: hub_core::WorkflowState,\n''',
+              '''pub struct WorkflowDto {\n    pub id: hub_core::WorkflowId,\n    pub name: String,\n    pub state: hub_core::WorkflowState,\n    #[serde(default, skip_serializing_if = "Option::is_none")]\n    pub admission: Option<hub_core::WorkflowAdmissionPins>,\n''',
+              'workflow dto admission',
+          )
+          replace_once(
+              'crates/hub-protocol/src/lib.rs',
+              '''            name: w.spec.name.clone(),\n            state: w.state,\n            model_version: w.model_version.clone(),\n''',
+              '''            name: w.spec.name.clone(),\n            state: w.state,\n            admission: w.admission.clone(),\n            model_version: w.model_version.clone(),\n''',
+              'workflow dto conversion',
+          )
+
+          # HTTP adapter selects pinned admission only when explicitly sent.
+          replace_once(
+              'crates/hub-api/src/lib.rs',
+              '''    let orch = state.orchestrator.clone();\n    match joined(tokio::task::spawn_blocking(move || orch.submit_workflow(request.workflow)).await)\n    {\n''',
+              '''    let orch = state.orchestrator.clone();\n    let submitted = tokio::task::spawn_blocking(move || match request.admission {\n        Some(admission) => orch.submit_workflow_pinned(request.workflow, admission),\n        None => orch.submit_workflow(request.workflow),\n    })\n    .await;\n    match joined(submitted) {\n''',
+              'HTTP workflow admission',
+          )
+          PY
+      - name: Add exact workflow admission contract tests
+        shell: bash
+        run: |
+          cat > crates/hub-core/tests/workflow_exact_admission.rs <<'RS'
+          use std::collections::BTreeMap;
+          use std::sync::Arc;
+
+          use hub_core::store::ComponentRepository as _;
+          use hub_core::{
+              Capability, CapabilityName, ComponentAdmissionPin, ComponentId, ComponentKind,
+              ComponentManifest, ComponentName, ExecutionBinding, ExecutionOutcome, ExecutionRequest,
+              Executor, ExecutorFailure, FileSystemArtifactStore, InMemoryArtifactMeta,
+              InMemoryComponents, InMemoryRuns, InMemoryWorkflows, Limits, Orchestrator,
+              ProcessBinding, Step, Version, WorkflowAdmissionPins, WorkflowSpec,
+              WORKFLOW_ADMISSION_SCHEMA_VERSION, WORKFLOW_SCHEMA_VERSION,
+          };
+
+          #[derive(Default)]
+          struct SuccessExecutor;
+
+          impl Executor for SuccessExecutor {
+              fn backend_id(&self) -> &str { "success" }
+
+              fn execute(
+                  &self,
+                  _request: &ExecutionRequest,
+                  _cancel: &hub_core::CancelToken,
+              ) -> Result<ExecutionOutcome, ExecutorFailure> {
+                  Ok(ExecutionOutcome {
+                      exit_code: Some(0), signal: None, timed_out: false, cancelled: false,
+                      start_error: None, duration_ms: 1, stdout: Vec::new(),
+                      stdout_truncated: false, stderr: Vec::new(), stderr_truncated: false,
+                  })
+              }
+          }
+
+          struct Fixture {
+              orch: Orchestrator,
+              components: Arc<InMemoryComponents>,
+              root: std::path::PathBuf,
+          }
+
+          impl Drop for Fixture {
+              fn drop(&mut self) { let _ = std::fs::remove_dir_all(&self.root); }
+          }
+
+          fn fixture() -> Fixture {
+              let root = std::env::temp_dir().join(format!(
+                  "hub-workflow-exact-admission-{}", uuid::Uuid::new_v4()
+              ));
+              let components = Arc::new(InMemoryComponents::default());
+              let orch = Orchestrator::new(
+                  Arc::new(hub_core::ManualClock::starting_at(1_000)),
+                  components.clone(), Arc::new(InMemoryRuns::default()),
+                  Arc::new(InMemoryArtifactMeta::default()), Arc::new(InMemoryWorkflows::default()),
+                  FileSystemArtifactStore::open(root.join("blobs")).expect("blobs"),
+                  Arc::new(SuccessExecutor), Limits::default(), root.join("runs"),
+              );
+              Fixture { orch, components, root }
+          }
+
+          fn manifest(id: ComponentId, version: &str, contract: &str, program: &str) -> ComponentManifest {
+              ComponentManifest::new_v1(
+                  id,
+                  ComponentName::parse("workflow-exact-component").expect("name"),
+                  Version::parse(version).expect("version"),
+                  ComponentKind::parse(ComponentKind::TOOL).expect("kind"),
+                  vec![Capability {
+                      name: CapabilityName::parse("test.run").expect("capability"),
+                      contract_version: Version::parse(contract).expect("contract"),
+                      inputs: Vec::new(), outputs: Vec::new(), properties: BTreeMap::new(),
+                  }],
+                  Some(ExecutionBinding::Process(ProcessBinding {
+                      program: program.into(), args: Vec::new(), working_dir: None, outputs: Vec::new(),
+                  })),
+                  None, BTreeMap::new(),
+              ).expect("manifest")
+          }
+
+          fn workflow(id: ComponentId) -> WorkflowSpec {
+              WorkflowSpec {
+                  schema_version: WORKFLOW_SCHEMA_VERSION,
+                  name: "exact-admission".into(),
+                  max_concurrency: 1,
+                  steps: vec![Step {
+                      key: "one".into(), component: id,
+                      capability: CapabilityName::parse("test.run").expect("capability"),
+                      parameters: BTreeMap::new(), inputs: BTreeMap::new(), timeout_ms: 5_000,
+                      after: Vec::new(), retry: None,
+                  }],
+              }
+          }
+
+          fn pins(id: ComponentId, manifest: &ComponentManifest) -> WorkflowAdmissionPins {
+              WorkflowAdmissionPins {
+                  schema_version: WORKFLOW_ADMISSION_SCHEMA_VERSION,
+                  steps: BTreeMap::from([(
+                      "one".into(),
+                      ComponentAdmissionPin {
+                          component_version: manifest.version.clone(),
+                          manifest_digest: manifest.content_digest().expect("digest"),
+                          capability_contract_version: manifest
+                              .capability(&CapabilityName::parse("test.run").expect("capability"))
+                              .expect("declared").contract_version.clone(),
+                      },
+                  )]),
+              }
+          }
+
+          #[test]
+          fn pinned_workflow_executes_recorded_version_after_registry_evolution() {
+              let f = fixture();
+              let id = ComponentId::generate();
+              let v1 = manifest(id, "1.0.0", "1.0.0", "v1");
+              f.components.put(&v1).expect("v1");
+              let admitted = f.orch.submit_workflow_pinned(workflow(id), pins(id, &v1)).expect("admit");
+              assert!(admitted.admission.is_some());
+
+              f.components.put(&manifest(id, "2.0.0", "2.0.0", "v2")).expect("v2");
+              let finished = f.orch.execute_workflow(admitted.id).expect("execute");
+              assert_eq!(finished.state, hub_core::WorkflowState::Succeeded);
+              let run = f.orch.run(&finished.steps[0].run).expect("run");
+              assert_eq!(run.component_version.as_str(), "1.0.0");
+              assert_eq!(run.contract_version.as_str(), "1.0.0");
+          }
+
+          #[test]
+          fn pinned_workflow_rejects_wrong_digest_contract_and_incomplete_coverage() {
+              let f = fixture();
+              let id = ComponentId::generate();
+              let v1 = manifest(id, "1.0.0", "1.0.0", "v1");
+              f.components.put(&v1).expect("v1");
+
+              let mut wrong_digest = pins(id, &v1);
+              wrong_digest.steps.get_mut("one").expect("pin").manifest_digest =
+                  hub_core::ContentDigest::from_bytes([0x5A; 32]);
+              assert!(f.orch.submit_workflow_pinned(workflow(id), wrong_digest).is_err());
+
+              let mut wrong_contract = pins(id, &v1);
+              wrong_contract.steps.get_mut("one").expect("pin").capability_contract_version =
+                  Version::parse("9.9.9").expect("version");
+              assert!(f.orch.submit_workflow_pinned(workflow(id), wrong_contract).is_err());
+
+              let incomplete = WorkflowAdmissionPins {
+                  schema_version: WORKFLOW_ADMISSION_SCHEMA_VERSION,
+                  steps: BTreeMap::new(),
+              };
+              assert!(f.orch.submit_workflow_pinned(workflow(id), incomplete).is_err());
+          }
+
+          #[test]
+          fn legacy_unpinned_workflow_preserves_latest_at_attempt_semantics() {
+              let f = fixture();
+              let id = ComponentId::generate();
+              f.components.put(&manifest(id, "1.0.0", "1.0.0", "v1")).expect("v1");
+              let admitted = f.orch.submit_workflow(workflow(id)).expect("legacy admit");
+              assert!(admitted.admission.is_none());
+              f.components.put(&manifest(id, "2.0.0", "2.0.0", "v2")).expect("v2");
+              let finished = f.orch.execute_workflow(admitted.id).expect("legacy execute");
+              let run = f.orch.run(&finished.steps[0].run).expect("run");
+              assert_eq!(run.component_version.as_str(), "2.0.0");
+              assert_eq!(run.contract_version.as_str(), "2.0.0");
+          }
+          RS
+      - name: Format
+        run: cargo fmt --all
+      - name: Full workspace tests
+        run: cargo test --workspace --all-features --locked
+      - name: Full workspace clippy
+        run: cargo clippy --workspace --all-targets --all-features --locked -- -D warnings
+      - name: Commit source slice
+        shell: bash
+        run: |
+          git config user.name "ZEKRITI TAREK"
+          git config user.email "contact@checkupauto.fr"
+          git add crates/hub-core/src crates/hub-core/tests crates/hub-protocol/src crates/hub-api/src
+          git commit -m "feat(workflow): enforce exact component admission pins"
+          git push origin HEAD:feat/workflow-exact-admission-pins
