@@ -1,0 +1,41 @@
+name: Agent qualify exact run admission primitives
+
+on:
+  pull_request:
+    branches: [main]
+
+permissions:
+  contents: write
+
+jobs:
+  qualify:
+    if: github.head_ref == 'feat/exact-run-admission-pins'
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+        with:
+          ref: feat/exact-run-admission-pins
+          fetch-depth: 0
+      - name: Install declared Rust toolchain
+        run: rustup toolchain install 1.89.0 --profile minimal --component rustfmt,clippy
+      - name: Apply source patch
+        run: python3 .agent/add_exact_run_admission.py
+      - name: Format
+        run: cargo +1.89.0 fmt --all
+      - name: Test Hub core and SQLite store
+        run: cargo +1.89.0 test -p hub-core -p hub-store-sqlite --all-targets
+      - name: Clippy Hub core and SQLite store
+        run: cargo +1.89.0 clippy -p hub-core -p hub-store-sqlite --all-targets -- -D warnings
+      - name: Commit source patch
+        shell: bash
+        run: |
+          if git diff --quiet -- crates/hub-core/src crates/hub-core/tests crates/hub-store-sqlite/src; then
+            echo 'No source changes required.'
+            exit 0
+          fi
+          git config user.name "ZEKRITI TAREK"
+          git config user.email "contact@checkupauto.fr"
+          git add crates/hub-core/src crates/hub-core/tests crates/hub-store-sqlite/src
+          git commit -m "feat(registry): pin exact run manifest identity"
+          git push origin HEAD:feat/exact-run-admission-pins
