@@ -203,7 +203,7 @@ new_builder = '''    Arc::new(
         .with_publication_fences(publication_fences),
     )'''
 s = replace_once(s, old_builder, new_builder, "daemon builder wiring")
-sqlite_call = '''                let orchestrator = build_orchestrator(
+call = '''                let orchestrator = build_orchestrator(
                     store.clone(),
                     store.clone(),
                     store.clone(),
@@ -212,6 +212,10 @@ sqlite_call = '''                let orchestrator = build_orchestrator(
                     executor.clone(),
                     workdir_root,
                 );'''
+parts = s.split("            StoreBackend::Memory => {", 1)
+if len(parts) != 2:
+    raise SystemExit("daemon backend split: expected memory backend marker")
+sqlite_part, memory_part = parts
 sqlite_new = '''                let orchestrator = build_orchestrator(
                     store.clone(),
                     store.clone(),
@@ -222,16 +226,7 @@ sqlite_new = '''                let orchestrator = build_orchestrator(
                     executor.clone(),
                     workdir_root,
                 );'''
-s = replace_once(s, sqlite_call, sqlite_new, "sqlite durable publication injection")
-memory_call = '''                let orchestrator = build_orchestrator(
-                    store.clone(),
-                    store.clone(),
-                    store.clone(),
-                    store.clone(),
-                    blob_store,
-                    executor.clone(),
-                    workdir_root,
-                );'''
+sqlite_part = replace_once(sqlite_part, call, sqlite_new, "sqlite durable publication injection")
 memory_new = '''                let orchestrator = build_orchestrator(
                     store.clone(),
                     store.clone(),
@@ -242,5 +237,6 @@ memory_new = '''                let orchestrator = build_orchestrator(
                     executor.clone(),
                     workdir_root,
                 );'''
-s = replace_once(s, memory_call, memory_new, "memory publication injection")
+memory_part = replace_once(memory_part, call, memory_new, "memory publication injection")
+s = sqlite_part + "            StoreBackend::Memory => {" + memory_part
 p.write_text(s)
