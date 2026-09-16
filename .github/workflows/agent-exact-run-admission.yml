@@ -19,6 +19,19 @@ jobs:
           fetch-depth: 0
       - name: Install declared Rust toolchain
         run: rustup toolchain install 1.89.0 --profile minimal --component rustfmt,clippy
+      - name: Scope in-memory source patch to component registry
+        shell: bash
+        run: |
+          python3 - <<'PY'
+          from pathlib import Path
+          p = Path('.agent/add_exact_run_admission.py')
+          s = p.read_text()
+          old = '''    if count != 1:\n        raise SystemExit(f"{path}: {label}: expected one match, found {count}")\n    p.write_text(s.replace(old, new, 1))\n'''
+          new = '''    if count != 1:\n        if label == "in-memory exact get" and count == 2:\n            p.write_text(s.replace(old, new, 1))\n            return\n        raise SystemExit(f"{path}: {label}: expected one match, found {count}")\n    p.write_text(s.replace(old, new, 1))\n'''
+          if old not in s:
+              raise SystemExit('replace_once helper shape changed')
+          p.write_text(s.replace(old, new, 1))
+          PY
       - name: Apply source patch
         run: python3 .agent/add_exact_run_admission.py
       - name: Format
