@@ -12,7 +12,7 @@ jobs:
   patch-and-qualify:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
         with:
           fetch-depth: 0
       - name: Patch Hub-owned authoritative publication boundary
@@ -60,8 +60,8 @@ jobs:
             components,
             runs,
             artifacts_meta,
-            blobs,
             workflows,
+            blobs,
             executor,
             limits,
             workdir_root: workdir_root.into(),
@@ -118,9 +118,9 @@ jobs:
             components,
             runs,
             artifacts_meta,
-            blobs,
             workflows,
             publication_fences,
+            blobs,
             executor,
             limits,
             workdir_root: workdir_root.into(),
@@ -259,10 +259,7 @@ jobs:
     })?;
     let mut outputs = BTreeMap::new();
     for output in &outcome.outputs {
-        if outputs
-            .insert(output.name.clone(), output.artifact)
-            .is_some()
-        {
+        if outputs.insert(output.name.clone(), output.artifact).is_some() {
             return Err(CoreError::Validation(format!(
                 "run {} produced duplicate output label {:?}; authoritative publication is ambiguous",
                 run.id, output.name
