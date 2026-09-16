@@ -1,0 +1,41 @@
+name: Agent authoritative publication HTTP edge
+
+on:
+  pull_request:
+    branches: [main]
+
+permissions:
+  contents: write
+
+jobs:
+  patch-and-validate:
+    if: github.head_ref == 'agent/publication-http-api-g2'
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: agent/publication-http-api-g2
+          fetch-depth: 0
+      - name: Apply source patch
+        run: python3 .agent/apply_publication_http_g2.py
+      - name: Format
+        run: cargo fmt --all
+      - name: Hub core tests
+        run: cargo test -p hub-core
+      - name: Protocol tests
+        run: cargo test -p hub-protocol
+      - name: API tests
+        run: cargo test -p hub-api
+      - name: Real daemon HTTP test
+        run: cargo test -p scirust-hubd --test http_e2e two_step_workflow_chains_artifacts_over_http -- --exact
+      - name: Persist validated source patch
+        shell: bash
+        run: |
+          rm .agent/apply_publication_http_g2.py
+          rm .github/workflows/agent-publication-http-g2.yml
+          git config user.name "ZEKRITI TAREK"
+          git config user.email "contact@checkupauto.fr"
+          git add crates/hub-core/src/orchestrator.rs crates/hub-protocol/src/lib.rs crates/hub-api/src/lib.rs apps/scirust-hubd/tests/http_e2e.rs .agent/apply_publication_http_g2.py .github/workflows/agent-publication-http-g2.yml
+          git commit -m "feat(api): expose authoritative step publication"
+          git push origin HEAD:agent/publication-http-api-g2
