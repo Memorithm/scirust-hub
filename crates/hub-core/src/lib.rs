@@ -57,9 +57,8 @@ pub use memory::{
 };
 pub use orchestrator::{Orchestrator, RegistrationStatus};
 pub use publication::{
-    AuthoritativeStepPublication, InMemoryPublicationFences, PublicationCommit,
-    PublicationFence, PublicationFenceRepository, MAX_PUBLICATION_OUTPUTS,
-    PUBLICATION_FENCE_SCHEMA_VERSION,
+    AuthoritativeStepPublication, InMemoryPublicationFences, PublicationCommit, PublicationFence,
+    PublicationFenceRepository, MAX_PUBLICATION_OUTPUTS, PUBLICATION_FENCE_SCHEMA_VERSION,
 };
 pub use run::{
     InputBinding, InputProvenance, OutputRef, RunOutcome, RunRecord, RunSpec, RunState, Transition,
