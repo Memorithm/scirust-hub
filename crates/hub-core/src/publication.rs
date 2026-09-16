@@ -165,11 +165,9 @@ impl PublicationFenceRepository for InMemoryPublicationFences {
             .map_err(|_| CoreError::Storage("publication fence lock poisoned".into()))?;
         let key = (workflow, step_key.to_owned());
         let generation = match entries.get(&key) {
-            Some(entry) => entry
-                .fence
-                .generation
-                .checked_add(1)
-                .ok_or_else(|| CoreError::Storage("publication fence generation overflow".into()))?,
+            Some(entry) => entry.fence.generation.checked_add(1).ok_or_else(|| {
+                CoreError::Storage("publication fence generation overflow".into())
+            })?,
             None => 1,
         };
         let fence = PublicationFence {
@@ -202,9 +200,9 @@ impl PublicationFenceRepository for InMemoryPublicationFences {
             publication.fence.workflow,
             publication.fence.step_key.clone(),
         );
-        let entry = entries.get_mut(&key).ok_or_else(|| {
-            CoreError::Validation("publication has no issued fence".into())
-        })?;
+        let entry = entries
+            .get_mut(&key)
+            .ok_or_else(|| CoreError::Validation("publication has no issued fence".into()))?;
         if entry.fence != publication.fence {
             return Err(CoreError::Validation(
                 "publication fence is stale or does not match the current attempt".into(),
@@ -272,9 +270,7 @@ fn validate_step_key(key: &str) -> Result<(), CoreError> {
 fn validate_output_name(name: &str) -> Result<(), CoreError> {
     let valid = !name.is_empty()
         && name.len() <= 128
-        && name
-            .chars()
-            .all(|c| !c.is_whitespace() && !c.is_control());
+        && name.chars().all(|c| !c.is_whitespace() && !c.is_control());
     if valid {
         Ok(())
     } else {
@@ -326,14 +322,10 @@ mod tests {
             PublicationCommit::Published
         );
         assert_eq!(
-            store
-                .publish_authoritative_outputs(&first)
-                .expect("replay"),
+            store.publish_authoritative_outputs(&first).expect("replay"),
             PublicationCommit::Idempotent
         );
         let conflicting = publication(fence, ArtifactId::generate());
-        assert!(store
-            .publish_authoritative_outputs(&conflicting)
-            .is_err());
+        assert!(store.publish_authoritative_outputs(&conflicting).is_err());
     }
 }
