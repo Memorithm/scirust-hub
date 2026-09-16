@@ -35,6 +35,8 @@ use hub_core::store::{
 };
 use rusqlite::OptionalExtension as _;
 
+mod publication;
+
 /// Forward-only migrations; index `i` is schema version `i + 1`.
 const MIGRATIONS: &[&str] = &[
     // v1: initial schema.
@@ -79,6 +81,15 @@ const MIGRATIONS: &[&str] = &[
     );
     CREATE INDEX idx_lifecycle_events_entity
         ON lifecycle_events (entity_type, entity_id, sequence);",
+    // v4: durable workflow-step publication fencing and authoritative outputs.
+    "CREATE TABLE workflow_publication_fences (
+        workflow_id      TEXT    NOT NULL,
+        step_key         TEXT    NOT NULL,
+        generation       INTEGER NOT NULL CHECK (generation > 0),
+        attempt_id       TEXT    NOT NULL,
+        publication_json TEXT,
+        PRIMARY KEY (workflow_id, step_key)
+    );",
 ];
 
 /// SQLite-backed implementation of all three metadata repository ports.
