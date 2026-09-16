@@ -99,6 +99,8 @@ impl HubState {
 
 /// Inline-content cap for artifact reads (`?include=content`).
 const INLINE_CONTENT_LIMIT: u64 = 64 * 1024;
+/// Maximum verified binary snapshot returned by the download endpoint.
+const DOWNLOAD_CONTENT_LIMIT: u64 = 16 * 1024 * 1024;
 
 /// Builds the full router (health + versioned API).
 pub fn router(state: HubState) -> Router {
@@ -131,6 +133,7 @@ pub fn router(state: HubState) -> Router {
             post(upload_artifact).get(list_artifacts),
         )
         .route("/api/v1/artifacts/{id}", get(get_artifact))
+        .route("/api/v1/artifacts/{id}/content", get(download_artifact))
         .route(
             "/api/v1/artifacts/{id}/portable-digest",
             get(get_artifact_portable_digest),
@@ -544,7 +547,7 @@ async fn get_artifact(
             None => Err(CoreError::ArtifactNotFound(parsed)),
             Some(meta) => {
                 if include_content {
-                    orch.artifact_bytes(&meta.id)
+                    orch.artifact_bytes_bounded(&meta.id, INLINE_CONTENT_LIMIT)
                         .map(|(_, bytes)| (meta, Some(bytes)))
                 } else {
                     Ok((meta, None))
@@ -581,6 +584,32 @@ async fn get_artifact(
             Json(dto).into_response()
         }
         // ArtifactNotFound/BlobNotFound already map to 404 envelopes.
+        Err(response) => response,
+    }
+}
+
+/// Downloads exactly the verified bytes, never an inline-rendered document.
+async fn download_artifact(State(state): State<HubState>, Path(id): Path<String>) -> Response {
+    let Some(parsed) = typed_id::<ArtifactId>(&id) else {
+        return not_found("artifact", &id);
+    };
+    let orch = state.orchestrator.clone();
+    match joined(
+        tokio::task::spawn_blocking(move || {
+            orch.artifact_bytes_bounded(&parsed, DOWNLOAD_CONTENT_LIMIT)
+        })
+        .await,
+    ) {
+        Ok((_meta, bytes)) => (
+            [
+                (header::CONTENT_TYPE, "application/octet-stream"),
+                (header::CONTENT_DISPOSITION, "attachment"),
+                (header::CACHE_CONTROL, "no-store"),
+                (header::X_CONTENT_TYPE_OPTIONS, "nosniff"),
+            ],
+            bytes,
+        )
+            .into_response(),
         Err(response) => response,
     }
 }
@@ -1016,6 +1045,82 @@ mod tests {
                 }}
             }}"#
         )
+    }
+
+    #[tokio::test]
+    async fn binary_download_is_verified_authenticated_and_not_rendered() {
+        let (state, _clock, _dir) = test_state();
+        let payload = b"\x00\xff<script>untrusted</script>";
+        let artifact = state
+            .orchestrator
+            .ingest_artifact("result".into(), "text/html".into(), payload)
+            .expect("ingest");
+        let app = router(
+            state
+                .with_bearer_token("download-test-token")
+                .expect("auth"),
+        );
+        let path = format!("/api/v1/artifacts/{}/content", artifact.id);
+        let (status, _) = send(
+            app.clone(),
+            Request::builder()
+                .uri(&path)
+                .body(Body::empty())
+                .expect("request"),
+        )
+        .await;
+        assert_eq!(status, StatusCode::UNAUTHORIZED);
+        let response = app
+            .oneshot(
+                Request::builder()
+                    .uri(&path)
+                    .header("authorization", "Bearer download-test-token")
+                    .body(Body::empty())
+                    .expect("request"),
+            )
+            .await
+            .expect("response");
+        assert_eq!(response.status(), StatusCode::OK);
+        assert_eq!(
+            response.headers()[header::CONTENT_TYPE],
+            "application/octet-stream"
+        );
+        assert_eq!(
+            response.headers()[header::CONTENT_DISPOSITION],
+            "attachment"
+        );
+        assert_eq!(
+            response.headers()[header::X_CONTENT_TYPE_OPTIONS],
+            "nosniff"
+        );
+        let bytes = axum::body::to_bytes(response.into_body(), 1024)
+            .await
+            .expect("bytes");
+        assert_eq!(&bytes[..], payload);
+    }
+
+    #[tokio::test]
+    async fn inline_read_checks_size_before_opening_the_blob() {
+        let (state, _clock, dir) = test_state();
+        let meta = state
+            .orchestrator
+            .ingest_artifact(
+                "large".into(),
+                "text/plain".into(),
+                &vec![b'x'; INLINE_CONTENT_LIMIT as usize + 1],
+            )
+            .expect("ingest");
+        // A missing blob must not be read before refusing oversized metadata.
+        std::fs::remove_dir_all(dir.0.join("blobs")).expect("remove blobs");
+        let (status, _) = send(
+            router(state),
+            Request::builder()
+                .uri(format!("/api/v1/artifacts/{}?include=content", meta.id))
+                .body(Body::empty())
+                .expect("request"),
+        )
+        .await;
+        assert_eq!(status, StatusCode::PAYLOAD_TOO_LARGE);
     }
 
     #[tokio::test]

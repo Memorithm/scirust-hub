@@ -175,6 +175,65 @@ impl FileSystemArtifactStore {
         self.root.join("blobs").join(&hex[..2]).join(hex)
     }
 
+    /// Reads one bounded snapshot and verifies the exact bytes being returned.
+    ///
+    /// Unlike a separate digest scan followed by a read, verification applies
+    /// to this returned buffer. Both historical capture and artifact domains
+    /// are supported. The store directory must remain administrator-owned.
+    ///
+    /// # Errors
+    /// Rejects oversized metadata before opening the file, non-regular files,
+    /// a changed byte count, corrupt contents, and storage failures.
+    pub fn read_verified_bounded(
+        &self,
+        content_digest: &ContentDigest,
+        expected_size: u64,
+        limit: u64,
+    ) -> Result<Vec<u8>, CoreError> {
+        if expected_size > limit {
+            return Err(CoreError::Storage(
+                "artifact exceeds bounded read limit".into(),
+            ));
+        }
+        let path = self.blob_path(content_digest);
+        let metadata = std::fs::symlink_metadata(&path)
+            .map_err(|e| CoreError::Storage(format!("stating bounded artifact: {e}")))?;
+        if !metadata.file_type().is_file() {
+            return Err(CoreError::Storage(
+                "artifact must be a regular non-symlink file".into(),
+            ));
+        }
+        let file = std::fs::File::open(&path)
+            .map_err(|e| CoreError::Storage(format!("opening bounded artifact: {e}")))?;
+        if !file
+            .metadata()
+            .map_err(|e| CoreError::Storage(e.to_string()))?
+            .is_file()
+        {
+            return Err(CoreError::Storage(
+                "artifact must remain a regular file".into(),
+            ));
+        }
+        let read_limit = expected_size
+            .checked_add(1)
+            .ok_or_else(|| CoreError::Storage("artifact read bound overflow".into()))?;
+        let mut bytes = Vec::new();
+        file.take(read_limit)
+            .read_to_end(&mut bytes)
+            .map_err(|e| CoreError::Storage(format!("reading bounded artifact: {e}")))?;
+        if bytes.len() as u64 != expected_size {
+            return Err(CoreError::Storage("artifact byte count mismatch".into()));
+        }
+        let artifact = digest::hash_bytes(digest::DOMAIN_ARTIFACT_BLOB, &bytes);
+        let capture = digest::hash_bytes(digest::DOMAIN_CAPTURE, &bytes);
+        if *content_digest != artifact && *content_digest != capture {
+            return Err(CoreError::Storage(
+                "artifact content digest mismatch".into(),
+            ));
+        }
+        Ok(bytes)
+    }
+
     /// Re-verifies stored artifact bytes and returns their ordinary SHA-256.
     ///
     /// The scan computes ordinary SHA-256 plus both Hub artifact domains used by
@@ -739,6 +798,35 @@ mod tests {
         assert_eq!(std::fs::read(&dest).expect("copied"), data);
         drop(store);
         std::fs::remove_dir_all(&dir).expect("cleanup");
+    }
+
+    #[test]
+    fn bounded_snapshot_rejects_corruption_growth_and_symlinks() {
+        let dir = std::env::temp_dir().join(format!("hub-snapshot-{}", uuid::Uuid::new_v4()));
+        let store = FileSystemArtifactStore::open(&dir).expect("open");
+        for domain in [digest::DOMAIN_ARTIFACT_BLOB, digest::DOMAIN_CAPTURE] {
+            let key = store.put(b"abc", 3, domain).expect("put");
+            assert_eq!(
+                store.read_verified_bounded(&key, 3, 3).expect("read"),
+                b"abc"
+            );
+            assert!(store.read_verified_bounded(&key, 3, 2).is_err());
+            std::fs::write(store.blob_path(&key), b"xyz").expect("same size corruption");
+            assert!(store.read_verified_bounded(&key, 3, 3).is_err());
+            std::fs::write(store.blob_path(&key), b"abcdef").expect("growth");
+            assert!(store.read_verified_bounded(&key, 3, 3).is_err());
+            std::fs::write(store.blob_path(&key), b"ab").expect("truncation");
+            assert!(store.read_verified_bounded(&key, 3, 3).is_err());
+            #[cfg(unix)]
+            {
+                std::fs::remove_file(store.blob_path(&key)).expect("remove");
+                let target = dir.join("target");
+                std::fs::write(&target, b"abc").expect("target");
+                std::os::unix::fs::symlink(&target, store.blob_path(&key)).expect("link");
+                assert!(store.read_verified_bounded(&key, 3, 3).is_err());
+            }
+        }
+        std::fs::remove_dir_all(dir).expect("cleanup");
     }
 
     #[test]

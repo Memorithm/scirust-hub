@@ -865,6 +865,36 @@ impl Orchestrator {
         Ok((meta, bytes))
     }
 
+    /// Returns a verified artifact snapshot within a caller's transfer budget.
+    ///
+    /// Use this for external downloads instead of an unbounded blob read.
+    /// For example, `hub.artifact_bytes_bounded(&id, 64 * 1024)` refuses larger
+    /// objects before reading them; it never truncates a successful response.
+    ///
+    /// # Errors
+    /// Missing metadata, size above `limit`, corrupt bytes, or storage failure.
+    pub fn artifact_bytes_bounded(
+        &self,
+        id: &ArtifactId,
+        limit: u64,
+    ) -> Result<(crate::artifact::ArtifactMeta, Vec<u8>), CoreError> {
+        let meta = self
+            .artifacts_meta
+            .get(id)?
+            .ok_or(CoreError::ArtifactNotFound(*id))?;
+        if meta.size > limit {
+            return Err(CoreError::ArtifactTooLarge {
+                artifact: *id,
+                size: meta.size,
+                limit,
+            });
+        }
+        let bytes = self
+            .blobs
+            .read_verified_bounded(&meta.digest, meta.size, limit)?;
+        Ok((meta, bytes))
+    }
+
     /// Computes portable ordinary SHA-256 for one stored artifact without buffering the blob.
     ///
     /// The returned [`crate::RawSha256`] is deliberately not a Hub CAS key.
