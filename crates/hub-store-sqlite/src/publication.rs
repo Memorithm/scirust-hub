@@ -46,7 +46,9 @@ impl PublicationFenceRepository for SqliteStore {
             Some(value) => u64::try_from(value)
                 .map_err(|_| CoreError::Storage("negative publication fence generation".into()))?
                 .checked_add(1)
-                .ok_or_else(|| CoreError::Storage("publication fence generation overflow".into()))?,
+                .ok_or_else(|| {
+                    CoreError::Storage("publication fence generation overflow".into())
+                })?,
         };
         let generation_i64 = i64::try_from(generation).map_err(|_| {
             CoreError::Storage("publication fence generation exceeds SQLite INTEGER".into())
@@ -214,9 +216,7 @@ impl PublicationFenceRepository for SqliteStore {
                 workflow,
                 step_key: step_key.to_owned(),
                 attempt: AttemptId::from_str(&attempt_id).map_err(|error| {
-                    CoreError::Storage(format!(
-                        "stored publication attempt id is invalid: {error}"
-                    ))
+                    CoreError::Storage(format!("stored publication attempt id is invalid: {error}"))
                 })?,
                 generation: u64::try_from(generation).map_err(|_| {
                     CoreError::Storage("negative publication fence generation".into())
@@ -251,8 +251,8 @@ impl PublicationFenceRepository for SqliteStore {
             .map_err(storage("loading authoritative publication"))?
             .flatten();
         json.map(|json| {
-            let publication: AuthoritativeStepPublication = serde_json::from_str(&json)
-                .map_err(|error| {
+            let publication: AuthoritativeStepPublication =
+                serde_json::from_str(&json).map_err(|error| {
                     CoreError::Storage(format!(
                         "stored authoritative publication is invalid: {error}"
                     ))
@@ -279,10 +279,13 @@ fn load_publishable_workflow(
     let Some(json) = json else {
         return Err(CoreError::WorkflowNotFound(workflow));
     };
-    let record: hub_core::workflow::WorkflowRecord = serde_json::from_str(&json).map_err(|error| {
-        CoreError::Storage(format!("stored workflow failed to deserialize: {error}"))
-    })?;
-    if record.cancel_requested_at.is_some() || record.state != hub_core::workflow::WorkflowState::Running {
+    let record: hub_core::workflow::WorkflowRecord =
+        serde_json::from_str(&json).map_err(|error| {
+            CoreError::Storage(format!("stored workflow failed to deserialize: {error}"))
+        })?;
+    if record.cancel_requested_at.is_some()
+        || record.state != hub_core::workflow::WorkflowState::Running
+    {
         return Err(CoreError::Validation(format!(
             "workflow {workflow} is not eligible for authoritative publication"
         )));
@@ -398,10 +401,7 @@ mod tests {
             id: ArtifactId::generate(),
             name: format!("result-{seed}"),
             media_type: "application/octet-stream".into(),
-            digest: hub_core::digest::hash_bytes(
-                hub_core::digest::DOMAIN_ARTIFACT_BLOB,
-                &bytes,
-            ),
+            digest: hub_core::digest::hash_bytes(hub_core::digest::DOMAIN_ARTIFACT_BLOB, &bytes),
             size: 1,
             created_at: u64::from(seed) + 10,
             produced_by_run: None,
@@ -412,7 +412,8 @@ mod tests {
 
     #[test]
     fn generation_survives_reopen_and_stale_attempt_fails_closed() {
-        let dir = std::env::temp_dir().join(format!("hub-publication-fence-{}", uuid::Uuid::new_v4()));
+        let dir =
+            std::env::temp_dir().join(format!("hub-publication-fence-{}", uuid::Uuid::new_v4()));
         let db = dir.join("hub.db");
         let workflow;
         let first;
