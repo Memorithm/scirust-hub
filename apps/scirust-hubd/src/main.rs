@@ -22,6 +22,7 @@ use hub_core::clock::SystemClock;
 use hub_core::exec::Executor;
 use hub_core::limits::Limits;
 use hub_core::memory::{FileSystemArtifactStore, InMemoryHubStore};
+use hub_core::publication::{InMemoryPublicationFences, PublicationFenceRepository};
 use hub_core::store::{
     ArtifactMetadataRepository, ComponentRepository, LifecycleEventRepository, RunRepository,
     WorkflowRepository,
@@ -137,21 +138,25 @@ fn build_orchestrator(
     runs: Arc<dyn RunRepository>,
     artifacts_meta: Arc<dyn ArtifactMetadataRepository>,
     workflows: Arc<dyn WorkflowRepository>,
+    publication_fences: Arc<dyn PublicationFenceRepository>,
     blob_store: FileSystemArtifactStore,
     executor: Arc<dyn Executor>,
     workdir_root: PathBuf,
 ) -> Arc<Orchestrator> {
-    Arc::new(Orchestrator::new(
-        Arc::new(SystemClock),
-        components,
-        runs,
-        artifacts_meta,
-        workflows,
-        blob_store,
-        executor,
-        Limits::default(),
-        workdir_root,
-    ))
+    Arc::new(
+        Orchestrator::new(
+            Arc::new(SystemClock),
+            components,
+            runs,
+            artifacts_meta,
+            workflows,
+            blob_store,
+            executor,
+            Limits::default(),
+            workdir_root,
+        )
+        .with_publication_fences(publication_fences),
+    )
 }
 
 fn build_executor(
@@ -373,6 +378,7 @@ fn run(args: Args) -> Result<(), DaemonError> {
                     store.clone(),
                     store.clone(),
                     store.clone(),
+                    store.clone(),
                     blob_store,
                     executor.clone(),
                     workdir_root,
@@ -387,6 +393,7 @@ fn run(args: Args) -> Result<(), DaemonError> {
                     store.clone(),
                     store.clone(),
                     store.clone(),
+                    Arc::new(InMemoryPublicationFences::default()),
                     blob_store,
                     executor.clone(),
                     workdir_root,
