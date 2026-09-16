@@ -47,6 +47,19 @@ jobs:
               raise SystemExit(f'composite component registry anchor count={s.count(old)}')
           p.write_text(s.replace(old, new, 1))
           PY
+      - name: Align reproduction regression with immutable exact-version semantics
+        shell: bash
+        run: |
+          python3 - <<'PY'
+          from pathlib import Path
+          p = Path('crates/hub-core/src/orchestrator.rs')
+          s = p.read_text()
+          old = '''        // Version drift after queueing must also block execution; the\n        // reproduction can never silently pick up a newer manifest.\n        let drifted = echo_manifest(manifest.id);\n        let drifted = ComponentManifest {\n            version: Version::parse("9.9.9").expect("v"),\n            ..drifted\n        };\n        hub.orch.register_component(drifted).expect("register v9");\n        match hub.orch.execute_run(reproduction.id) {\n            Err(CoreError::Validation(msg)) => {\n                assert!(msg.contains("evolved"), "message: {msg}");\n                assert!(msg.contains("recorded 1.0.0"), "message: {msg}");\n            }\n            other => panic!("expected execution-time drift rejection, got {other:?}"),\n        }\n        match hub.orch.reproduce_run(original.id) {\n            Err(CoreError::Validation(msg)) => {\n                assert!(msg.contains("evolved"), "message: {msg}");\n            }\n            other => panic!("expected drift rejection, got {other:?}"),\n        }\n\n        // A run recorded under the CURRENT version reproduces fine.\n'''
+          new = '''        // Registering a newer immutable version after queueing must not redirect\n        // execution or reproduction: both stay pinned to the recorded v1 entry.\n        let drifted = echo_manifest(manifest.id);\n        let drifted = ComponentManifest {\n            version: Version::parse("9.9.9").expect("v"),\n            ..drifted\n        };\n        hub.orch.register_component(drifted).expect("register v9");\n        let old_done = hub\n            .orch\n            .execute_run(reproduction.id)\n            .expect("execute exact recorded version");\n        assert_eq!(old_done.state, RunState::Succeeded);\n        assert_eq!(old_done.component_version.as_str(), "1.0.0");\n\n        let old_again = hub\n            .orch\n            .reproduce_run(original.id)\n            .expect("reproduce exact recorded version");\n        assert_eq!(old_again.component_version.as_str(), "1.0.0");\n        assert_eq!(old_again.reproduced_from, Some(original.id));\n        let old_again_done = hub\n            .orch\n            .execute_run(old_again.id)\n            .expect("execute exact reproduction");\n        assert_eq!(old_again_done.state, RunState::Succeeded);\n        assert_eq!(old_again_done.component_version.as_str(), "1.0.0");\n\n        // A run recorded under the CURRENT version reproduces fine.\n'''
+          if s.count(old) != 1:
+              raise SystemExit(f'reproduction regression anchor count={s.count(old)}')
+          p.write_text(s.replace(old, new, 1))
+          PY
       - name: Format
         run: cargo +1.89.0 fmt --all
       - name: Test Hub core and SQLite store
