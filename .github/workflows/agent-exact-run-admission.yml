@@ -34,6 +34,19 @@ jobs:
           PY
       - name: Apply source patch
         run: python3 .agent/add_exact_run_admission.py
+      - name: Complete composite exact lookup
+        shell: bash
+        run: |
+          python3 - <<'PY'
+          from pathlib import Path
+          p = Path('crates/hub-core/src/memory.rs')
+          s = p.read_text()
+          old = '''    fn latest(&self, id: &ComponentId) -> Result<Option<ComponentManifest>, CoreError> {\n        ComponentRepository::latest(&self.components, id)\n    }\n\n    fn list(&self) -> Result<Vec<ComponentManifest>, CoreError> {\n        ComponentRepository::list(&self.components)\n    }\n}\n\nimpl RunRepository for InMemoryHubStore {\n'''
+          new = '''    fn latest(&self, id: &ComponentId) -> Result<Option<ComponentManifest>, CoreError> {\n        ComponentRepository::latest(&self.components, id)\n    }\n\n    fn get(\n        &self,\n        id: &ComponentId,\n        version: &Version,\n    ) -> Result<Option<ComponentManifest>, CoreError> {\n        ComponentRepository::get(&self.components, id, version)\n    }\n\n    fn list(&self) -> Result<Vec<ComponentManifest>, CoreError> {\n        ComponentRepository::list(&self.components)\n    }\n}\n\nimpl RunRepository for InMemoryHubStore {\n'''
+          if s.count(old) != 1:
+              raise SystemExit(f'composite component registry anchor count={s.count(old)}')
+          p.write_text(s.replace(old, new, 1))
+          PY
       - name: Format
         run: cargo +1.89.0 fmt --all
       - name: Test Hub core and SQLite store
