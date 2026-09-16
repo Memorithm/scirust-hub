@@ -6,11 +6,13 @@
 
 use std::collections::BTreeMap;
 use std::io::{Read, Write};
-use std::sync::Mutex;
+use std::sync::{Arc, Mutex};
+
+use sha2::{Digest as _, Sha256};
 
 use crate::artifact::ArtifactMeta;
 use crate::component::ComponentManifest;
-use crate::digest::ContentDigest;
+use crate::digest::{self, ContentDigest, RawSha256};
 use crate::error::CoreError;
 use crate::event::{
     artifact_recorded_event, component_registered_event, derive_run_events, derive_workflow_events,
@@ -138,6 +140,10 @@ impl ArtifactMetadataRepository for InMemoryArtifactMeta {
 #[derive(Clone, Debug)]
 pub struct FileSystemArtifactStore {
     root: std::path::PathBuf,
+    // Portable-digest requests stream entire artifacts to re-verify immutable
+    // CAS metadata. Share one gate across clones so concurrent GETs cannot
+    // multiply full-file disk/CPU scans without bound.
+    portable_digest_scan: Arc<Mutex<()>>,
 }
 
 impl FileSystemArtifactStore {
@@ -149,12 +155,92 @@ impl FileSystemArtifactStore {
         let root = root.into();
         std::fs::create_dir_all(root.join("blobs"))
             .map_err(|e| CoreError::Storage(format!("creating blob dir: {e}")))?;
-        Ok(Self { root })
+        Ok(Self {
+            root,
+            portable_digest_scan: Arc::new(Mutex::new(())),
+        })
     }
 
     fn blob_path(&self, digest: &ContentDigest) -> std::path::PathBuf {
         let hex = digest.to_hex();
         self.root.join("blobs").join(&hex[..2]).join(hex)
+    }
+
+    /// Re-verifies stored artifact bytes and returns their ordinary SHA-256.
+    ///
+    /// The scan computes ordinary SHA-256 plus both Hub artifact domains used by
+    /// the orchestrator (`artifact-blob` and `capture`) in one pass, and checks
+    /// the exact byte count before exposing the portable digest. A shared
+    /// per-store mutex bounds portable-digest scans to one at a time across all
+    /// clones, preventing concurrent cheap GETs from multiplying full-file IO.
+    ///
+    /// # Errors
+    /// [`CoreError::BlobNotFound`] when the Hub CAS digest is unknown;
+    /// [`CoreError::Storage`] when the blob is not a regular file, cannot be
+    /// read, has the wrong byte count, no longer matches its Hub digest, or the
+    /// scan gate is poisoned.
+    pub fn verified_raw_sha256(
+        &self,
+        content_digest: &ContentDigest,
+        expected_size: u64,
+    ) -> Result<RawSha256, CoreError> {
+        let _scan_guard = self
+            .portable_digest_scan
+            .lock()
+            .map_err(|_| CoreError::Storage("portable digest scan lock poisoned".into()))?;
+        let path = self.blob_path(content_digest);
+        let metadata = std::fs::symlink_metadata(&path).map_err(|e| {
+            if e.kind() == std::io::ErrorKind::NotFound {
+                CoreError::BlobNotFound {
+                    hex: content_digest.to_string(),
+                }
+            } else {
+                CoreError::Storage(format!("stating blob for portable digest: {e}"))
+            }
+        })?;
+        if metadata.file_type().is_symlink() || !metadata.is_file() {
+            return Err(CoreError::Storage(
+                "portable digest source must be a regular non-symlink file".into(),
+            ));
+        }
+        let mut file = std::fs::File::open(&path)
+            .map_err(|e| CoreError::Storage(format!("opening blob for portable digest: {e}")))?;
+        let mut raw_state = Sha256::new();
+        let mut artifact_state = digest::DigestState::new(digest::DOMAIN_ARTIFACT_BLOB);
+        let mut capture_state = digest::DigestState::new(digest::DOMAIN_CAPTURE);
+        let mut size = 0u64;
+        let mut buf = [0u8; 64 * 1024];
+        loop {
+            let read = match file.read(&mut buf) {
+                Ok(0) => break,
+                Ok(read) => read,
+                Err(e) if e.kind() == std::io::ErrorKind::Interrupted => continue,
+                Err(e) => {
+                    return Err(CoreError::Storage(format!(
+                        "reading blob for portable digest: {e}"
+                    )))
+                }
+            };
+            size = size
+                .checked_add(read as u64)
+                .ok_or_else(|| CoreError::Storage("portable digest byte count overflow".into()))?;
+            raw_state.update(&buf[..read]);
+            artifact_state.update(&buf[..read]);
+            capture_state.update(&buf[..read]);
+        }
+        if size != expected_size {
+            return Err(CoreError::Storage(format!(
+                "artifact byte count mismatch: metadata={expected_size}, stored={size}"
+            )));
+        }
+        let artifact_digest = artifact_state.finalize();
+        let capture_digest = capture_state.finalize();
+        if content_digest != &artifact_digest && content_digest != &capture_digest {
+            return Err(CoreError::Storage(format!(
+                "artifact content digest mismatch for stored blob {content_digest}"
+            )));
+        }
+        Ok(RawSha256::from_bytes(raw_state.finalize().into()))
     }
 }
 
@@ -635,6 +721,61 @@ mod tests {
         store.copy_to_path(&d1, &dest).expect("copy");
         assert_eq!(std::fs::read(&dest).expect("copied"), data);
         drop(store);
+        std::fs::remove_dir_all(&dir).expect("cleanup");
+    }
+
+    #[test]
+    fn portable_digest_reverifies_bytes_and_serializes_scans() {
+        let dir = std::env::temp_dir().join(format!(
+            "hub-core-portable-digest-test-{}",
+            uuid::Uuid::new_v4()
+        ));
+        let store = FileSystemArtifactStore::open(&dir).expect("open");
+        let clone = store.clone();
+        assert!(Arc::ptr_eq(
+            &store.portable_digest_scan,
+            &clone.portable_digest_scan
+        ));
+
+        let data = b"artifact payload";
+        let digest = store
+            .put(
+                data,
+                u64::from(u32::MAX),
+                crate::digest::DOMAIN_ARTIFACT_BLOB,
+            )
+            .expect("put");
+        assert_eq!(
+            store
+                .verified_raw_sha256(&digest, data.len() as u64)
+                .expect("verified portable digest"),
+            crate::digest::raw_sha256_bytes(data)
+        );
+
+        let path = store.blob_path(&digest);
+        std::fs::write(&path, vec![b'X'; data.len()]).expect("corrupt same-size blob");
+        assert!(matches!(
+            store.verified_raw_sha256(&digest, data.len() as u64),
+            Err(CoreError::Storage(message)) if message.contains("content digest mismatch")
+        ));
+
+        std::fs::write(&path, &data[..data.len() - 1]).expect("truncate blob");
+        assert!(matches!(
+            store.verified_raw_sha256(&digest, data.len() as u64),
+            Err(CoreError::Storage(message)) if message.contains("byte count mismatch")
+        ));
+
+        let capture = b"captured stderr";
+        let capture_digest = store
+            .put(capture, u64::from(u32::MAX), crate::digest::DOMAIN_CAPTURE)
+            .expect("put capture");
+        assert_eq!(
+            store
+                .verified_raw_sha256(&capture_digest, capture.len() as u64)
+                .expect("verified capture digest"),
+            crate::digest::raw_sha256_bytes(capture)
+        );
+
         std::fs::remove_dir_all(&dir).expect("cleanup");
     }
 

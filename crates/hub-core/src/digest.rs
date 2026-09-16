@@ -96,6 +96,98 @@ impl<'de> Deserialize<'de> for ContentDigest {
     }
 }
 
+/// Ordinary SHA-256 over artifact bytes for portable cross-repository identity.
+///
+/// This type is intentionally distinct from [`ContentDigest`], whose preimage is
+/// Hub-domain-separated and is the only valid Hub CAS key.
+#[derive(Clone, Copy, PartialEq, Eq, Hash, PartialOrd, Ord)]
+pub struct RawSha256([u8; DIGEST_LEN]);
+
+impl RawSha256 {
+    #[must_use]
+    pub const fn from_bytes(bytes: [u8; DIGEST_LEN]) -> Self {
+        Self(bytes)
+    }
+
+    #[must_use]
+    pub const fn as_bytes(&self) -> &[u8; DIGEST_LEN] {
+        &self.0
+    }
+
+    #[must_use]
+    pub fn to_hex(&self) -> String {
+        let mut out = String::with_capacity(DIGEST_LEN * 2);
+        for byte in self.0 {
+            out.push(HEX[(byte >> 4) as usize] as char);
+            out.push(HEX[(byte & 0x0f) as usize] as char);
+        }
+        out
+    }
+
+    pub fn from_hex(hex: &str) -> Result<Self, ParseDigestError> {
+        if hex.len() != DIGEST_LEN * 2 {
+            return Err(ParseDigestError);
+        }
+        let bytes = hex.as_bytes();
+        let mut out = [0u8; DIGEST_LEN];
+        for (i, slot) in out.iter_mut().enumerate() {
+            let hi = hex_value(bytes[i * 2]).ok_or(ParseDigestError)?;
+            let lo = hex_value(bytes[i * 2 + 1]).ok_or(ParseDigestError)?;
+            *slot = (hi << 4) | lo;
+        }
+        Ok(Self(out))
+    }
+}
+
+impl fmt::Display for RawSha256 {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.write_str(&self.to_hex())
+    }
+}
+
+impl fmt::Debug for RawSha256 {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(f, "RawSha256({self})")
+    }
+}
+
+impl Serialize for RawSha256 {
+    fn serialize<S: serde::Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
+        serializer.serialize_str(&self.to_hex())
+    }
+}
+
+impl<'de> Deserialize<'de> for RawSha256 {
+    fn deserialize<D: serde::Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
+        let hex = String::deserialize(deserializer)?;
+        Self::from_hex(&hex).map_err(serde::de::Error::custom)
+    }
+}
+
+/// One-shot ordinary SHA-256. Unlike [`hash_bytes`], no Hub domain prefix is added.
+#[must_use]
+pub fn raw_sha256_bytes(data: &[u8]) -> RawSha256 {
+    RawSha256(Sha256::digest(data).into())
+}
+
+/// Streaming ordinary SHA-256 for portable artifact verification without buffering.
+///
+/// # Errors
+/// Propagates IO errors from the reader.
+pub fn raw_sha256_reader<R: Read>(reader: &mut R) -> std::io::Result<RawSha256> {
+    let mut state = Sha256::new();
+    let mut buf = [0u8; 64 * 1024];
+    loop {
+        match reader.read(&mut buf) {
+            Ok(0) => break,
+            Ok(n) => state.update(&buf[..n]),
+            Err(e) if e.kind() == std::io::ErrorKind::Interrupted => continue,
+            Err(e) => return Err(e),
+        }
+    }
+    Ok(RawSha256(state.finalize().into()))
+}
+
 /// One-shot domain-separated hash of in-memory bytes.
 #[must_use]
 pub fn hash_bytes(domain: &[u8], data: &[u8]) -> ContentDigest {
@@ -160,6 +252,26 @@ fn hex_value(c: u8) -> Option<u8> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn raw_sha256_is_portable_and_not_a_hub_digest() {
+        let raw = raw_sha256_bytes(b"abc");
+        assert_eq!(
+            raw.to_hex(),
+            "ba7816bf8f01cfea414140de5dae2223b00361a396177a9cb410ff61f20015ad"
+        );
+        assert_ne!(
+            raw.as_bytes(),
+            hash_bytes(DOMAIN_ARTIFACT_BLOB, b"abc").as_bytes()
+        );
+        let mut reader = &b"abc"[..];
+        assert_eq!(raw_sha256_reader(&mut reader).expect("read"), raw);
+        let encoded = serde_json::to_string(&raw).expect("serialize");
+        assert_eq!(
+            serde_json::from_str::<RawSha256>(&encoded).expect("decode"),
+            raw
+        );
+    }
 
     #[test]
     fn domains_are_separated() {

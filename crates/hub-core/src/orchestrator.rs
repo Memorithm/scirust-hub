@@ -793,6 +793,24 @@ impl Orchestrator {
         Ok((meta, bytes))
     }
 
+    /// Computes portable ordinary SHA-256 for one stored artifact without buffering the blob.
+    ///
+    /// The returned [`crate::RawSha256`] is deliberately not a Hub CAS key.
+    ///
+    /// # Errors
+    /// Artifact lookup, blob lookup, or storage failures.
+    pub fn artifact_raw_sha256(
+        &self,
+        id: &ArtifactId,
+    ) -> Result<(crate::artifact::ArtifactMeta, crate::RawSha256), CoreError> {
+        let meta = self
+            .artifacts_meta
+            .get(id)?
+            .ok_or(CoreError::ArtifactNotFound(*id))?;
+        let raw = self.blobs.verified_raw_sha256(&meta.digest, meta.size)?;
+        Ok((meta, raw))
+    }
+
     #[must_use]
     pub fn blob_store(&self) -> &FileSystemArtifactStore {
         &self.blobs
