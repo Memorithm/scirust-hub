@@ -120,6 +120,10 @@ pub fn router(state: HubState) -> Router {
             post(submit_workflow).get(list_workflows),
         )
         .route("/api/v1/workflows/{id}", get(get_workflow))
+        .route(
+            "/api/v1/workflows/{id}/steps/{step_key}/publication",
+            get(get_authoritative_step_publication),
+        )
         .route("/api/v1/workflows/{id}/cancel", post(cancel_workflow))
         .route("/api/v1/workflows/{id}/executions", post(execute_workflow))
         .route(
@@ -628,6 +632,32 @@ async fn get_workflow(State(state): State<HubState>, Path(id): Path<String>) -> 
         Ok(Some(record)) => Json(proto::WorkflowDto::from(&record)).into_response(),
         Ok(None) => not_found("workflow", &id),
         Err(_) => internal("workflow lookup failed"),
+    }
+}
+
+async fn get_authoritative_step_publication(
+    State(state): State<HubState>,
+    Path((id, step_key)): Path<(String, String)>,
+) -> Response {
+    let Some(parsed) = typed_id::<hub_core::WorkflowId>(&id) else {
+        return not_found("workflow", &id);
+    };
+    let orch = state.orchestrator.clone();
+    let lookup_step_key = step_key.clone();
+    match joined(
+        tokio::task::spawn_blocking(move || {
+            orch.authoritative_step_publication(parsed, &lookup_step_key)
+        })
+        .await,
+    ) {
+        Ok(Some(publication)) => {
+            Json(proto::AuthoritativeStepPublicationDto::from(&publication)).into_response()
+        }
+        Ok(None) => not_found(
+            "authoritative workflow-step publication",
+            &format!("{id}/{step_key}"),
+        ),
+        Err(response) => response,
     }
 }
 
