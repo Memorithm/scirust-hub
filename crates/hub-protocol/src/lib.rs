@@ -390,6 +390,10 @@ pub struct SubmitWorkflowRequest {
     /// Domain workflow spec (already serde-shaped and validated on the core
     /// side, mirroring how run input bindings travel).
     pub workflow: hub_core::WorkflowSpec,
+    /// Optional exact registry identity for every workflow step. Omission
+    /// preserves the legacy unpinned workflow/v1 contract.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub admission: Option<hub_core::WorkflowAdmissionPins>,
 }
 
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
@@ -402,6 +406,8 @@ pub struct WorkflowDto {
     pub id: hub_core::WorkflowId,
     pub name: String,
     pub state: hub_core::WorkflowState,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub admission: Option<hub_core::WorkflowAdmissionPins>,
     pub model_version: Version,
     pub created_at: u64,
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -487,6 +493,7 @@ impl From<&hub_core::WorkflowRecord> for WorkflowDto {
             id: w.id,
             name: w.spec.name.clone(),
             state: w.state,
+            admission: w.admission.clone(),
             model_version: w.model_version.clone(),
             created_at: w.created_at,
             started_at: w.started_at,
