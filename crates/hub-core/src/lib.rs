@@ -27,6 +27,7 @@ pub mod id;
 pub mod limits;
 pub mod memory;
 pub mod orchestrator;
+pub mod publication;
 pub mod run;
 pub mod scicapsule;
 pub mod store;
@@ -55,6 +56,10 @@ pub use memory::{
     InMemoryRuns, InMemoryWorkflows,
 };
 pub use orchestrator::{Orchestrator, RegistrationStatus};
+pub use publication::{
+    AuthoritativeStepPublication, InMemoryPublicationFences, PublicationCommit, PublicationFence,
+    PublicationFenceRepository, MAX_PUBLICATION_OUTPUTS, PUBLICATION_FENCE_SCHEMA_VERSION,
+};
 pub use run::{
     InputBinding, InputProvenance, OutputRef, RunOutcome, RunRecord, RunSpec, RunState, Transition,
 };
