@@ -1,0 +1,602 @@
+name: One-shot durable publication fence repository
+
+on:
+  push:
+    branches:
+      - industrialize/durable-publication-fence
+
+permissions:
+  contents: write
+
+env:
+  CARGO_INCREMENTAL: 0
+  CARGO_TERM_COLOR: always
+
+jobs:
+  implement:
+    if: github.actor != 'github-actions[bot]'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: industrialize/durable-publication-fence
+          fetch-depth: 0
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: rustfmt, clippy
+      - name: Implement durable publication-fence repository contract
+        shell: bash
+        run: |
+          python3 - <<'PY'
+          from pathlib import Path
+
+          publication = r'''//! Durable fencing primitives for authoritative workflow-step publication.
+//!
+//! The fence is Hub-owned orchestration state. It carries no TDI scientific
+//! semantics and grants no capability outside one workflow step attempt.
+
+use serde::{Deserialize, Serialize};
+
+use crate::error::CoreError;
+use crate::id::{ArtifactId, AttemptId, WorkflowId};
+
+/// Current publication-fence contract version.
+pub const PUBLICATION_FENCE_VERSION: u16 = 1;
+
+/// Durable authority token for one current workflow-step attempt.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub struct PublicationFence {
+    pub version: u16,
+    pub workflow: WorkflowId,
+    pub step_key: String,
+    pub attempt: AttemptId,
+    /// Monotone generation for `(workflow, step_key)`, starting at one.
+    pub generation: u64,
+}
+
+impl PublicationFence {
+    /// Validate interchange shape and bounds.
+    ///
+    /// # Errors
+    /// [`CoreError::Validation`] for unsupported versions or invalid keys.
+    pub fn validate(&self) -> Result<(), CoreError> {
+        if self.version != PUBLICATION_FENCE_VERSION {
+            return Err(CoreError::Validation(format!(
+                "unsupported publication fence version {}",
+                self.version
+            )));
+        }
+        validate_publication_key(&self.step_key, "step key")?;
+        if self.generation == 0 {
+            return Err(CoreError::Validation(
+                "publication fence generation must be non-zero".into(),
+            ));
+        }
+        Ok(())
+    }
+}
+
+/// Result of an atomic authoritative artifact publication.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum AuthoritativePublication {
+    /// New metadata was inserted and bound to the current fence/output slot.
+    Created(ArtifactId),
+    /// The same logical slot was replayed byte-identically; existing metadata wins.
+    Replayed(ArtifactId),
+}
+
+/// Validate a short printable publication slot/key.
+///
+/// # Errors
+/// [`CoreError::Validation`] for empty, oversized or control-containing values.
+pub fn validate_publication_key(value: &str, label: &str) -> Result<(), CoreError> {
+    if value.is_empty()
+        || value.len() > 128
+        || value.chars().any(|character| character.is_control())
+    {
+        return Err(CoreError::Validation(format!(
+            "publication {label} must be 1..=128 printable characters"
+        )));
+    }
+    Ok(())
+}
+
+/// Metadata equality relevant to an idempotent authoritative replay.
+///
+/// Artifact ids and timestamps are intentionally excluded: a replay may arrive
+/// with freshly proposed metadata, but it may only resolve to the first artifact
+/// when all logical content/provenance fields are identical.
+#[must_use]
+pub fn replay_equivalent(
+    left: &crate::artifact::ArtifactMeta,
+    right: &crate::artifact::ArtifactMeta,
+) -> bool {
+    left.name == right.name
+        && left.media_type == right.media_type
+        && left.digest == right.digest
+        && left.size == right.size
+        && left.produced_by_run == right.produced_by_run
+}
+'''
+          Path('crates/hub-core/src/publication.rs').write_text(publication)
+
+          lib = Path('crates/hub-core/src/lib.rs')
+          text = lib.read_text()
+          text = text.replace('pub mod orchestrator;\n', 'pub mod orchestrator;\npub mod publication;\n', 1)
+          text = text.replace(
+              'pub use orchestrator::{Orchestrator, RegistrationStatus};\n',
+              'pub use orchestrator::{Orchestrator, RegistrationStatus};\npub use publication::{AuthoritativePublication, PublicationFence, PUBLICATION_FENCE_VERSION};\n',
+              1,
+          )
+          lib.write_text(text)
+
+          store = Path('crates/hub-core/src/store.rs')
+          text = store.read_text()
+          marker = '''/// Repository of workflow records.\npub trait WorkflowRepository: Send + Sync {\n'''
+          addition = '''/// Durable Hub-owned publication-fence and authoritative metadata port.\n///\n/// Fence advance and publication are generic orchestration operations. They\n/// contain no scientific verdict semantics. Implementations must make the\n/// current-fence check atomic with publication-slot insertion.\npub trait PublicationRepository: Send + Sync {\n    /// Advance `(workflow, step_key)` to a fresh monotone generation for\n    /// `attempt` and return the durable current fence.\n    ///\n    /// # Errors\n    /// Validation, generation overflow or backend failures.\n    fn advance_publication_fence(\n        &self,\n        workflow: crate::id::WorkflowId,\n        step_key: &str,\n        attempt: crate::id::AttemptId,\n    ) -> Result<crate::publication::PublicationFence, CoreError>;\n\n    /// Return the current durable fence for one workflow step, if any.\n    ///\n    /// # Errors\n    /// Backend failures only.\n    fn current_publication_fence(\n        &self,\n        workflow: crate::id::WorkflowId,\n        step_key: &str,\n    ) -> Result<Option<crate::publication::PublicationFence>, CoreError>;\n\n    /// Atomically verify `fence` is current and bind one logical output slot\n    /// to artifact metadata. Identical replay returns the first artifact id;\n    /// stale fences and conflicting duplicates fail closed.\n    ///\n    /// # Errors\n    /// [`CoreError::PublicationFenceStale`],\n    /// [`CoreError::AuthoritativePublicationConflict`], validation or backend failures.\n    fn publish_authoritative_artifact(\n        &self,\n        fence: &crate::publication::PublicationFence,\n        output_key: &str,\n        meta: &ArtifactMeta,\n    ) -> Result<crate::publication::AuthoritativePublication, CoreError>;\n}\n\n'''
+          if marker not in text:
+              raise SystemExit('store marker not found')
+          store.write_text(text.replace(marker, addition + marker, 1))
+
+          error = Path('crates/hub-core/src/error.rs')
+          text = error.read_text()
+          text = text.replace(
+              'use crate::id::{ArtifactId, ComponentId, RunId};\n',
+              'use crate::id::{ArtifactId, AttemptId, ComponentId, RunId, WorkflowId};\n',
+              1,
+          )
+          marker = '''    #[error("storage failure: {0}")]\n    Storage(String),\n'''
+          variants = '''    #[error("publication fence for workflow {workflow} step {step_key:?} is stale (attempt {attempt}, generation {generation})")]\n    PublicationFenceStale {\n        workflow: WorkflowId,\n        step_key: String,\n        attempt: AttemptId,\n        generation: u64,\n    },\n    #[error("authoritative publication conflict for workflow {workflow} step {step_key:?} generation {generation} output {output_key:?}")]\n    AuthoritativePublicationConflict {\n        workflow: WorkflowId,\n        step_key: String,\n        generation: u64,\n        output_key: String,\n    },\n    #[error("publication generation overflow for workflow {workflow} step {step_key:?}")]\n    PublicationGenerationOverflow {\n        workflow: WorkflowId,\n        step_key: String,\n    },\n    #[error("storage failure: {0}")]\n    Storage(String),\n'''
+          if marker not in text:
+              raise SystemExit('error marker not found')
+          error.write_text(text.replace(marker, variants, 1))
+
+          memory = Path('crates/hub-core/src/memory.rs')
+          text = memory.read_text()
+          text = text.replace(
+              'use crate::store::{\n    ArtifactMetadataRepository, ArtifactStore, ComponentRepository, RunRepository,\n    WorkflowRepository,\n};\n',
+              'use crate::store::{\n    ArtifactMetadataRepository, ArtifactStore, ComponentRepository, PublicationRepository,\n    RunRepository, WorkflowRepository,\n};\n',
+              1,
+          )
+          # Add publication state to composite store only. Orchestrator/daemon use this type.\n          old = '''pub struct InMemoryHubStore {\n    components: InMemoryComponents,\n    runs: InMemoryRuns,\n    artifacts: InMemoryArtifactMeta,\n    workflows: InMemoryWorkflows,\n    events: InMemoryLifecycleEvents,\n}\n'''
+          new = '''pub struct InMemoryHubStore {\n    components: InMemoryComponents,\n    runs: InMemoryRuns,\n    artifacts: InMemoryArtifactMeta,\n    workflows: InMemoryWorkflows,\n    events: InMemoryLifecycleEvents,\n    publication: Mutex<InMemoryPublicationState>,\n}\n\n#[derive(Debug, Default)]\nstruct InMemoryPublicationState {\n    fences: BTreeMap<(crate::id::WorkflowId, String), crate::publication::PublicationFence>,\n    slots: BTreeMap<(crate::id::WorkflowId, String, u64, String), ArtifactId>,\n}\n'''
+          if old not in text:
+              raise SystemExit('memory hub store marker not found')
+          text = text.replace(old, new, 1)
+          marker = '''impl WorkflowRepository for InMemoryHubStore {\n'''
+          impl_block = r'''impl PublicationRepository for InMemoryHubStore {
+    fn advance_publication_fence(
+        &self,
+        workflow: crate::id::WorkflowId,
+        step_key: &str,
+        attempt: crate::id::AttemptId,
+    ) -> Result<crate::publication::PublicationFence, CoreError> {
+        crate::publication::validate_publication_key(step_key, "step key")?;
+        let mut state = self.publication.lock().map_err(poison)?;
+        let key = (workflow, step_key.to_owned());
+        let generation = state
+            .fences
+            .get(&key)
+            .map_or(Ok(1), |current| {
+                current.generation.checked_add(1).ok_or_else(|| {
+                    CoreError::PublicationGenerationOverflow {
+                        workflow,
+                        step_key: step_key.to_owned(),
+                    }
+                })
+            })?;
+        let fence = crate::publication::PublicationFence {
+            version: crate::publication::PUBLICATION_FENCE_VERSION,
+            workflow,
+            step_key: step_key.to_owned(),
+            attempt,
+            generation,
+        };
+        state.fences.insert(key, fence.clone());
+        Ok(fence)
+    }
+
+    fn current_publication_fence(
+        &self,
+        workflow: crate::id::WorkflowId,
+        step_key: &str,
+    ) -> Result<Option<crate::publication::PublicationFence>, CoreError> {
+        let state = self.publication.lock().map_err(poison)?;
+        Ok(state
+            .fences
+            .get(&(workflow, step_key.to_owned()))
+            .cloned())
+    }
+
+    fn publish_authoritative_artifact(
+        &self,
+        fence: &crate::publication::PublicationFence,
+        output_key: &str,
+        meta: &ArtifactMeta,
+    ) -> Result<crate::publication::AuthoritativePublication, CoreError> {
+        fence.validate()?;
+        crate::publication::validate_publication_key(output_key, "output key")?;
+        meta.validate()?;
+        let mut state = self.publication.lock().map_err(poison)?;
+        let fence_key = (fence.workflow, fence.step_key.clone());
+        if state.fences.get(&fence_key) != Some(fence) {
+            return Err(CoreError::PublicationFenceStale {
+                workflow: fence.workflow,
+                step_key: fence.step_key.clone(),
+                attempt: fence.attempt,
+                generation: fence.generation,
+            });
+        }
+        let slot_key = (
+            fence.workflow,
+            fence.step_key.clone(),
+            fence.generation,
+            output_key.to_owned(),
+        );
+        if let Some(existing_id) = state.slots.get(&slot_key).copied() {
+            let existing = ArtifactMetadataRepository::get(&self.artifacts, &existing_id)?
+                .ok_or_else(|| CoreError::Storage("publication slot references missing artifact".into()))?;
+            if crate::publication::replay_equivalent(&existing, meta) {
+                return Ok(crate::publication::AuthoritativePublication::Replayed(existing_id));
+            }
+            return Err(CoreError::AuthoritativePublicationConflict {
+                workflow: fence.workflow,
+                step_key: fence.step_key.clone(),
+                generation: fence.generation,
+                output_key: output_key.to_owned(),
+            });
+        }
+        let existed = ArtifactMetadataRepository::get(&self.artifacts, &meta.id)?.is_some();
+        ArtifactMetadataRepository::put(&self.artifacts, meta)?;
+        if !existed {
+            self.events.record(artifact_recorded_event(meta))?;
+        }
+        state.slots.insert(slot_key, meta.id);
+        Ok(crate::publication::AuthoritativePublication::Created(meta.id))
+    }
+}
+
+'''
+          if marker not in text:
+              raise SystemExit('memory workflow impl marker not found')
+          text = text.replace(marker, impl_block + marker, 1)
+          memory.write_text(text)
+
+          sqlite = Path('crates/hub-store-sqlite/src/lib.rs')
+          text = sqlite.read_text()
+          text = text.replace(
+              '    ArtifactMetadataRepository, ComponentRepository, RunRepository, WorkflowRepository,\n',
+              '    ArtifactMetadataRepository, ComponentRepository, PublicationRepository, RunRepository,\n    WorkflowRepository,\n',
+              1,
+          )
+          # Add forward-only v4 migration after lifecycle v3 string.\n          needle = '''    "CREATE TABLE lifecycle_events (\n        sequence        INTEGER PRIMARY KEY AUTOINCREMENT,\n        recorded_at     INTEGER NOT NULL,\n        kind            TEXT    NOT NULL,\n        entity_type     TEXT    NOT NULL,\n        entity_id       TEXT    NOT NULL,\n        attributes_json TEXT    NOT NULL\n    );\n    CREATE INDEX idx_lifecycle_events_entity\n        ON lifecycle_events (entity_type, entity_id, sequence);",\n];\n'''
+          repl = '''    "CREATE TABLE lifecycle_events (\n        sequence        INTEGER PRIMARY KEY AUTOINCREMENT,\n        recorded_at     INTEGER NOT NULL,\n        kind            TEXT    NOT NULL,\n        entity_type     TEXT    NOT NULL,\n        entity_id       TEXT    NOT NULL,\n        attributes_json TEXT    NOT NULL\n    );\n    CREATE INDEX idx_lifecycle_events_entity\n        ON lifecycle_events (entity_type, entity_id, sequence);",\n    // v4: durable authoritative-publication fencing.\n    "CREATE TABLE publication_fences (\n        workflow_id TEXT NOT NULL,\n        step_key    TEXT NOT NULL,\n        attempt_id  TEXT NOT NULL,\n        generation  INTEGER NOT NULL CHECK (generation > 0),\n        PRIMARY KEY (workflow_id, step_key)\n    );\n    CREATE TABLE authoritative_publications (\n        workflow_id TEXT NOT NULL,\n        step_key    TEXT NOT NULL,\n        generation  INTEGER NOT NULL,\n        output_key  TEXT NOT NULL,\n        artifact_id TEXT NOT NULL UNIQUE,\n        PRIMARY KEY (workflow_id, step_key, generation, output_key),\n        FOREIGN KEY (artifact_id) REFERENCES artifact_meta(id)\n    );",\n];\n'''
+          if needle not in text:
+              raise SystemExit('sqlite migration marker not found')
+          text = text.replace(needle, repl, 1)
+
+          marker = '''impl WorkflowRepository for SqliteStore {\n'''
+          impl_block = r'''impl PublicationRepository for SqliteStore {
+    fn advance_publication_fence(
+        &self,
+        workflow: hub_core::WorkflowId,
+        step_key: &str,
+        attempt: hub_core::AttemptId,
+    ) -> Result<hub_core::PublicationFence, CoreError> {
+        hub_core::publication::validate_publication_key(step_key, "step key")?;
+        let mut conn = self.lock()?;
+        let tx = conn
+            .transaction()
+            .map_err(storage("beginning publication fence advance"))?;
+        let current: Option<i64> = tx
+            .query_row(
+                "SELECT generation FROM publication_fences WHERE workflow_id = ?1 AND step_key = ?2",
+                rusqlite::params![workflow.to_string(), step_key],
+                |row| row.get(0),
+            )
+            .optional()
+            .map_err(storage("loading publication fence"))?;
+        let generation = match current {
+            Some(value) => u64::try_from(value)
+                .ok()
+                .and_then(|value| value.checked_add(1))
+                .ok_or_else(|| CoreError::PublicationGenerationOverflow {
+                    workflow,
+                    step_key: step_key.to_owned(),
+                })?,
+            None => 1,
+        };
+        let generation_i64 = i64::try_from(generation).map_err(|_| {
+            CoreError::PublicationGenerationOverflow {
+                workflow,
+                step_key: step_key.to_owned(),
+            }
+        })?;
+        tx.execute(
+            "INSERT INTO publication_fences (workflow_id, step_key, attempt_id, generation)
+             VALUES (?1, ?2, ?3, ?4)
+             ON CONFLICT(workflow_id, step_key) DO UPDATE SET
+                attempt_id = excluded.attempt_id,
+                generation = excluded.generation",
+            rusqlite::params![workflow.to_string(), step_key, attempt.to_string(), generation_i64],
+        )
+        .map_err(storage("advancing publication fence"))?;
+        tx.commit()
+            .map_err(storage("committing publication fence advance"))?;
+        Ok(hub_core::PublicationFence {
+            version: hub_core::PUBLICATION_FENCE_VERSION,
+            workflow,
+            step_key: step_key.to_owned(),
+            attempt,
+            generation,
+        })
+    }
+
+    fn current_publication_fence(
+        &self,
+        workflow: hub_core::WorkflowId,
+        step_key: &str,
+    ) -> Result<Option<hub_core::PublicationFence>, CoreError> {
+        let conn = self.lock()?;
+        let row: Option<(String, i64)> = conn
+            .query_row(
+                "SELECT attempt_id, generation FROM publication_fences WHERE workflow_id = ?1 AND step_key = ?2",
+                rusqlite::params![workflow.to_string(), step_key],
+                |row| Ok((row.get(0)?, row.get(1)?)),
+            )
+            .optional()
+            .map_err(storage("loading current publication fence"))?;
+        row.map(|(attempt, generation)| {
+            let attempt = attempt.parse().map_err(|error| {
+                CoreError::Storage(format!("stored publication attempt id is invalid: {error}"))
+            })?;
+            let generation = u64::try_from(generation).map_err(|_| {
+                CoreError::Storage("stored publication generation is invalid".into())
+            })?;
+            let fence = hub_core::PublicationFence {
+                version: hub_core::PUBLICATION_FENCE_VERSION,
+                workflow,
+                step_key: step_key.to_owned(),
+                attempt,
+                generation,
+            };
+            fence.validate()?;
+            Ok(fence)
+        })
+        .transpose()
+    }
+
+    fn publish_authoritative_artifact(
+        &self,
+        fence: &hub_core::PublicationFence,
+        output_key: &str,
+        meta: &ArtifactMeta,
+    ) -> Result<hub_core::AuthoritativePublication, CoreError> {
+        fence.validate()?;
+        hub_core::publication::validate_publication_key(output_key, "output key")?;
+        meta.validate()?;
+        let mut conn = self.lock()?;
+        let tx = conn
+            .transaction()
+            .map_err(storage("beginning authoritative publication"))?;
+        let current: Option<(String, i64)> = tx
+            .query_row(
+                "SELECT attempt_id, generation FROM publication_fences WHERE workflow_id = ?1 AND step_key = ?2",
+                rusqlite::params![fence.workflow.to_string(), fence.step_key],
+                |row| Ok((row.get(0)?, row.get(1)?)),
+            )
+            .optional()
+            .map_err(storage("loading publication fence for commit"))?;
+        let fence_matches = current.as_ref().is_some_and(|(attempt, generation)| {
+            attempt == &fence.attempt.to_string()
+                && u64::try_from(*generation).ok() == Some(fence.generation)
+        });
+        if !fence_matches {
+            return Err(CoreError::PublicationFenceStale {
+                workflow: fence.workflow,
+                step_key: fence.step_key.clone(),
+                attempt: fence.attempt,
+                generation: fence.generation,
+            });
+        }
+        let generation_i64 = i64::try_from(fence.generation).map_err(|_| {
+            CoreError::PublicationGenerationOverflow {
+                workflow: fence.workflow,
+                step_key: fence.step_key.clone(),
+            }
+        })?;
+        let existing_id: Option<String> = tx
+            .query_row(
+                "SELECT artifact_id FROM authoritative_publications
+                 WHERE workflow_id = ?1 AND step_key = ?2 AND generation = ?3 AND output_key = ?4",
+                rusqlite::params![
+                    fence.workflow.to_string(),
+                    fence.step_key,
+                    generation_i64,
+                    output_key
+                ],
+                |row| row.get(0),
+            )
+            .optional()
+            .map_err(storage("loading authoritative publication slot"))?;
+        if let Some(existing_id) = existing_id {
+            let existing_json: String = tx
+                .query_row(
+                    "SELECT meta_json FROM artifact_meta WHERE id = ?1",
+                    rusqlite::params![existing_id],
+                    |row| row.get(0),
+                )
+                .map_err(storage("loading replay artifact metadata"))?;
+            let existing: ArtifactMeta = serde_json::from_str(&existing_json).map_err(|error| {
+                CoreError::Storage(format!("stored replay artifact failed to deserialize: {error}"))
+            })?;
+            if hub_core::publication::replay_equivalent(&existing, meta) {
+                return Ok(hub_core::AuthoritativePublication::Replayed(existing.id));
+            }
+            return Err(CoreError::AuthoritativePublicationConflict {
+                workflow: fence.workflow,
+                step_key: fence.step_key.clone(),
+                generation: fence.generation,
+                output_key: output_key.to_owned(),
+            });
+        }
+        let json = serde_json::to_string(meta)
+            .map_err(|error| CoreError::Storage(format!("serializing artifact meta: {error}")))?;
+        let conflicting_id: Option<String> = tx
+            .query_row(
+                "SELECT meta_json FROM artifact_meta WHERE id = ?1",
+                rusqlite::params![meta.id.to_string()],
+                |row| row.get(0),
+            )
+            .optional()
+            .map_err(storage("checking authoritative artifact id"))?;
+        if let Some(existing_json) = conflicting_id {
+            let existing: ArtifactMeta = serde_json::from_str(&existing_json).map_err(|error| {
+                CoreError::Storage(format!("stored authoritative artifact failed to deserialize: {error}"))
+            })?;
+            if existing != *meta {
+                return Err(CoreError::Validation(format!(
+                    "artifact {} already exists with divergent metadata",
+                    meta.id
+                )));
+            }
+        } else {
+            tx.execute(
+                "INSERT INTO artifact_meta (id, digest, created_at, meta_json) VALUES (?1, ?2, ?3, ?4)",
+                rusqlite::params![meta.id.to_string(), meta.digest.to_hex(), meta.created_at, json],
+            )
+            .map_err(storage("inserting authoritative artifact meta"))?;
+            append_event_tx(&tx, &artifact_recorded_event(meta))?;
+        }
+        tx.execute(
+            "INSERT INTO authoritative_publications
+             (workflow_id, step_key, generation, output_key, artifact_id)
+             VALUES (?1, ?2, ?3, ?4, ?5)",
+            rusqlite::params![
+                fence.workflow.to_string(),
+                fence.step_key,
+                generation_i64,
+                output_key,
+                meta.id.to_string()
+            ],
+        )
+        .map_err(storage("binding authoritative publication slot"))?;
+        tx.commit()
+            .map_err(storage("committing authoritative publication"))?;
+        Ok(hub_core::AuthoritativePublication::Created(meta.id))
+    }
+}
+
+'''
+          if marker not in text:
+              raise SystemExit('sqlite workflow impl marker not found')
+          text = text.replace(marker, impl_block + marker, 1)
+
+          # Add deterministic durable repository tests before existing test module end.\n          marker = '''#[cfg(test)]\nmod tests {\n'''
+          if marker not in text:
+              raise SystemExit('sqlite tests marker not found')
+          # Imports are already super::*; add trait and fixture helpers in module.\n          text = text.replace(
+              marker,
+              marker + '    use hub_core::publication::AuthoritativePublication;\n    use hub_core::store::PublicationRepository as _;\n\n',
+              1,
+          )
+          insert = r'''
+    #[test]
+    fn publication_fences_are_durable_monotone_and_fail_closed() {
+        let dir = std::env::temp_dir().join(format!("hub-sqlite-fence-{}", uuid::Uuid::new_v4()));
+        std::fs::create_dir_all(&dir).expect("mkdir");
+        let db = dir.join("hub.db");
+        let workflow = hub_core::WorkflowId::generate();
+        let first_attempt = hub_core::AttemptId::generate();
+        let first = {
+            let store = SqliteStore::open(&db).expect("open");
+            let first = store
+                .advance_publication_fence(workflow, "fit", first_attempt)
+                .expect("first fence");
+            assert_eq!(first.generation, 1);
+            first
+        };
+        let store = SqliteStore::open(&db).expect("reopen");
+        assert_eq!(
+            store
+                .current_publication_fence(workflow, "fit")
+                .expect("current"),
+            Some(first.clone())
+        );
+        let second = store
+            .advance_publication_fence(workflow, "fit", hub_core::AttemptId::generate())
+            .expect("second fence");
+        assert_eq!(second.generation, 2);
+
+        let meta = ArtifactMeta {
+            id: hub_core::ArtifactId::generate(),
+            name: "result".into(),
+            media_type: "application/octet-stream".into(),
+            digest: hub_core::digest::hash_bytes(hub_core::digest::DOMAIN_ARTIFACT_BLOB, b"x"),
+            size: 1,
+            created_at: 10,
+            produced_by_run: Some(hub_core::RunId::generate()),
+        };
+        assert!(matches!(
+            store.publish_authoritative_artifact(&first, "file:result", &meta),
+            Err(CoreError::PublicationFenceStale { .. })
+        ));
+        assert_eq!(
+            store
+                .publish_authoritative_artifact(&second, "file:result", &meta)
+                .expect("publish"),
+            AuthoritativePublication::Created(meta.id)
+        );
+        let replay = ArtifactMeta {
+            id: hub_core::ArtifactId::generate(),
+            created_at: 99,
+            ..meta.clone()
+        };
+        assert_eq!(
+            store
+                .publish_authoritative_artifact(&second, "file:result", &replay)
+                .expect("replay"),
+            AuthoritativePublication::Replayed(meta.id)
+        );
+        let conflict = ArtifactMeta {
+            digest: hub_core::digest::hash_bytes(hub_core::digest::DOMAIN_ARTIFACT_BLOB, b"y"),
+            ..replay
+        };
+        assert!(matches!(
+            store.publish_authoritative_artifact(&second, "file:result", &conflict),
+            Err(CoreError::AuthoritativePublicationConflict { .. })
+        ));
+
+        let independent = store
+            .advance_publication_fence(workflow, "score", hub_core::AttemptId::generate())
+            .expect("parallel step fence");
+        assert_eq!(independent.generation, 1);
+        assert_eq!(
+            store
+                .current_publication_fence(workflow, "fit")
+                .expect("fit fence")
+                .expect("present")
+                .generation,
+            2
+        );
+        std::fs::remove_dir_all(&dir).expect("cleanup");
+    }
+'''
+          # Put immediately before final closing brace by locating last '\n}' safely.\n          pos = text.rfind('\n}')
+          if pos == -1:
+              raise SystemExit('sqlite final brace not found')
+          text = text[:pos] + insert + text[pos:]
+          sqlite.write_text(text)
+          PY
+
+          cargo fmt --all
+          cargo fmt --all -- --check
+          cargo clippy --workspace --all-targets --all-features --locked -- -D warnings
+          cargo test --workspace --all-features --locked
+
+          rm .github/workflows/oneshot-publication-fence-store.yml
+          git config user.name 'ZEKRITI TAREK'
+          git config user.email 'contact@checkupauto.fr'
+          git add -A
+          git commit -m 'feat(workflow): add durable publication fence repository'
+          git push origin HEAD:industrialize/durable-publication-fence
