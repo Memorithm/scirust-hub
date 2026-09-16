@@ -449,6 +449,33 @@ pub struct CancelWorkflowResponse {
     pub signalled_active_execution: bool,
 }
 
+/// Read-only wire form of the Hub-owned authoritative step publication.
+///
+/// The schema version is the publication-fence contract version, not the HTTP
+/// protocol version. The output map contains immutable Hub artifact ids.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub struct AuthoritativeStepPublicationDto {
+    pub schema_version: u16,
+    pub workflow: hub_core::WorkflowId,
+    pub step_key: String,
+    pub attempt: hub_core::AttemptId,
+    pub generation: u64,
+    pub outputs: BTreeMap<String, ArtifactId>,
+}
+
+impl From<&hub_core::AuthoritativeStepPublication> for AuthoritativeStepPublicationDto {
+    fn from(publication: &hub_core::AuthoritativeStepPublication) -> Self {
+        Self {
+            schema_version: publication.fence.schema_version,
+            workflow: publication.fence.workflow,
+            step_key: publication.fence.step_key.clone(),
+            attempt: publication.fence.attempt,
+            generation: publication.fence.generation,
+            outputs: publication.outputs.clone(),
+        }
+    }
+}
+
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub struct WorkflowListResponse {
     pub workflows: Vec<WorkflowDto>,

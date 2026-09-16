@@ -1760,6 +1760,22 @@ impl Orchestrator {
         self.workflows.get(id).ok().flatten()
     }
 
+    /// Returns the authoritative output publication for one workflow step.
+    ///
+    /// This is a read-only view over Hub-owned publication authority. Callers
+    /// cannot mint or advance fences through this surface.
+    ///
+    /// # Errors
+    /// Storage failures only.
+    pub fn authoritative_step_publication(
+        &self,
+        workflow: WorkflowId,
+        step_key: &str,
+    ) -> Result<Option<AuthoritativeStepPublication>, CoreError> {
+        self.publication_fences
+            .authoritative_publication(workflow, step_key)
+    }
+
     /// All workflows in deterministic `(created_at, id)` order.
     ///
     /// # Errors

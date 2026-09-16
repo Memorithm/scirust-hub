@@ -563,6 +563,16 @@ fn two_step_workflow_chains_artifacts_over_http() {
     assert!(body.contains("\"created\""), "body: {body}");
     let workflow_id: String = json_field(&body, "\"id\":\"").expect("workflow id");
 
+    // Publication authority does not exist before a concrete successful attempt.
+    let (status, body) = http(
+        port,
+        "GET",
+        &format!("/api/v1/workflows/{workflow_id}/steps/emit/publication"),
+        None,
+    )
+    .expect("pre-execution publication query");
+    assert_eq!(status, 404, "body: {body}");
+
     // Execute and verify success with both steps recorded.
     let (status, executed) = http(
         port,
@@ -575,6 +585,28 @@ fn two_step_workflow_chains_artifacts_over_http() {
     assert!(executed.contains("\"succeeded\""), "body: {executed}");
     assert!(executed.contains("\"emit\""), "body: {executed}");
     assert!(executed.contains("\"store\""), "body: {executed}");
+
+    // The Hub-owned authoritative publication is now inspectable through the
+    // authenticated GET surface. This is the publication consumed by downstream
+    // FromStep resolution; raw RunRecord outputs are not authoritative.
+    let (status, publication) = http(
+        port,
+        "GET",
+        &format!("/api/v1/workflows/{workflow_id}/steps/emit/publication"),
+        None,
+    )
+    .expect("authoritative publication query");
+    assert_eq!(status, 200, "body: {publication}");
+    let publication_json: serde_json::Value =
+        serde_json::from_str(&publication).expect("publication json");
+    assert_eq!(publication_json["schema_version"], 1);
+    assert_eq!(publication_json["workflow"], workflow_id);
+    assert_eq!(publication_json["step_key"], "emit");
+    assert_eq!(publication_json["generation"], 1);
+    assert!(
+        publication_json["outputs"].get("stdout").is_some(),
+        "emit stdout missing from authoritative publication: {publication}"
+    );
 
     // The copied file artifact must exist alongside the emit stdout capture:
     let (status, artifacts) = http(port, "GET", "/api/v1/artifacts", None).expect("artifacts");
