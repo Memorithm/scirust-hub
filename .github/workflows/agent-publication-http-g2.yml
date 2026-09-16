@@ -18,7 +18,9 @@ jobs:
           ref: agent/publication-http-api-g2
           fetch-depth: 0
       - name: Apply source patch
-        run: python3 .agent/apply_publication_http_g2.py
+        run: |
+          python3 .agent/apply_publication_http_g2.py
+          python3 .agent/fix_publication_http_move.py
       - name: Format
         run: cargo fmt --all
       - name: Hub core tests
@@ -33,9 +35,10 @@ jobs:
         shell: bash
         run: |
           rm .agent/apply_publication_http_g2.py
+          rm .agent/fix_publication_http_move.py
           rm .github/workflows/agent-publication-http-g2.yml
           git config user.name "ZEKRITI TAREK"
           git config user.email "contact@checkupauto.fr"
-          git add crates/hub-core/src/orchestrator.rs crates/hub-protocol/src/lib.rs crates/hub-api/src/lib.rs apps/scirust-hubd/tests/http_e2e.rs .agent/apply_publication_http_g2.py .github/workflows/agent-publication-http-g2.yml
+          git add crates/hub-core/src/orchestrator.rs crates/hub-protocol/src/lib.rs crates/hub-api/src/lib.rs apps/scirust-hubd/tests/http_e2e.rs .agent/apply_publication_http_g2.py .agent/fix_publication_http_move.py .github/workflows/agent-publication-http-g2.yml
           git commit -m "feat(api): expose authoritative step publication"
           git push origin HEAD:agent/publication-http-api-g2
