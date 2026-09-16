@@ -236,6 +236,18 @@ pub struct RunOutcome {
     pub failure: Option<String>,
 }
 
+/// Exact registry identity required when admitting a run.
+///
+/// Component id and capability name remain in [`RunSpec`]; this pin freezes
+/// the independently evolving versioned registry fields and the canonical
+/// Hub manifest digest that gives those fields their executable meaning.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ComponentAdmissionPin {
+    pub component_version: Version,
+    pub manifest_digest: ContentDigest,
+    pub capability_contract_version: Version,
+}
+
 /// Complete provenance-bearing record of one run.
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub struct RunRecord {
@@ -245,6 +257,11 @@ pub struct RunRecord {
     /// Snapshot of component identity at submission time.
     pub component_name: String,
     pub component_version: Version,
+    /// Canonical domain-separated digest of the exact registered manifest.
+    /// Legacy records deserialize with `None`; every newly submitted run is
+    /// populated by the orchestrator before it is persisted.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub component_manifest_digest: Option<ContentDigest>,
     pub contract_version: Version,
     pub created_at: UnixMillis,
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -280,6 +297,7 @@ impl RunRecord {
             state: RunState::Created,
             component_name,
             component_version,
+            component_manifest_digest: None,
             contract_version,
             created_at: now,
             started_at: None,

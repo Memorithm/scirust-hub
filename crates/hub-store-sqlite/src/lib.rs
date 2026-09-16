@@ -318,6 +318,28 @@ impl ComponentRepository for SqliteStore {
         .transpose()
     }
 
+    fn get(
+        &self,
+        id: &hub_core::ComponentId,
+        version: &hub_core::Version,
+    ) -> Result<Option<ComponentManifest>, CoreError> {
+        let conn = self.lock()?;
+        let json: Option<String> = conn
+            .query_row(
+                "SELECT manifest_json FROM components WHERE id = ?1 AND version = ?2",
+                rusqlite::params![id.to_string(), version.as_str()],
+                |row| row.get(0),
+            )
+            .optional()
+            .map_err(storage("loading exact component"))?;
+        json.map(|j| {
+            serde_json::from_str(&j).map_err(|e| {
+                CoreError::Storage(format!("stored manifest failed to deserialize: {e}"))
+            })
+        })
+        .transpose()
+    }
+
     fn list(&self) -> Result<Vec<ComponentManifest>, CoreError> {
         let conn = self.lock()?;
         let mut stmt = conn

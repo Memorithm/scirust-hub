@@ -702,7 +702,8 @@ fn reproduction_round_trip_through_the_daemon() {
         "same spec must hash identically"
     );
 
-    // Version drift blocks reproduction of runs recorded under old versions.
+    // Registering a newer immutable version must not redirect reproduction of
+    // the original run: the reproduced run remains pinned to v1.
     let drifted = echo_manifest(&id).replace("\"version\": \"1.0.0\"", "\"version\": \"2.0.0\"");
     let (status, _) =
         http(port, "POST", "/api/v1/components", Some(&drifted)).expect("register v2");
@@ -713,7 +714,24 @@ fn reproduction_round_trip_through_the_daemon() {
         &format!("/api/v1/runs/{original_id}/reproduce"),
         None,
     )
-    .expect("reproduce after drift");
-    assert_eq!(status, 422, "body: {body}");
-    assert!(body.contains("evolved"), "body: {body}");
+    .expect("reproduce after newer registration");
+    assert_eq!(status, 201, "body: {body}");
+    assert!(
+        body.contains("\"component_version\":\"1.0.0\""),
+        "body: {body}"
+    );
+    let drift_repro_id: String = json_field(&body, "\"id\":\"").expect("drift repro id");
+    let (status, executed) = http(
+        port,
+        "POST",
+        "/api/v1/executions",
+        Some(&serde_json::json!(drift_repro_id).to_string()),
+    )
+    .expect("execute exact-version reproduction");
+    assert_eq!(status, 200, "body: {executed}");
+    assert!(
+        executed.contains("\"component_version\":\"1.0.0\""),
+        "body: {executed}"
+    );
+    assert!(executed.contains("\"succeeded\""), "body: {executed}");
 }

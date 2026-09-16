@@ -22,7 +22,7 @@ use crate::memory::FileSystemArtifactStore;
 use crate::publication::{
     AuthoritativeStepPublication, InMemoryPublicationFences, PublicationFenceRepository,
 };
-use crate::run::{OutputRef, RunOutcome, RunRecord, RunSpec, RunState};
+use crate::run::{ComponentAdmissionPin, OutputRef, RunOutcome, RunRecord, RunSpec, RunState};
 use crate::store::{
     ArtifactMetadataRepository, ArtifactStore, ComponentRepository, RunRepository,
     WorkflowRepository,
@@ -231,24 +231,48 @@ impl Orchestrator {
         self.submit_run_internal(spec, None, None)
     }
 
+    /// Admits one run against an exact immutable registry identity.
+    ///
+    /// This is the run-level primitive used by versioned workflow admission:
+    /// the component version, canonical manifest digest and capability contract
+    /// version must all match the same registered manifest before a run record
+    /// is queued. Registration remains immutable under `(id, version)`.
+    ///
+    /// # Errors
+    /// The ordinary [`Self::submit_run`] errors plus [`CoreError::Validation`]
+    /// when any pin disagrees with the registered manifest.
+    pub fn submit_run_pinned(
+        &self,
+        spec: RunSpec,
+        pin: ComponentAdmissionPin,
+    ) -> Result<RunRecord, CoreError> {
+        self.submit_run_internal(spec, None, Some(pin))
+    }
+
     fn submit_run_internal(
         &self,
         spec: RunSpec,
         reproduced_from: Option<RunId>,
-        required_component_version: Option<crate::Version>,
+        admission_pin: Option<ComponentAdmissionPin>,
     ) -> Result<RunRecord, CoreError> {
         spec.validate(&self.limits)?;
-        let manifest = self
-            .components
-            .latest(&spec.component)?
-            .ok_or(CoreError::ComponentNotFound(spec.component))?;
-        if let Some(required_version) =
-            required_component_version.filter(|version| manifest.version != *version)
-        {
-            return Err(CoreError::Validation(format!(
-                "component {} evolved to {} since the original run (recorded {}); reproduction requires the same version",
-                manifest.id, manifest.version, required_version
-            )));
+        let manifest = if let Some(pin) = &admission_pin {
+            self.components
+                .get(&spec.component, &pin.component_version)?
+                .ok_or(CoreError::ComponentNotFound(spec.component))?
+        } else {
+            self.components
+                .latest(&spec.component)?
+                .ok_or(CoreError::ComponentNotFound(spec.component))?
+        };
+        let manifest_digest = manifest.content_digest()?;
+        if let Some(pin) = &admission_pin {
+            if manifest_digest != pin.manifest_digest {
+                return Err(CoreError::Validation(format!(
+                    "component {} version {} manifest digest {} does not match required {}",
+                    manifest.id, manifest.version, manifest_digest, pin.manifest_digest
+                )));
+            }
         }
         let capability: Capability = manifest
             .capability(&spec.capability)
@@ -257,6 +281,14 @@ impl Orchestrator {
                 capability: spec.capability.to_string(),
             })?
             .clone();
+        if let Some(pin) = &admission_pin {
+            if capability.contract_version != pin.capability_contract_version {
+                return Err(CoreError::Validation(format!(
+                    "capability {} contract version {} does not match required {}",
+                    capability.name, capability.contract_version, pin.capability_contract_version
+                )));
+            }
+        }
 
         if spec.capability.as_str() == crate::scicapsule::CAPABILITY {
             crate::scicapsule::validate_execution_contract(&manifest, &capability)?;
@@ -304,6 +336,7 @@ impl Orchestrator {
             now,
             &self.limits,
         )?;
+        record.component_manifest_digest = Some(manifest_digest);
         record.reproduced_from = reproduced_from;
         record.transition(RunState::Validated, now)?;
         record.transition(RunState::Queued, now)?;
@@ -366,15 +399,35 @@ impl Orchestrator {
             });
         }
 
-        // Resolve the binding at execution time from the registered manifest.
+        // Resolve the exact immutable manifest captured at submission, not
+        // whichever version is latest when execution eventually starts.
         let manifest = self
             .components
-            .latest(&record.spec.component)?
+            .get(&record.spec.component, &record.component_version)?
             .ok_or(CoreError::ComponentNotFound(record.spec.component))?;
-        if manifest.version != record.component_version {
+        let manifest_digest = manifest.content_digest()?;
+        if let Some(expected_digest) = record.component_manifest_digest {
+            if manifest_digest != expected_digest {
+                return Err(CoreError::Validation(format!(
+                    "component {} version {} manifest digest changed from recorded {} to {}",
+                    manifest.id, manifest.version, expected_digest, manifest_digest
+                )));
+            }
+        } else {
+            // Backfill legacy records from the immutable exact `(id, version)`
+            // registry entry before starting execution.
+            record.component_manifest_digest = Some(manifest_digest);
+        }
+        let capability = manifest
+            .capability(&record.spec.capability)
+            .ok_or_else(|| CoreError::CapabilityNotDeclared {
+                component: record.spec.component,
+                capability: record.spec.capability.to_string(),
+            })?;
+        if capability.contract_version != record.contract_version {
             return Err(CoreError::Validation(format!(
-                "component {} evolved to {} after run {} was queued (recorded {}); execution requires the recorded component version",
-                manifest.id, manifest.version, record.id, record.component_version
+                "capability {} contract version changed from recorded {} to {}",
+                capability.name, record.contract_version, capability.contract_version
             )));
         }
         let binding = manifest.execution.clone();
@@ -1721,17 +1774,33 @@ impl Orchestrator {
             .get(&run_id)?
             .ok_or(CoreError::RunNotFound(run_id))?;
 
-        // The component must still exist at the same version so the spec's
-        // meaning cannot silently drift between the two executions.
+        // Reproduction resolves the exact immutable registry entry captured
+        // by the original run, even when a newer component version is now
+        // registered. Its canonical manifest digest and capability contract are
+        // rechecked before a new run is admitted.
         let manifest = self
             .components
-            .latest(&original.spec.component)?
+            .get(&original.spec.component, &original.component_version)?
             .ok_or(CoreError::ComponentNotFound(original.spec.component))?;
-        if manifest.version != original.component_version {
+        let manifest_digest = manifest.content_digest()?;
+        if let Some(expected_digest) = original.component_manifest_digest {
+            if manifest_digest != expected_digest {
+                return Err(CoreError::Validation(format!(
+                    "component {} version {} manifest digest changed from recorded {} to {}",
+                    manifest.id, manifest.version, expected_digest, manifest_digest
+                )));
+            }
+        }
+        let capability = manifest
+            .capability(&original.spec.capability)
+            .ok_or_else(|| CoreError::CapabilityNotDeclared {
+                component: original.spec.component,
+                capability: original.spec.capability.to_string(),
+            })?;
+        if capability.contract_version != original.contract_version {
             return Err(CoreError::Validation(format!(
-                "component {} evolved to {} since the original run (recorded {}); \
-                 reproduction requires the same version",
-                manifest.id, manifest.version, original.component_version
+                "capability {} contract version changed from recorded {} to {}",
+                capability.name, original.contract_version, capability.contract_version
             )));
         }
 
@@ -1745,7 +1814,11 @@ impl Orchestrator {
         let reproduction = self.submit_run_internal(
             original.spec.clone(),
             Some(run_id),
-            Some(original.component_version.clone()),
+            Some(ComponentAdmissionPin {
+                component_version: original.component_version.clone(),
+                manifest_digest,
+                capability_contract_version: original.contract_version.clone(),
+            }),
         )?;
         info!(
             run = %reproduction.id,
@@ -2884,27 +2957,33 @@ mod tests {
             .expect("persisted reproduction");
         assert_eq!(persisted.reproduced_from, Some(original.id));
 
-        // Version drift after queueing must also block execution; the
-        // reproduction can never silently pick up a newer manifest.
+        // Registering a newer immutable version after queueing must not redirect
+        // execution or reproduction: both stay pinned to the recorded v1 entry.
         let drifted = echo_manifest(manifest.id);
         let drifted = ComponentManifest {
             version: Version::parse("9.9.9").expect("v"),
             ..drifted
         };
         hub.orch.register_component(drifted).expect("register v9");
-        match hub.orch.execute_run(reproduction.id) {
-            Err(CoreError::Validation(msg)) => {
-                assert!(msg.contains("evolved"), "message: {msg}");
-                assert!(msg.contains("recorded 1.0.0"), "message: {msg}");
-            }
-            other => panic!("expected execution-time drift rejection, got {other:?}"),
-        }
-        match hub.orch.reproduce_run(original.id) {
-            Err(CoreError::Validation(msg)) => {
-                assert!(msg.contains("evolved"), "message: {msg}");
-            }
-            other => panic!("expected drift rejection, got {other:?}"),
-        }
+        let old_done = hub
+            .orch
+            .execute_run(reproduction.id)
+            .expect("execute exact recorded version");
+        assert_eq!(old_done.state, RunState::Succeeded);
+        assert_eq!(old_done.component_version.as_str(), "1.0.0");
+
+        let old_again = hub
+            .orch
+            .reproduce_run(original.id)
+            .expect("reproduce exact recorded version");
+        assert_eq!(old_again.component_version.as_str(), "1.0.0");
+        assert_eq!(old_again.reproduced_from, Some(original.id));
+        let old_again_done = hub
+            .orch
+            .execute_run(old_again.id)
+            .expect("execute exact reproduction");
+        assert_eq!(old_again_done.state, RunState::Succeeded);
+        assert_eq!(old_again_done.component_version.as_str(), "1.0.0");
 
         // A run recorded under the CURRENT version reproduces fine.
         let current = hub
