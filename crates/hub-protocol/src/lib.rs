@@ -405,6 +405,11 @@ pub struct SubmitWorkflowResponse {
 pub struct WorkflowDto {
     pub id: hub_core::WorkflowId,
     pub name: String,
+    /// Full declarative workflow spec. New servers always emit it so callers
+    /// can pair component/capability identities with any exact admission pins;
+    /// `None` is accepted only when decoding older payloads.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub spec: Option<hub_core::WorkflowSpec>,
     pub state: hub_core::WorkflowState,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub admission: Option<hub_core::WorkflowAdmissionPins>,
@@ -492,6 +497,7 @@ impl From<&hub_core::WorkflowRecord> for WorkflowDto {
         Self {
             id: w.id,
             name: w.spec.name.clone(),
+            spec: Some(w.spec.clone()),
             state: w.state,
             admission: w.admission.clone(),
             model_version: w.model_version.clone(),
