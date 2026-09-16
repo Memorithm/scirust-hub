@@ -1,0 +1,73 @@
+name: One-shot publication fence implementation
+
+on:
+  push:
+    branches:
+      - industrialize/publication-fence-g2
+
+permissions:
+  contents: write
+
+jobs:
+  implement-and-qualify:
+    if: github.actor != 'github-actions[bot]'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: industrialize/publication-fence-g2
+          fetch-depth: 0
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          toolchain: 1.89.0
+      - name: Patch SQLite migration and module wiring
+        shell: bash
+        run: |
+          python3 - <<'PY'
+          from pathlib import Path
+
+          p = Path('crates/hub-store-sqlite/src/lib.rs')
+          text = p.read_text()
+          import_marker = 'use rusqlite::OptionalExtension as _;\n'
+          if 'mod publication;\n' not in text:
+              assert import_marker in text
+              text = text.replace(import_marker, import_marker + '\nmod publication;\n', 1)
+
+          marker = '''    CREATE INDEX idx_lifecycle_events_entity
+                  ON lifecycle_events (entity_type, entity_id, sequence);",
+          ];'''
+          if 'CREATE TABLE workflow_publication_fences' not in text:
+              replacement = '''    CREATE INDEX idx_lifecycle_events_entity
+                  ON lifecycle_events (entity_type, entity_id, sequence);",
+              // v4: durable workflow-step publication fencing and authoritative output mapping.
+              "CREATE TABLE workflow_publication_fences (
+                  workflow_id      TEXT    NOT NULL,
+                  step_key         TEXT    NOT NULL,
+                  generation       INTEGER NOT NULL CHECK (generation > 0),
+                  attempt_id       TEXT    NOT NULL,
+                  publication_json TEXT,
+                  PRIMARY KEY (workflow_id, step_key)
+              );",
+          ];'''
+              assert marker in text, 'migration insertion marker drifted'
+              text = text.replace(marker, replacement, 1)
+          p.write_text(text)
+          PY
+      - name: Format
+        run: cargo fmt --all
+      - name: Contract tests
+        run: |
+          cargo test -p hub-core publication --lib
+          cargo test -p hub-store-sqlite
+      - name: Workspace check
+        run: cargo check --workspace --all-targets
+      - name: Commit qualified implementation and remove one-shot workflow
+        shell: bash
+        run: |
+          rm .github/workflows/oneshot-publication-fence.yml
+          git config user.name 'ZEKRITI TAREK'
+          git config user.email 'contact@checkupauto.fr'
+          git add -A
+          git diff --cached --check
+          git commit -m 'feat(publication): persist durable workflow-step fences'
+          git push origin HEAD:industrialize/publication-fence-g2
