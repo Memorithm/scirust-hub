@@ -1,0 +1,392 @@
+name: One-shot portable artifact digest implementation
+
+on:
+  push:
+    branches:
+      - industrialize/portable-artifact-digest
+    paths:
+      - '.github/workflows/autofix-portable-artifact-digest.yml'
+
+permissions:
+  contents: write
+
+jobs:
+  implement:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout branch
+        uses: actions/checkout@v7
+        with:
+          ref: industrialize/portable-artifact-digest
+          fetch-depth: 0
+
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          components: rustfmt,clippy
+
+      - name: Implement portable raw SHA-256 bridge
+        shell: bash
+        run: |
+          python3 - <<'PY'
+          from pathlib import Path
+
+          # hub-core digest: distinct type, never interchangeable with ContentDigest.
+          path = Path('crates/hub-core/src/digest.rs')
+          text = path.read_text()
+          anchor = '''impl<'de> Deserialize<'de> for ContentDigest {
+              fn deserialize<D: serde::Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
+                  let hex = String::deserialize(deserializer)?;
+                  Self::from_hex(&hex).map_err(serde::de::Error::custom)
+              }
+          }
+
+          /// One-shot domain-separated hash of in-memory bytes.
+          '''
+          addition = '''impl<'de> Deserialize<'de> for ContentDigest {
+              fn deserialize<D: serde::Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
+                  let hex = String::deserialize(deserializer)?;
+                  Self::from_hex(&hex).map_err(serde::de::Error::custom)
+              }
+          }
+
+          /// Ordinary SHA-256 over artifact bytes for portable cross-repository identity.
+          ///
+          /// This type is intentionally distinct from [`ContentDigest`], whose preimage is
+          /// Hub-domain-separated and is the only valid Hub CAS key.
+          #[derive(Clone, Copy, PartialEq, Eq, Hash, PartialOrd, Ord)]
+          pub struct RawSha256([u8; DIGEST_LEN]);
+
+          impl RawSha256 {
+              #[must_use]
+              pub const fn from_bytes(bytes: [u8; DIGEST_LEN]) -> Self {
+                  Self(bytes)
+              }
+
+              #[must_use]
+              pub const fn as_bytes(&self) -> &[u8; DIGEST_LEN] {
+                  &self.0
+              }
+
+              #[must_use]
+              pub fn to_hex(&self) -> String {
+                  let mut out = String::with_capacity(DIGEST_LEN * 2);
+                  for byte in self.0 {
+                      out.push(HEX[(byte >> 4) as usize] as char);
+                      out.push(HEX[(byte & 0x0f) as usize] as char);
+                  }
+                  out
+              }
+
+              pub fn from_hex(hex: &str) -> Result<Self, ParseDigestError> {
+                  if hex.len() != DIGEST_LEN * 2 {
+                      return Err(ParseDigestError);
+                  }
+                  let bytes = hex.as_bytes();
+                  let mut out = [0u8; DIGEST_LEN];
+                  for (i, slot) in out.iter_mut().enumerate() {
+                      let hi = hex_value(bytes[i * 2]).ok_or(ParseDigestError)?;
+                      let lo = hex_value(bytes[i * 2 + 1]).ok_or(ParseDigestError)?;
+                      *slot = (hi << 4) | lo;
+                  }
+                  Ok(Self(out))
+              }
+          }
+
+          impl fmt::Display for RawSha256 {
+              fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+                  f.write_str(&self.to_hex())
+              }
+          }
+
+          impl fmt::Debug for RawSha256 {
+              fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+                  write!(f, "RawSha256({self})")
+              }
+          }
+
+          impl Serialize for RawSha256 {
+              fn serialize<S: serde::Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
+                  serializer.serialize_str(&self.to_hex())
+              }
+          }
+
+          impl<'de> Deserialize<'de> for RawSha256 {
+              fn deserialize<D: serde::Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
+                  let hex = String::deserialize(deserializer)?;
+                  Self::from_hex(&hex).map_err(serde::de::Error::custom)
+              }
+          }
+
+          /// One-shot ordinary SHA-256. Unlike [`hash_bytes`], no Hub domain prefix is added.
+          #[must_use]
+          pub fn raw_sha256_bytes(data: &[u8]) -> RawSha256 {
+              RawSha256(Sha256::digest(data).into())
+          }
+
+          /// Streaming ordinary SHA-256 for portable artifact verification without buffering.
+          ///
+          /// # Errors
+          /// Propagates IO errors from the reader.
+          pub fn raw_sha256_reader<R: Read>(reader: &mut R) -> std::io::Result<RawSha256> {
+              let mut state = Sha256::new();
+              let mut buf = [0u8; 64 * 1024];
+              loop {
+                  match reader.read(&mut buf) {
+                      Ok(0) => break,
+                      Ok(n) => state.update(&buf[..n]),
+                      Err(e) if e.kind() == std::io::ErrorKind::Interrupted => continue,
+                      Err(e) => return Err(e),
+                  }
+              }
+              Ok(RawSha256(state.finalize().into()))
+          }
+
+          /// One-shot domain-separated hash of in-memory bytes.
+          '''
+          if anchor not in text:
+              raise SystemExit('digest insertion anchor not found')
+          text = text.replace(anchor, addition, 1)
+          test_anchor = '''    #[test]
+              fn domains_are_separated() {
+          '''
+          raw_test = '''    #[test]
+              fn raw_sha256_is_portable_and_not_a_hub_digest() {
+                  let raw = raw_sha256_bytes(b"abc");
+                  assert_eq!(
+                      raw.to_hex(),
+                      "ba7816bf8f01cfea414140de5dae2223b00361a396177a9cb410ff61f20015ad"
+                  );
+                  assert_ne!(raw.as_bytes(), hash_bytes(DOMAIN_ARTIFACT_BLOB, b"abc").as_bytes());
+                  let mut reader = &b"abc"[..];
+                  assert_eq!(raw_sha256_reader(&mut reader).expect("read"), raw);
+                  let encoded = serde_json::to_string(&raw).expect("serialize");
+                  assert_eq!(serde_json::from_str::<RawSha256>(&encoded).expect("decode"), raw);
+              }
+
+          '''
+          if test_anchor not in text:
+              raise SystemExit('digest test anchor not found')
+          text = text.replace(test_anchor, raw_test + test_anchor, 1)
+          path.write_text(text)
+
+          # Re-export the distinct raw digest type.
+          path = Path('crates/hub-core/src/lib.rs')
+          text = path.read_text()
+          old = 'pub use digest::ContentDigest;'
+          new = 'pub use digest::{ContentDigest, RawSha256};'
+          if old not in text:
+              raise SystemExit('hub-core re-export anchor not found')
+          path.write_text(text.replace(old, new, 1))
+
+          # Add streaming raw SHA-256 to the concrete file-backed store.
+          path = Path('crates/hub-core/src/memory.rs')
+          text = path.read_text()
+          old = 'use crate::digest::ContentDigest;'
+          new = 'use crate::digest::{self, ContentDigest, RawSha256};'
+          if old not in text:
+              raise SystemExit('memory digest import anchor not found')
+          text = text.replace(old, new, 1)
+          anchor = '''    fn blob_path(&self, digest: &ContentDigest) -> std::path::PathBuf {
+                  let hex = digest.to_hex();
+                  self.root.join("blobs").join(&hex[..2]).join(hex)
+              }
+          }
+          '''
+          addition = '''    fn blob_path(&self, digest: &ContentDigest) -> std::path::PathBuf {
+                  let hex = digest.to_hex();
+                  self.root.join("blobs").join(&hex[..2]).join(hex)
+              }
+
+              /// Streams the stored blob through ordinary SHA-256 without loading it into memory.
+              ///
+              /// # Errors
+              /// [`CoreError::BlobNotFound`] when the Hub CAS digest is unknown; storage errors otherwise.
+              pub fn raw_sha256(&self, content_digest: &ContentDigest) -> Result<RawSha256, CoreError> {
+                  let path = self.blob_path(content_digest);
+                  if !path.exists() {
+                      return Err(CoreError::BlobNotFound {
+                          hex: content_digest.to_string(),
+                      });
+                  }
+                  let mut file = std::fs::File::open(&path)
+                      .map_err(|e| CoreError::Storage(format!("opening blob for raw SHA-256: {e}")))?;
+                  digest::raw_sha256_reader(&mut file)
+                      .map_err(|e| CoreError::Storage(format!("hashing blob with raw SHA-256: {e}")))
+              }
+          }
+          '''
+          if anchor not in text:
+              raise SystemExit('blob_path anchor not found')
+          text = text.replace(anchor, addition, 1)
+          path.write_text(text)
+
+          # Orchestrator bridge keeps metadata and raw digest tied to one ArtifactId.
+          path = Path('crates/hub-core/src/orchestrator.rs')
+          text = path.read_text()
+          anchor = '''    #[must_use]
+              pub fn blob_store(&self) -> &FileSystemArtifactStore {
+                  &self.blobs
+              }
+          '''
+          addition = '''    /// Computes portable ordinary SHA-256 for one stored artifact without buffering the blob.
+              ///
+              /// The returned [`crate::RawSha256`] is deliberately not a Hub CAS key.
+              ///
+              /// # Errors
+              /// Artifact lookup, blob lookup, or storage failures.
+              pub fn artifact_raw_sha256(
+                  &self,
+                  id: &ArtifactId,
+              ) -> Result<(crate::artifact::ArtifactMeta, crate::RawSha256), CoreError> {
+                  let meta = self
+                      .artifacts_meta
+                      .get(id)?
+                      .ok_or(CoreError::ArtifactNotFound(*id))?;
+                  let raw = self.blobs.raw_sha256(&meta.digest)?;
+                  Ok((meta, raw))
+              }
+
+              #[must_use]
+              pub fn blob_store(&self) -> &FileSystemArtifactStore {
+                  &self.blobs
+              }
+          '''
+          if anchor not in text:
+              raise SystemExit('orchestrator blob_store anchor not found')
+          text = text.replace(anchor, addition, 1)
+          path.write_text(text)
+
+          # Wire DTO is additive under protocol v1.
+          path = Path('crates/hub-protocol/src/lib.rs')
+          text = path.read_text()
+          anchor = '''#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+          pub struct ArtifactListResponse {
+              pub artifacts: Vec<ArtifactDto>,
+          }
+
+          // ----------------------------------------------------------------------
+          // Lifecycle events
+          '''
+          addition = '''#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+          pub struct ArtifactListResponse {
+              pub artifacts: Vec<ArtifactDto>,
+          }
+
+          /// Cross-repository artifact digest bridge. `raw_sha256` is ordinary SHA-256
+          /// over payload bytes; `hub_digest` remains the domain-separated Hub CAS key.
+          #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+          pub struct ArtifactPortableDigestDto {
+              pub id: ArtifactId,
+              pub hub_digest: ContentDigest,
+              pub raw_sha256: hub_core::RawSha256,
+              pub size: u64,
+          }
+
+          // ----------------------------------------------------------------------
+          // Lifecycle events
+          '''
+          if anchor not in text:
+              raise SystemExit('protocol artifact anchor not found')
+          text = text.replace(anchor, addition, 1)
+          path.write_text(text)
+
+          # Add read-only endpoint. It computes raw SHA-256 server-side for binary/large artifacts.
+          path = Path('crates/hub-api/src/lib.rs')
+          text = path.read_text()
+          old = '''        .route("/api/v1/artifacts/{id}", get(get_artifact))
+                  .route("/api/v1/events", get(list_lifecycle_events))'''
+          new = '''        .route("/api/v1/artifacts/{id}", get(get_artifact))
+                  .route(
+                      "/api/v1/artifacts/{id}/portable-digest",
+                      get(get_artifact_portable_digest),
+                  )
+                  .route("/api/v1/events", get(list_lifecycle_events))'''
+          if old not in text:
+              raise SystemExit('API route anchor not found')
+          text = text.replace(old, new, 1)
+          anchor = '''async fn list_lifecycle_events(
+          '''
+          handler = '''async fn get_artifact_portable_digest(
+              State(state): State<HubState>,
+              Path(id): Path<String>,
+          ) -> Response {
+              let Some(parsed) = typed_id::<ArtifactId>(&id) else {
+                  return not_found("artifact", &id);
+              };
+              let orch = state.orchestrator.clone();
+              match joined(tokio::task::spawn_blocking(move || orch.artifact_raw_sha256(&parsed)).await) {
+                  Ok((meta, raw_sha256)) => Json(proto::ArtifactPortableDigestDto {
+                      id: meta.id,
+                      hub_digest: meta.digest,
+                      raw_sha256,
+                      size: meta.size,
+                  })
+                  .into_response(),
+                  Err(response) => response,
+              }
+          }
+
+          async fn list_lifecycle_events(
+          '''
+          if anchor not in text:
+              raise SystemExit('API handler anchor not found')
+          text = text.replace(anchor, handler, 1)
+          path.write_text(text)
+
+          # Real-daemon e2e pins the raw digest and its non-interchangeability with Hub digest.
+          path = Path('apps/scirust-hubd/tests/http_e2e.rs')
+          text = path.read_text()
+          anchor = '''    assert_eq!(artifact_digest.len(), 64);
+              assert_ne!(artifact_digest, digest);
+
+              // 7. Unknown resources produce structured 404s.
+          '''
+          addition = '''    assert_eq!(artifact_digest.len(), 64);
+              assert_ne!(artifact_digest, digest);
+
+              let (status, portable) = http(
+                  port,
+                  "GET",
+                  &format!("/api/v1/artifacts/{artifact_id}/portable-digest"),
+                  None,
+              )
+              .expect("portable artifact digest");
+              assert_eq!(status, 200, "body: {portable}");
+              assert_eq!(
+                  json_field(&portable, "\\\"raw_sha256\\\":\\\"").as_deref(),
+                  Some("ff6867918e1dadfdd8979acdf1a98ec7fa36882a8bfa4f60802c29da722cfc89")
+              );
+              assert_eq!(
+                  json_field(&portable, "\\\"hub_digest\\\":\\\"").as_deref(),
+                  Some(artifact_digest.as_str())
+              );
+              assert!(portable.contains("\\\"size\\\":14"), "body: {portable}");
+              assert_ne!(
+                  json_field(&portable, "\\\"raw_sha256\\\":\\\"").as_deref(),
+                  Some(artifact_digest.as_str()),
+                  "portable SHA-256 must not be treated as the Hub CAS digest"
+              );
+
+              // 7. Unknown resources produce structured 404s.
+          '''
+          if anchor not in text:
+              raise SystemExit('http e2e artifact anchor not found')
+          text = text.replace(anchor, addition, 1)
+          path.write_text(text)
+          PY
+
+          cargo fmt --all
+          cargo test -p hub-core digest::tests::raw_sha256_is_portable_and_not_a_hub_digest
+          cargo test -p scirust-hubd --test http_e2e walking_skeleton_through_the_real_daemon
+          cargo clippy --workspace --all-targets -- -D warnings
+
+      - name: Commit implementation and remove one-shot workflow
+        shell: bash
+        run: |
+          git config user.name 'ZEKRITI TAREK'
+          git config user.email 'contact@checkupauto.fr'
+          git rm .github/workflows/autofix-portable-artifact-digest.yml
+          git add -A
+          git commit -m 'feat(artifacts): expose portable raw SHA-256 bridge'
+          git push origin HEAD:industrialize/portable-artifact-digest
