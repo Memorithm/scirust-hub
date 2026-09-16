@@ -328,9 +328,8 @@ mod tests {
     use std::collections::BTreeMap;
 
     use super::*;
-    use hub_core::publication::PublicationFenceRepository as _;
     use hub_core::run::RunState;
-    use hub_core::store::{ArtifactMetadataRepository as _, WorkflowRepository as _};
+    use hub_core::store::{ArtifactMetadataRepository, WorkflowRepository};
     use hub_core::workflow::{
         Step, StepAttempt, StepResult, WorkflowRecord, WorkflowSpec, WorkflowState,
     };
