@@ -1,0 +1,45 @@
+name: Agent repair workflow exact-admission Clippy fixture
+
+on:
+  push:
+    branches: [feat/workflow-exact-admission-pins]
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  repair:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+        with:
+          ref: feat/workflow-exact-admission-pins
+          fetch-depth: 0
+      - name: Remove unused generated helper parameter
+        shell: bash
+        run: |
+          python3 - <<'PY'
+          from pathlib import Path
+          p = Path('.github/workflows/agent-workflow-exact-admission.yml')
+          s = p.read_text()
+          old_sig = 'fn pins(id: ComponentId, manifest: &ComponentManifest) -> WorkflowAdmissionPins {'
+          new_sig = 'fn pins(manifest: &ComponentManifest) -> WorkflowAdmissionPins {'
+          if s.count(old_sig) != 1:
+              raise SystemExit(f'pin helper signature count={s.count(old_sig)}')
+          s = s.replace(old_sig, new_sig, 1)
+          count = s.count('pins(id, &v1)')
+          if count != 3:
+              raise SystemExit(f'pin helper call count={count}')
+          s = s.replace('pins(id, &v1)', 'pins(&v1)')
+          p.write_text(s)
+          PY
+      - name: Commit workflow repair
+        shell: bash
+        run: |
+          git config user.name "ZEKRITI TAREK"
+          git config user.email "contact@checkupauto.fr"
+          git add .github/workflows/agent-workflow-exact-admission.yml
+          git commit -m "fix(ci): remove unused exact-admission fixture parameter"
+          git push origin HEAD:feat/workflow-exact-admission-pins
