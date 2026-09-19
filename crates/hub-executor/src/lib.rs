@@ -11,10 +11,12 @@
 //! - [`RemotePoolExecutor`]: deterministic pre-dispatch placement across a
 //!   configured set of workers, with no unsafe post-dispatch failover.
 
+pub mod local_capacity;
 pub mod pool;
 pub mod remote;
 pub mod worker;
 
+pub use local_capacity::LocalCapacityExecutor;
 pub use pool::RemotePoolExecutor;
 pub use remote::RemoteExecutor;
 

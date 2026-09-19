@@ -28,7 +28,7 @@ use hub_core::store::{
     WorkflowRepository,
 };
 use hub_core::Orchestrator;
-use hub_executor::{ProcessExecutor, RemoteExecutor, RemotePoolExecutor};
+use hub_executor::{LocalCapacityExecutor, ProcessExecutor, RemoteExecutor, RemotePoolExecutor};
 use hub_store_sqlite::SqliteStore;
 
 /// Default TCP listen address.
@@ -67,6 +67,10 @@ struct Args {
         default_value_t = ExecutorBackend::Process
     )]
     executor: ExecutorBackend,
+    /// Shared ceiling across all local runs/workflows; queue wait consumes timeout.
+    /// Not a RAM reservation or cross-daemon resource pool.
+    #[arg(long, env = "SCIRUST_HUB_LOCAL_MAX_INFLIGHT")]
+    local_max_inflight: Option<usize>,
     /// One or more worker URLs. Repeat the flag or comma-separate the
     /// environment value to enable deterministic multi-worker placement.
     #[arg(long, env = "SCIRUST_HUB_REMOTE_WORKER_URL", value_delimiter = ',')]
@@ -164,10 +168,21 @@ fn build_executor(
     remote_worker_urls: Vec<String>,
     remote_worker_token: Option<String>,
     remote_worker_tokens_json: Option<&str>,
+    local_max_inflight: Option<usize>,
 ) -> Result<Arc<dyn Executor>, DaemonError> {
     match backend {
-        ExecutorBackend::Process => Ok(Arc::new(ProcessExecutor::new())),
+        ExecutorBackend::Process => match local_max_inflight {
+            Some(limit) => Ok(Arc::new(
+                LocalCapacityExecutor::new(limit).map_err(DaemonError::ExecutorConfig)?,
+            )),
+            None => Ok(Arc::new(ProcessExecutor::new())),
+        },
         ExecutorBackend::Remote => {
+            if local_max_inflight.is_some() {
+                return Err(DaemonError::ExecutorConfig(
+                    "local max inflight requires the process executor".into(),
+                ));
+            }
             if remote_worker_urls.is_empty() {
                 return Err(DaemonError::ExecutorConfig(
                     "at least one --remote-worker-url is required with --executor remote".into(),
@@ -363,6 +378,7 @@ fn run(args: Args) -> Result<(), DaemonError> {
         args.remote_worker_url,
         args.remote_worker_token,
         remote_worker_tokens_json.as_deref(),
+        args.local_max_inflight,
     )?;
 
     // One store instance serves all repository ports; `Arc` is coerced
@@ -659,6 +675,7 @@ mod tests {
             vec!["http://worker-a:8488".into()],
             Some("secret".into()),
             None,
+            None,
         )
         .expect("single");
         assert_eq!(single.backend_id(), "remote:http://worker-a:8488");
@@ -668,9 +685,32 @@ mod tests {
             vec!["http://worker-a:8488".into(), "http://worker-b:8488".into()],
             Some("secret".into()),
             None,
+            None,
         )
         .expect("pool");
         assert_eq!(pool.backend_id(), "remote-pool");
+    }
+
+    #[test]
+    fn local_capacity_is_opt_in_bounded_and_rejected_for_remote_execution() {
+        assert_eq!(
+            build_executor(ExecutorBackend::Process, vec![], None, None, None)
+                .unwrap()
+                .backend_id(),
+            "process"
+        );
+        assert_eq!(
+            build_executor(ExecutorBackend::Process, vec![], None, None, Some(2))
+                .unwrap()
+                .backend_id(),
+            "process-capacity/v1/slots/2"
+        );
+        for limit in [0, 257] {
+            assert!(
+                build_executor(ExecutorBackend::Process, vec![], None, None, Some(limit)).is_err()
+            );
+        }
+        assert!(build_executor(ExecutorBackend::Remote, vec![], None, None, Some(2)).is_err());
     }
 
     #[test]
