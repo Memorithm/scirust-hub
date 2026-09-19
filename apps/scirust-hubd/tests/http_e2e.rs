@@ -31,6 +31,10 @@ fn free_port() -> u16 {
 }
 
 fn start_daemon() -> (DaemonGuard, u16) {
+    start_daemon_with_capacity(None)
+}
+
+fn start_daemon_with_capacity(limit: Option<usize>) -> (DaemonGuard, u16) {
     let port = free_port();
     let data_dir = std::env::temp_dir().join(format!("hub-e2e-{}-{}", std::process::id(), port));
     let child = Command::new(env!("CARGO_BIN_EXE_scirust-hubd"))
@@ -40,6 +44,11 @@ fn start_daemon() -> (DaemonGuard, u16) {
             "--data-dir",
             data_dir.to_str().expect("utf8 path"),
         ])
+        .args(
+            limit
+                .into_iter()
+                .flat_map(|value| ["--local-max-inflight".to_owned(), value.to_string()]),
+        )
         .stdout(Stdio::null())
         .stderr(Stdio::null())
         .spawn()
@@ -59,6 +68,67 @@ fn start_daemon() -> (DaemonGuard, u16) {
         std::thread::sleep(Duration::from_millis(100));
     }
     (guard, port)
+}
+
+#[cfg(unix)]
+#[test]
+fn shared_local_capacity_spans_two_concurrent_http_workflows() {
+    let (guard, port) = start_daemon_with_capacity(Some(1));
+    let component = uuid_v4();
+    // This actual subprocess fails on overlapping execution. The lock is a
+    // test oracle only; the production executor, not this script, must queue.
+    let manifest = serde_json::json!({"schema_version": 1, "manifest": {
+        "id": component, "name": "capacity-probe", "version": "1.0.0", "kind": "tool",
+        "capabilities": [{"name": "capacity.probe", "contract_version": "1.0.0"}],
+        "execution": {"type": "process", "program": "/bin/sh", "args": ["-c",
+            "mkdir \"$1/active-probe\" || exit 77; sleep 0.05; rmdir \"$1/active-probe\"; printf done",
+            "probe", guard.data_dir.to_str().unwrap()]}
+    }}).to_string();
+    let (status, body) = http(port, "POST", "/api/v1/components", Some(&manifest)).unwrap();
+    assert_eq!(status, 201, "{body}");
+    let mut ids = Vec::new();
+    for name in ["campaign-a", "campaign-b"] {
+        let steps: Vec<_> = ["first", "second"]
+            .into_iter()
+            .map(|key| {
+                serde_json::json!({
+                    "key": key, "component": component, "capability": "capacity.probe",
+                    "parameters": {}, "inputs": {}, "after": [], "timeout_ms": 5000
+                })
+            })
+            .collect();
+        let spec = serde_json::json!({"schema_version": 1, "workflow": {
+            "schema_version": 1, "name": name, "max_concurrency": 2, "steps": steps
+        }})
+        .to_string();
+        let (status, body) = http(port, "POST", "/api/v1/workflows", Some(&spec)).unwrap();
+        assert_eq!(status, 201, "{body}");
+        ids.push(json_field(&body, "\"id\":\"").unwrap());
+    }
+    let barrier = std::sync::Arc::new(std::sync::Barrier::new(2));
+    let joins: Vec<_> = ids
+        .into_iter()
+        .map(|id| {
+            let barrier = barrier.clone();
+            std::thread::spawn(move || {
+                barrier.wait();
+                let (status, body) = http(
+                    port,
+                    "POST",
+                    &format!("/api/v1/workflows/{id}/executions"),
+                    Some("{\"schema_version\":1}"),
+                )
+                .unwrap();
+                assert_eq!(status, 200, "{body}");
+                assert!(body.contains("\"succeeded\""), "{body}");
+                assert!(!body.contains("\"failed\""), "{body}");
+            })
+        })
+        .collect();
+    for join in joins {
+        join.join().unwrap();
+    }
+    assert!(!guard.data_dir.join("active-probe").exists());
 }
 
 /// Minimal HTTP/1.0 client: no chunked transfer, server closes the stream.
