@@ -549,3 +549,24 @@ agent_operating_protocol:
     If this roadmap cannot be read, do not make major control-plane, component
     contract, authorization, scheduler, cross-repository, or merge decisions.
     Read-only diagnosis is allowed.
+
+shared_local_capacity_2026_09_19:
+  status: implemented_PR_CI_pending
+  pull_request: https://github.com/Memorithm/scirust-hub/pull/56
+  candidate: 8f3e2e274a07d971b443f37577a6e463340a57b0
+  contract: process-capacity/v1/slots/N
+  scope: opt_in_static_shared_ceiling_one_daemon_1_to_256_slots
+  evidence:
+    - initial_workspace_219_tests_passed
+    - termination_error_regressions_and_actual_executor_35_tests_passed
+    - workspace_all_target_all_feature_Clippy_warnings_denied_passed
+    - concurrent_HTTP_workflows_use_actual_subprocess_exclusion_oracle
+  guarantees:
+    - waiting_consumes_original_deadline_and_observes_cancellation
+    - backend_error_or_panic_quarantines_uncertain_capacity
+    - failed_group_termination_or_reaping_is_backend_error
+  limitations:
+    - no_cross_daemon_leases_RAM_reservation_or_CPU_affinity
+    - no_orphan_recovery_or_bounded_pending_thread_queue
+    - no_dynamic_Elastic_policy_or_5_of_5_ML_maturity_claim
+  ownership: Hub_enforcement_Elastic_adaptive_planning
