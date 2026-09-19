@@ -130,13 +130,11 @@ impl Executor for ProcessExecutor {
             }
             if cancel.is_cancelled() {
                 cancelled = true;
-                terminate_supervised_process(&mut child);
-                break child.wait().ok();
+                break Some(terminate_supervised_process(&mut child)?);
             }
             if Instant::now() >= deadline {
                 timed_out = true;
-                terminate_supervised_process(&mut child);
-                break child.wait().ok();
+                break Some(terminate_supervised_process(&mut child)?);
             }
             thread::sleep(Duration::from_millis(POLL_INTERVAL_MS));
         };
@@ -165,18 +163,43 @@ impl Executor for ProcessExecutor {
     }
 }
 
-fn terminate_supervised_process(child: &mut Child) {
+fn terminate_supervised_process(
+    child: &mut Child,
+) -> Result<std::process::ExitStatus, ExecutorFailure> {
     #[cfg(unix)]
-    if let Ok(raw_pid) = i32::try_from(child.id()) {
+    let termination = {
+        use nix::errno::Errno;
         use nix::sys::signal::{killpg, Signal};
         use nix::unistd::Pid;
 
-        // `process_group(0)` makes the child's PID its PGID. Signal the whole
-        // group first, then retain `Child::kill` as a best-effort fallback in
-        // case group signalling fails for an OS-specific reason.
-        let _ = killpg(Pid::from_raw(raw_pid), Signal::SIGKILL);
-    }
-    let _ = child.kill();
+        let result = i32::try_from(child.id())
+            .map_err(std::io::Error::other)
+            .and_then(|pid| match killpg(Pid::from_raw(pid), Signal::SIGKILL) {
+                Ok(()) | Err(Errno::ESRCH) => Ok(()),
+                Err(error) => Err(std::io::Error::from_raw_os_error(error as i32)),
+            });
+        if result.is_err() {
+            // Best-effort cleanup does not prove the whole group terminated.
+            let _ = child.kill();
+            let _ = child.try_wait();
+        }
+        result
+    };
+    #[cfg(not(unix))]
+    let termination = child.kill();
+    confirm_termination(termination, || child.wait())
+}
+
+fn confirm_termination(
+    termination: std::io::Result<()>,
+    reap: impl FnOnce() -> std::io::Result<std::process::ExitStatus>,
+) -> Result<std::process::ExitStatus, ExecutorFailure> {
+    termination.map_err(|error| ExecutorFailure::Backend {
+        reason: format!("termination unconfirmed: {error}"),
+    })?;
+    reap().map_err(|error| ExecutorFailure::Backend {
+        reason: format!("reaping unconfirmed: {error}"),
+    })
 }
 
 fn ms_since(started: Instant) -> u64 {
@@ -329,6 +352,28 @@ mod tests {
     //! PATH; they stay hermetic (no network, no GPU).
 
     use super::*;
+
+    #[test]
+    fn termination_failure_does_not_wait_or_report_completion() {
+        let result = confirm_termination(
+            Err(std::io::Error::new(
+                std::io::ErrorKind::PermissionDenied,
+                "kill denied",
+            )),
+            || panic!("must not block waiting after unsuccessful termination"),
+        );
+        assert!(
+            matches!(result, Err(ExecutorFailure::Backend { reason }) if reason.contains("termination unconfirmed"))
+        );
+    }
+
+    #[test]
+    fn reap_failure_does_not_report_completion() {
+        let result = confirm_termination(Ok(()), || Err(std::io::Error::other("wait failed")));
+        assert!(
+            matches!(result, Err(ExecutorFailure::Backend { reason }) if reason.contains("reaping unconfirmed"))
+        );
+    }
     use std::collections::BTreeMap;
     use std::path::PathBuf;
 
