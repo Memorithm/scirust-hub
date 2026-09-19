@@ -551,13 +551,15 @@ agent_operating_protocol:
     Read-only diagnosis is allowed.
 
 shared_local_capacity_2026_09_19:
-  status: implemented_PR_CI_pending
+  status: merged_qualified
+  merge_commit: 4a2b2d1f0f14cdb84626b34367a08e6528f3dbd4
   pull_request: https://github.com/Memorithm/scirust-hub/pull/56
   candidate: 8f3e2e274a07d971b443f37577a6e463340a57b0
   contract: process-capacity/v1/slots/N
   scope: opt_in_static_shared_ceiling_one_daemon_1_to_256_slots
   evidence:
-    - initial_workspace_219_tests_passed
+    - final_workspace_221_tests_passed
+    - exact_head_GitHub_CI_passed_before_merge
     - termination_error_regressions_and_actual_executor_35_tests_passed
     - workspace_all_target_all_feature_Clippy_warnings_denied_passed
     - concurrent_HTTP_workflows_use_actual_subprocess_exclusion_oracle
