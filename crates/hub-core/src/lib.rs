@@ -50,7 +50,9 @@ pub use event::{
     InMemoryLifecycleEvents, LifecycleEntityType, LifecycleEvent, LifecycleEventKind,
     LifecycleEventRepository, NewLifecycleEvent, DEFAULT_EVENT_PAGE, MAX_EVENT_PAGE,
 };
-pub use exec::{CancelToken, ExecutionOutcome, ExecutionRequest, Executor};
+pub use exec::{
+    CancelToken, ExecutionOutcome, ExecutionReport, ExecutionRequest, Executor, TaskExecutionReport,
+};
 pub use id::{ArtifactId, AttemptId, ComponentId, RunId, TaskId, WorkflowId};
 pub use limits::Limits;
 pub use memory::{
