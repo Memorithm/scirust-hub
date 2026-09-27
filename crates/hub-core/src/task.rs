@@ -494,11 +494,27 @@ pub struct ResourceEnforcement {
 impl ResourceEnforcement {
     fn admit(&self, backend_id: &str, budget: &ResourceBudget) -> Result<(), CoreError> {
         for (requested, enforced, dimension) in [
-            (budget.wall_clock_ms.is_some(), self.wall_clock_ms, "wall_clock_ms"),
+            (
+                budget.wall_clock_ms.is_some(),
+                self.wall_clock_ms,
+                "wall_clock_ms",
+            ),
             (budget.cpu_millis.is_some(), self.cpu_millis, "cpu_millis"),
-            (budget.memory_bytes.is_some(), self.memory_bytes, "memory_bytes"),
-            (budget.gpu_devices.is_some(), self.gpu_devices, "gpu_devices"),
-            (budget.model_tokens.is_some(), self.model_tokens, "model_tokens"),
+            (
+                budget.memory_bytes.is_some(),
+                self.memory_bytes,
+                "memory_bytes",
+            ),
+            (
+                budget.gpu_devices.is_some(),
+                self.gpu_devices,
+                "gpu_devices",
+            ),
+            (
+                budget.model_tokens.is_some(),
+                self.model_tokens,
+                "model_tokens",
+            ),
         ] {
             if requested && !enforced {
                 return Err(CoreError::Validation(format!(
