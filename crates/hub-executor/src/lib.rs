@@ -15,10 +15,15 @@ pub mod local_capacity;
 pub mod pool;
 pub mod remote;
 pub mod worker;
+pub mod workspace;
 
 pub use local_capacity::LocalCapacityExecutor;
 pub use pool::RemotePoolExecutor;
 pub use remote::RemoteExecutor;
+pub use workspace::{
+    digest_materialized_checkout, GitWorkspaceMaterializer, MaterializedWorkspace,
+    WorkspaceSourceMap,
+};
 
 use std::collections::VecDeque;
 use std::io::Read;
