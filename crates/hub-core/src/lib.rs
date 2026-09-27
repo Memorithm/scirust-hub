@@ -31,6 +31,7 @@ pub mod publication;
 pub mod run;
 pub mod scicapsule;
 pub mod store;
+pub mod task;
 pub mod version;
 pub mod workflow;
 
@@ -49,7 +50,7 @@ pub use event::{
     LifecycleEventRepository, NewLifecycleEvent, DEFAULT_EVENT_PAGE, MAX_EVENT_PAGE,
 };
 pub use exec::{CancelToken, ExecutionOutcome, ExecutionRequest, Executor};
-pub use id::{ArtifactId, AttemptId, ComponentId, RunId, WorkflowId};
+pub use id::{ArtifactId, AttemptId, ComponentId, RunId, TaskId, WorkflowId};
 pub use limits::Limits;
 pub use memory::{
     FileSystemArtifactStore, InMemoryArtifactMeta, InMemoryComponents, InMemoryHubStore,
@@ -63,6 +64,11 @@ pub use publication::{
 pub use run::{
     ComponentAdmissionPin, InputBinding, InputProvenance, OutputRef, RunOutcome, RunRecord,
     RunSpec, RunState, Transition,
+};
+pub use task::{
+    CapabilitySet, IsolationLevel, NetworkPolicy, ResourceBudget, SandboxBackendDescriptor,
+    SandboxRequirements, TaskIdentity, TaskSpec, WorkspaceRepository, WorkspaceSpec,
+    TASK_SPEC_SCHEMA_VERSION,
 };
 pub use version::Version;
 pub use workflow::{
