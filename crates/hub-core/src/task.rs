@@ -359,6 +359,101 @@ impl ResourceBudget {
     }
 }
 
+/// Observed capacity available from one concrete worker/backend.
+///
+/// Each dimension is optional because an adapter may not have a trustworthy
+/// observation. An absent dimension is unknown, not unlimited; explicit
+/// capacity-aware admission therefore fails closed when a task requests it.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct ResourceCapacity {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub cpu_millis: Option<u64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub memory_bytes: Option<u64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub gpu_devices: Option<u32>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub model_tokens: Option<u64>,
+}
+
+impl ResourceCapacity {
+    /// Checks a budget against observed worker capacity.
+    ///
+    /// A zero GPU request is treated as no GPU demand, so a CPU-only worker
+    /// may still satisfy it. Every positive requested dimension needs a
+    /// measured capacity and must fit within that capacity.
+    pub fn admit(
+        &self,
+        backend_id: &str,
+        budget: &ResourceBudget,
+    ) -> Result<(), CoreError> {
+        if self.cpu_millis == Some(0) {
+            return Err(CoreError::Validation(format!(
+                "backend {backend_id} reported zero CPU capacity"
+            )));
+        }
+        if self.memory_bytes == Some(0) {
+            return Err(CoreError::Validation(format!(
+                "backend {backend_id} reported zero memory capacity"
+            )));
+        }
+
+        check_capacity_dimension(
+            backend_id,
+            "cpu_millis",
+            budget.cpu_millis,
+            self.cpu_millis,
+        )?;
+        check_capacity_dimension(
+            backend_id,
+            "memory_bytes",
+            budget.memory_bytes,
+            self.memory_bytes,
+        )?;
+        check_capacity_dimension(
+            backend_id,
+            "gpu_devices",
+            budget.gpu_devices,
+            self.gpu_devices,
+        )?;
+        check_capacity_dimension(
+            backend_id,
+            "model_tokens",
+            budget.model_tokens,
+            self.model_tokens,
+        )
+    }
+}
+
+fn check_capacity_dimension<T>(
+    backend_id: &str,
+    dimension: &str,
+    requested: Option<T>,
+    available: Option<T>,
+) -> Result<(), CoreError>
+where
+    T: Copy + Default + Ord + std::fmt::Display,
+{
+    let Some(requested) = requested else {
+        return Ok(());
+    };
+    if requested == T::default() {
+        return Ok(());
+    }
+    let Some(available) = available else {
+        return Err(CoreError::Validation(format!(
+            "backend {backend_id} has unknown capacity for requested resource dimension {dimension}"
+        )));
+    };
+    if requested > available {
+        return Err(CoreError::Validation(format!(
+            "backend {backend_id} capacity {dimension} {available} is below requested {requested}"
+        )));
+    }
+    Ok(())
+}
+
 /// Minimum isolation semantics requested by a task.
 ///
 /// Ordering is intentional so backends can prove they meet or exceed a
@@ -590,6 +685,19 @@ impl SandboxBackendDescriptor {
         }
         Ok(())
     }
+
+    /// Admits a task only after checking the backend's observed capacity.
+    ///
+    /// This stricter path is opt-in so existing descriptor-only callers do not
+    /// mistake an absent inventory observation for unlimited capacity.
+    pub fn admit_with_capacity(
+        &self,
+        task: &TaskSpec,
+        capacity: &ResourceCapacity,
+    ) -> Result<(), CoreError> {
+        self.admit(task)?;
+        capacity.admit(&self.backend_id, &task.budget)
+    }
 }
 
 fn validate_unique_tokens(
@@ -692,7 +800,49 @@ mod tests {
             },
             capabilities: CapabilitySet(vec!["github:read".to_owned()]),
         };
-        backend.admit(&task).expect("backend admits task");
+        backend
+            .admit_with_capacity(
+                &task,
+                &ResourceCapacity {
+                    cpu_millis: Some(2_000),
+                    memory_bytes: Some(512 * 1024 * 1024),
+                    gpu_devices: Some(0),
+                    model_tokens: Some(10_000),
+                },
+            )
+            .expect("backend admits task");
+    }
+
+    #[test]
+    fn capacity_admission_is_fail_closed_for_unknown_or_insufficient_dimensions() {
+        let budget = ResourceBudget {
+            cpu_millis: Some(2_000),
+            memory_bytes: Some(512 * 1024 * 1024),
+            gpu_devices: Some(0),
+            model_tokens: Some(10_000),
+            ..ResourceBudget::default()
+        };
+        let capacity = ResourceCapacity {
+            cpu_millis: Some(1_000),
+            memory_bytes: Some(1024 * 1024 * 1024),
+            gpu_devices: Some(0),
+            model_tokens: Some(20_000),
+        };
+        assert!(matches!(
+            capacity.admit("worker-a", &budget),
+            Err(CoreError::Validation(message)) if message.contains("cpu_millis")
+        ));
+
+        let mut capacity = capacity;
+        capacity.cpu_millis = Some(2_000);
+        capacity.memory_bytes = None;
+        assert!(matches!(
+            capacity.admit("worker-a", &budget),
+            Err(CoreError::Validation(message)) if message.contains("unknown capacity")
+        ));
+
+        capacity.memory_bytes = Some(512 * 1024 * 1024);
+        capacity.admit("worker-a", &budget).expect("capacity admits task");
     }
 
     #[test]
