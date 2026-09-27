@@ -605,12 +605,21 @@ ax_task_runtime_program:
     - backend_must_prove_enforcement_before_dispatch
     - retries_resumes_and_replays_preserve_explicit_identity_and_provenance
     - ambiguous_side_effects_are_never_replayed_implicitly
+  completed_slices:
+    AXH1:
+      pull_request: 57
+      merged_commit: "1390328a2cd5e8c3c5e193053ff280ef60f2f7d0"
+      result: task_workspace_identity_capability_budget_and_sandbox_domain_contracts
+    AXH2:
+      pull_request: 58
+      merged_commit: "7483f1ac83a28a1dabb2438886db8f431b4a1792"
+      result: durable_task_lifecycle_SQLite_persistence_and_append_only_events
   current_slice:
-    branch: agent/ax-task-runtime-foundation
-    pull_request: 57
-    scope: AXH1
-    status: merged
-    merged_commit: "1390328a2cd5e8c3c5e193053ff280ef60f2f7d0"
+    branch: agent/ax-immutable-workspace
+    pull_request: 59
+    scope: AXH3
+    status: ci_pending
+    objective: exact_revision_workspace_materialization_and_verified_digest
   next_slice:
-    scope: AXH2
-    objective: durable_task_lifecycle_and_append_only_events
+    scope: AXH4
+    objective: executor_backend_admission_wiring
