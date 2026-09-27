@@ -421,11 +421,7 @@ mod tests {
         let mut memory_task = task;
         memory_task.budget.memory_bytes = Some(1024);
         let error = exec
-            .execute_task_report(
-                &memory_task,
-                &base_request("x", &[]),
-                &CancelToken::new(),
-            )
+            .execute_task_report(&memory_task, &base_request("x", &[]), &CancelToken::new())
             .expect_err("memory budget must fail before process dispatch");
         assert!(matches!(
             error,
