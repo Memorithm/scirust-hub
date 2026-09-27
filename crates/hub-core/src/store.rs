@@ -6,7 +6,7 @@
 use crate::artifact::ArtifactMeta;
 use crate::digest::ContentDigest;
 use crate::error::CoreError;
-use crate::id::{ArtifactId, ComponentId, RunId};
+use crate::id::{ArtifactId, ComponentId, RunId, TaskId};
 use crate::version::Version;
 
 /// Repository of registered component manifests, keyed by `(id, version)`.
@@ -63,6 +63,28 @@ pub trait RunRepository: Send + Sync {
     /// # Errors
     /// Backend failures only.
     fn list(&self) -> Result<Vec<crate::run::RunRecord>, CoreError>;
+}
+
+/// Authoritative repository of isolated task lifecycle records.
+pub trait TaskRepository: Send + Sync {
+    /// Stores an append-only task snapshot.
+    ///
+    /// Implementations must reject immutable-spec drift, stale snapshots and
+    /// transition-history rewrites.
+    ///
+    /// # Errors
+    /// Validation or backend failures.
+    fn put(&self, record: &crate::task_lifecycle::TaskRecord) -> Result<(), CoreError>;
+
+    /// # Errors
+    /// Backend failures only.
+    fn get(&self, id: &TaskId) -> Result<Option<crate::task_lifecycle::TaskRecord>, CoreError>;
+
+    /// All tasks, deterministically ordered by `(created_at, id)`.
+    ///
+    /// # Errors
+    /// Backend failures only.
+    fn list(&self) -> Result<Vec<crate::task_lifecycle::TaskRecord>, CoreError>;
 }
 
 /// Metadata index for artifacts.
