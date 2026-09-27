@@ -14,6 +14,7 @@ use crate::clock::UnixMillis;
 use crate::component::ComponentManifest;
 use crate::error::CoreError;
 use crate::run::{RunRecord, RunState};
+use crate::task_lifecycle::{TaskRecord, TaskState};
 use crate::workflow::{StepAttempt, WorkflowRecord, WorkflowState};
 
 /// Maximum number of lifecycle events returned by one repository read.
@@ -28,6 +29,8 @@ pub enum LifecycleEventKind {
     ArtifactRecorded,
     RunCreated,
     RunStateChanged,
+    TaskCreated,
+    TaskStateChanged,
     WorkflowCreated,
     WorkflowStateChanged,
     WorkflowCancelRequested,
@@ -43,6 +46,8 @@ impl LifecycleEventKind {
             Self::ArtifactRecorded => "artifact_recorded",
             Self::RunCreated => "run_created",
             Self::RunStateChanged => "run_state_changed",
+            Self::TaskCreated => "task_created",
+            Self::TaskStateChanged => "task_state_changed",
             Self::WorkflowCreated => "workflow_created",
             Self::WorkflowStateChanged => "workflow_state_changed",
             Self::WorkflowCancelRequested => "workflow_cancel_requested",
@@ -58,6 +63,8 @@ impl LifecycleEventKind {
             "artifact_recorded" => Some(Self::ArtifactRecorded),
             "run_created" => Some(Self::RunCreated),
             "run_state_changed" => Some(Self::RunStateChanged),
+            "task_created" => Some(Self::TaskCreated),
+            "task_state_changed" => Some(Self::TaskStateChanged),
             "workflow_created" => Some(Self::WorkflowCreated),
             "workflow_state_changed" => Some(Self::WorkflowStateChanged),
             "workflow_cancel_requested" => Some(Self::WorkflowCancelRequested),
@@ -74,6 +81,7 @@ pub enum LifecycleEntityType {
     Component,
     Artifact,
     Run,
+    Task,
     Workflow,
 }
 
@@ -84,6 +92,7 @@ impl LifecycleEntityType {
             Self::Component => "component",
             Self::Artifact => "artifact",
             Self::Run => "run",
+            Self::Task => "task",
             Self::Workflow => "workflow",
         }
     }
@@ -94,6 +103,7 @@ impl LifecycleEntityType {
             "component" => Some(Self::Component),
             "artifact" => Some(Self::Artifact),
             "run" => Some(Self::Run),
+            "task" => Some(Self::Task),
             "workflow" => Some(Self::Workflow),
             _ => None,
         }
@@ -316,6 +326,41 @@ pub fn derive_run_events(
 }
 
 #[must_use]
+pub fn derive_task_events(
+    previous: Option<&TaskRecord>,
+    current: &TaskRecord,
+) -> Vec<NewLifecycleEvent> {
+    let mut events = Vec::new();
+    if previous.is_none() {
+        events.push(NewLifecycleEvent::new(
+            current.created_at,
+            LifecycleEventKind::TaskCreated,
+            LifecycleEntityType::Task,
+            current.spec.id.to_string(),
+            BTreeMap::from([
+                ("principal".into(), current.spec.identity.principal.clone()),
+                ("state".into(), task_state_name(TaskState::Created).into()),
+            ]),
+        ));
+    }
+
+    let previous_transition_count = previous.map_or(0, |record| record.transitions.len());
+    for transition in current.transitions.iter().skip(previous_transition_count) {
+        events.push(NewLifecycleEvent::new(
+            transition.at,
+            LifecycleEventKind::TaskStateChanged,
+            LifecycleEntityType::Task,
+            current.spec.id.to_string(),
+            BTreeMap::from([
+                ("from".into(), task_state_name(transition.from).into()),
+                ("to".into(), task_state_name(transition.to).into()),
+            ]),
+        ));
+    }
+    events
+}
+
+#[must_use]
 pub fn derive_workflow_events(
     previous: Option<&WorkflowRecord>,
     current: &WorkflowRecord,
@@ -471,6 +516,10 @@ const fn run_state_name(state: RunState) -> &'static str {
         RunState::Failed => "failed",
         RunState::Cancelled => "cancelled",
     }
+}
+
+const fn task_state_name(state: TaskState) -> &'static str {
+    state.as_str()
 }
 
 const fn workflow_state_name(state: WorkflowState) -> &'static str {
