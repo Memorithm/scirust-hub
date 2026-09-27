@@ -31,3 +31,12 @@ Required CI must be green on the exact PR head before merge. A 5/5 ML orchestrat
 Reread the roadmap and applicable ML overlay at every session start, before component-contract changes, before global scheduler/auth/provenance work, after ecosystem-role or ML-priority changes, and before cross-repository or merge decisions.
 
 Do not merge the roadmap or ML maturity overlay itself into `main` unless the user explicitly requests it.
+
+
+## Mandatory isolated-task runtime bootstrap
+
+For agent-task execution, workspace materialization, sandboxing, workload identity, task-scoped authorization, network egress, resource budgets, suspend/resume, or autonomous campaign execution, read:
+
+`docs/AX_TASK_RUNTIME_BOOTSTRAP.md` and `docs/AX_TASK_RUNTIME_ROADMAP.md`.
+
+These documents absorb useful task/workspace/isolation abstractions from Google AX as Memorithm-owned Rust contracts. Google AX is not a runtime dependency. Process supervision remains explicitly weaker than an OS security sandbox; dispatch must fail closed when a backend cannot enforce the task's declared isolation, network, or resource envelope.
