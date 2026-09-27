@@ -11,9 +11,7 @@ use std::sync::Arc;
 use serde::{Deserialize, Serialize};
 
 use crate::error::ExecutorFailure;
-use crate::task::{
-    IsolationLevel, ResourceEnforcement, SandboxBackendDescriptor, TaskSpec,
-};
+use crate::task::{IsolationLevel, ResourceEnforcement, SandboxBackendDescriptor, TaskSpec};
 
 /// Cooperative cancellation flag shared between the caller and executor.
 #[derive(Clone, Debug, Default)]
