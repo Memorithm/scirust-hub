@@ -1172,8 +1172,12 @@ mod tests {
             let created = record.clone();
             TaskRepository::put(&store, &record).expect("created");
 
+            let workspace =
+                hub_core::WorkspaceMaterializationEvidence::new(&record.spec.workspace, Vec::new())
+                    .expect("workspace evidence");
+            record.admit(workspace, 51).expect("admit");
+            TaskRepository::put(&store, &record).expect("persist admission");
             for (state, at) in [
-                (hub_core::TaskState::Admitted, 51),
                 (hub_core::TaskState::Running, 52),
                 (hub_core::TaskState::Suspended, 53),
                 (hub_core::TaskState::Running, 54),
@@ -1194,6 +1198,7 @@ mod tests {
                 .collect();
             assert_eq!(task_events.len(), 5);
             assert_eq!(task_events[0].kind, LifecycleEventKind::TaskCreated);
+            assert!(task_events[1].attributes.contains_key("workspace_digest"));
             assert_eq!(task_events.last().unwrap().attributes["to"], "running");
         }
 

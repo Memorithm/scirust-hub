@@ -346,15 +346,24 @@ pub fn derive_task_events(
 
     let previous_transition_count = previous.map_or(0, |record| record.transitions.len());
     for transition in current.transitions.iter().skip(previous_transition_count) {
+        let mut attributes = BTreeMap::from([
+            ("from".into(), task_state_name(transition.from).into()),
+            ("to".into(), task_state_name(transition.to).into()),
+        ]);
+        if transition.to == TaskState::Admitted {
+            if let Some(workspace) = &current.workspace_evidence {
+                attributes.insert(
+                    "workspace_digest".into(),
+                    workspace.workspace_digest.to_string(),
+                );
+            }
+        }
         events.push(NewLifecycleEvent::new(
             transition.at,
             LifecycleEventKind::TaskStateChanged,
             LifecycleEntityType::Task,
             current.spec.id.to_string(),
-            BTreeMap::from([
-                ("from".into(), task_state_name(transition.from).into()),
-                ("to".into(), task_state_name(transition.to).into()),
-            ]),
+            attributes,
         ));
     }
     events

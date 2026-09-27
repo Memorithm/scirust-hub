@@ -14,11 +14,14 @@ use std::collections::BTreeSet;
 
 use serde::{Deserialize, Serialize};
 
+use crate::digest::{hash_bytes, ContentDigest, DOMAIN_TASK_WORKSPACE};
 use crate::error::CoreError;
 use crate::id::TaskId;
 
 /// Current wire/domain schema version for [`TaskSpec`].
 pub const TASK_SPEC_SCHEMA_VERSION: u32 = 1;
+/// Current schema for retained workspace-materialization evidence.
+pub const WORKSPACE_MATERIALIZATION_SCHEMA_VERSION: u32 = 1;
 
 const MAX_PRINCIPAL_BYTES: usize = 256;
 const MAX_REPOSITORIES: usize = 32;
@@ -92,7 +95,12 @@ pub struct WorkspaceSpec {
 }
 
 impl WorkspaceSpec {
-    fn validate(&self) -> Result<(), CoreError> {
+    /// Validates bounded, unique workspace declarations.
+    ///
+    /// # Errors
+    /// Validation errors for duplicate repositories/dependencies, floating Git
+    /// revisions or oversized tokens.
+    pub fn validate(&self) -> Result<(), CoreError> {
         if self.repositories.len() > MAX_REPOSITORIES {
             return Err(CoreError::Validation(format!(
                 "workspace has {} repositories; maximum is {MAX_REPOSITORIES}",
@@ -113,6 +121,175 @@ impl WorkspaceSpec {
 
         validate_unique_tokens("MCP server", &self.mcp_servers, MAX_CAPABILITY_BYTES)?;
         validate_unique_tokens("skill", &self.skills, MAX_CAPABILITY_BYTES)
+    }
+}
+
+/// Verified observation of one repository materialized for a task.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct MaterializedRepositoryEvidence {
+    pub repository: String,
+    pub requested_revision: String,
+    pub observed_revision: String,
+    pub tree_id: String,
+    pub content_digest: ContentDigest,
+    pub read_only_requested: bool,
+}
+
+/// Retained proof that the repositories declared by a [`WorkspaceSpec`] were
+/// materialized at their exact requested Git object IDs.
+///
+/// The digest also binds the complete declared workspace spec, including MCP
+/// server and skill names. It is evidence of what was materialized; it is not
+/// a claim that filesystem permissions or network isolation are enforced.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct WorkspaceMaterializationEvidence {
+    pub schema_version: u32,
+    pub repositories: Vec<MaterializedRepositoryEvidence>,
+    pub workspace_digest: ContentDigest,
+}
+
+impl WorkspaceMaterializationEvidence {
+    /// Constructs canonical evidence after validating exact repository identity.
+    ///
+    /// # Errors
+    /// Validation errors for missing/extra repositories, revision drift,
+    /// malformed Git object IDs or duplicate repository observations.
+    pub fn new(
+        spec: &WorkspaceSpec,
+        mut repositories: Vec<MaterializedRepositoryEvidence>,
+    ) -> Result<Self, CoreError> {
+        spec.validate()?;
+        repositories.sort_by(|left, right| left.repository.cmp(&right.repository));
+        Self::validate_repository_evidence(spec, &repositories)?;
+        let workspace_digest = Self::compute_digest(spec, &repositories)?;
+        Ok(Self {
+            schema_version: WORKSPACE_MATERIALIZATION_SCHEMA_VERSION,
+            repositories,
+            workspace_digest,
+        })
+    }
+
+    /// Revalidates persisted evidence against the immutable workspace spec.
+    ///
+    /// # Errors
+    /// Validation errors for schema drift, repository/revision mismatch or
+    /// digest corruption.
+    pub fn validate_against(&self, spec: &WorkspaceSpec) -> Result<(), CoreError> {
+        if self.schema_version != WORKSPACE_MATERIALIZATION_SCHEMA_VERSION {
+            return Err(CoreError::Validation(format!(
+                "unsupported workspace materialization schema_version {}; expected {WORKSPACE_MATERIALIZATION_SCHEMA_VERSION}",
+                self.schema_version
+            )));
+        }
+        spec.validate()?;
+        let mut repositories = self.repositories.clone();
+        repositories.sort_by(|left, right| left.repository.cmp(&right.repository));
+        if repositories != self.repositories {
+            return Err(CoreError::Validation(
+                "workspace materialization repositories must be canonically ordered".to_owned(),
+            ));
+        }
+        Self::validate_repository_evidence(spec, &repositories)?;
+        let expected = Self::compute_digest(spec, &repositories)?;
+        if expected != self.workspace_digest {
+            return Err(CoreError::Validation(
+                "workspace materialization digest does not match retained evidence".to_owned(),
+            ));
+        }
+        Ok(())
+    }
+
+    fn validate_repository_evidence(
+        spec: &WorkspaceSpec,
+        repositories: &[MaterializedRepositoryEvidence],
+    ) -> Result<(), CoreError> {
+        if repositories.len() != spec.repositories.len() {
+            return Err(CoreError::Validation(format!(
+                "workspace evidence contains {} repositories; spec declares {}",
+                repositories.len(),
+                spec.repositories.len()
+            )));
+        }
+
+        let expected: std::collections::BTreeMap<_, _> = spec
+            .repositories
+            .iter()
+            .map(|repository| (repository.repository.as_str(), repository))
+            .collect();
+        let mut seen = BTreeSet::new();
+
+        for evidence in repositories {
+            validate_bounded_token(
+                "materialized repository",
+                &evidence.repository,
+                MAX_REPOSITORY_BYTES,
+            )?;
+            if !seen.insert(evidence.repository.as_str()) {
+                return Err(CoreError::Validation(format!(
+                    "duplicate materialized repository {:?}",
+                    evidence.repository
+                )));
+            }
+            let Some(declared) = expected.get(evidence.repository.as_str()) else {
+                return Err(CoreError::Validation(format!(
+                    "materialized repository {:?} is not declared by the workspace",
+                    evidence.repository
+                )));
+            };
+            if evidence.requested_revision != declared.revision {
+                return Err(CoreError::Validation(format!(
+                    "materialized repository {} requested revision does not match workspace spec",
+                    evidence.repository
+                )));
+            }
+            if evidence.observed_revision != declared.revision {
+                return Err(CoreError::Validation(format!(
+                    "materialized repository {} observed revision {} does not match requested {}",
+                    evidence.repository, evidence.observed_revision, declared.revision
+                )));
+            }
+            if !is_exact_git_object_id(&evidence.observed_revision)
+                || !is_exact_git_object_id(&evidence.tree_id)
+            {
+                return Err(CoreError::Validation(format!(
+                    "materialized repository {} must retain exact lowercase Git object IDs",
+                    evidence.repository
+                )));
+            }
+            if evidence.read_only_requested != declared.read_only {
+                return Err(CoreError::Validation(format!(
+                    "materialized repository {} read-only flag does not match workspace spec",
+                    evidence.repository
+                )));
+            }
+        }
+        Ok(())
+    }
+
+    fn compute_digest(
+        spec: &WorkspaceSpec,
+        repositories: &[MaterializedRepositoryEvidence],
+    ) -> Result<ContentDigest, CoreError> {
+        #[derive(Serialize)]
+        struct CanonicalWorkspaceEvidence<'a> {
+            schema_version: u32,
+            spec: &'a WorkspaceSpec,
+            repositories: &'a [MaterializedRepositoryEvidence],
+        }
+
+        let bytes = serde_json::to_vec(&CanonicalWorkspaceEvidence {
+            schema_version: WORKSPACE_MATERIALIZATION_SCHEMA_VERSION,
+            spec,
+            repositories,
+        })
+        .map_err(|error| {
+            CoreError::Storage(format!(
+                "serializing canonical workspace materialization evidence: {error}"
+            ))
+        })?;
+        Ok(hash_bytes(DOMAIN_TASK_WORKSPACE, &bytes))
     }
 }
 

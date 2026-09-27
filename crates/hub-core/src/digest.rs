@@ -23,6 +23,10 @@ pub const DOMAIN_COMPONENT_MANIFEST: &[u8] = b"scirust-hub:component-manifest:v1
 pub const DOMAIN_RUN_PARAMS: &[u8] = b"scirust-hub:run-params:v1";
 /// Domain for captured process output streams.
 pub const DOMAIN_CAPTURE: &[u8] = b"scirust-hub:capture:v1";
+/// Domain for one materialized repository working tree.
+pub const DOMAIN_TASK_WORKSPACE_REPOSITORY: &[u8] = b"scirust-hub:task-workspace-repository:v1";
+/// Domain for the canonical evidence describing one complete task workspace.
+pub const DOMAIN_TASK_WORKSPACE: &[u8] = b"scirust-hub:task-workspace:v1";
 
 /// A stable 32-byte content digest. Wire form: lowercase hex string;
 /// deserialization validates length and alphabet.
