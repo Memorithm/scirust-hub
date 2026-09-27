@@ -32,6 +32,7 @@ pub mod run;
 pub mod scicapsule;
 pub mod store;
 pub mod task;
+pub mod task_lifecycle;
 pub mod version;
 pub mod workflow;
 
@@ -69,6 +70,10 @@ pub use task::{
     CapabilitySet, IsolationLevel, NetworkPolicy, ResourceBudget, SandboxBackendDescriptor,
     SandboxRequirements, TaskIdentity, TaskSpec, WorkspaceRepository, WorkspaceSpec,
     TASK_SPEC_SCHEMA_VERSION,
+};
+pub use task_lifecycle::{
+    validate_task_snapshot_update, TaskRecord, TaskState, TaskTransition,
+    TASK_RECORD_SCHEMA_VERSION,
 };
 pub use version::Version;
 pub use workflow::{
