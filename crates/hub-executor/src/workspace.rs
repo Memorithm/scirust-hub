@@ -165,7 +165,11 @@ impl GitWorkspaceMaterializer {
         })
     }
 
-    fn git_clone_without_checkout(&self, source: &str, destination: &Path) -> Result<(), CoreError> {
+    fn git_clone_without_checkout(
+        &self,
+        source: &str,
+        destination: &Path,
+    ) -> Result<(), CoreError> {
         let output = Command::new(&self.git_program)
             .arg("clone")
             .arg("--quiet")
@@ -204,8 +208,7 @@ impl GitWorkspaceMaterializer {
     }
 
     fn checkout_detached(&self, repository: &Path, revision: &str) -> Result<(), CoreError> {
-        let output =
-            self.git_output(repository, &["checkout", "--detach", "--quiet", revision])?;
+        let output = self.git_output(repository, &["checkout", "--detach", "--quiet", revision])?;
         require_git_success("git checkout --detach", output)
     }
 
@@ -283,7 +286,9 @@ fn digest_directory(
     let mut entries = std::fs::read_dir(directory)
         .map_err(|error| CoreError::Storage(format!("reading workspace directory: {error}")))?
         .collect::<Result<Vec<_>, _>>()
-        .map_err(|error| CoreError::Storage(format!("reading workspace directory entry: {error}")))?;
+        .map_err(|error| {
+            CoreError::Storage(format!("reading workspace directory entry: {error}"))
+        })?;
 
     entries.sort_by(|left, right| {
         left.file_name()
@@ -306,8 +311,9 @@ fn digest_directory(
         if metadata.file_type().is_symlink() {
             state.update(b"L");
             update_frame(state, relative.as_bytes());
-            let target = std::fs::read_link(&path)
-                .map_err(|error| CoreError::Storage(format!("reading workspace symlink: {error}")))?;
+            let target = std::fs::read_link(&path).map_err(|error| {
+                CoreError::Storage(format!("reading workspace symlink: {error}"))
+            })?;
             let target = target.to_str().ok_or_else(|| {
                 CoreError::Validation("workspace symlink target is not valid UTF-8".to_owned())
             })?;
@@ -357,9 +363,10 @@ fn digest_directory(
 fn portable_relative_path(path: &Path) -> Result<String, CoreError> {
     let mut parts = Vec::new();
     for component in path.components() {
-        let value = component.as_os_str().to_str().ok_or_else(|| {
-            CoreError::Validation("workspace path is not valid UTF-8".to_owned())
-        })?;
+        let value = component
+            .as_os_str()
+            .to_str()
+            .ok_or_else(|| CoreError::Validation("workspace path is not valid UTF-8".to_owned()))?;
         parts.push(value);
     }
     Ok(parts.join("/"))
@@ -403,7 +410,10 @@ mod tests {
             .status()
             .expect("git init");
         assert!(status.success());
-        run_git(&root, &["config", "user.email", "workspace@example.invalid"]);
+        run_git(
+            &root,
+            &["config", "user.email", "workspace@example.invalid"],
+        );
         run_git(&root, &["config", "user.name", "Workspace Test"]);
         run_git(&root, &["config", "commit.gpgsign", "false"]);
         std::fs::write(root.join("alpha.txt"), b"alpha\n").expect("write");
@@ -433,10 +443,8 @@ mod tests {
     fn exact_commit_materializes_with_stable_evidence() {
         let (source, revision) = source_repository();
         let spec = spec(revision.clone());
-        let sources = BTreeMap::from([(
-            "Memorithm/example".to_owned(),
-            source.display().to_string(),
-        )]);
+        let sources =
+            BTreeMap::from([("Memorithm/example".to_owned(), source.display().to_string())]);
         let first_root =
             std::env::temp_dir().join(format!("hub-workspace-out-{}", uuid::Uuid::new_v4()));
         let second_root =
@@ -474,12 +482,14 @@ mod tests {
             "Memorithm/example".to_owned(),
             source.display().to_string(),
         )]);
-        let root =
-            std::env::temp_dir().join(format!("hub-workspace-out-{}", uuid::Uuid::new_v4()));
+        let root = std::env::temp_dir().join(format!("hub-workspace-out-{}", uuid::Uuid::new_v4()));
         let error = GitWorkspaceMaterializer::default()
             .materialize(&spec, &root, &sources)
             .expect_err("unknown revision must fail");
-        assert!(matches!(error, CoreError::Storage(_) | CoreError::Validation(_)));
+        assert!(matches!(
+            error,
+            CoreError::Storage(_) | CoreError::Validation(_)
+        ));
         assert!(!root.exists(), "failed materialization must clean target");
         let _ = std::fs::remove_dir_all(source);
     }
@@ -492,7 +502,9 @@ mod tests {
         let error = GitWorkspaceMaterializer::default()
             .materialize(&WorkspaceSpec::default(), &root, &BTreeMap::new())
             .expect_err("reuse must fail");
-        assert!(matches!(error, CoreError::Validation(message) if message.contains("already exists")));
+        assert!(
+            matches!(error, CoreError::Validation(message) if message.contains("already exists"))
+        );
         let _ = std::fs::remove_dir_all(root);
     }
 
