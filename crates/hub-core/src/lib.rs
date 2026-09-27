@@ -69,8 +69,8 @@ pub use run::{
 pub use task::{
     CapabilitySet, IsolationLevel, MaterializedRepositoryEvidence, NetworkPolicy, ResourceBudget,
     SandboxBackendDescriptor, SandboxRequirements, TaskIdentity, TaskSpec,
-    WorkspaceMaterializationEvidence, WorkspaceRepository, WorkspaceSpec,
-    TASK_SPEC_SCHEMA_VERSION, WORKSPACE_MATERIALIZATION_SCHEMA_VERSION,
+    WorkspaceMaterializationEvidence, WorkspaceRepository, WorkspaceSpec, TASK_SPEC_SCHEMA_VERSION,
+    WORKSPACE_MATERIALIZATION_SCHEMA_VERSION,
 };
 pub use task_lifecycle::{
     validate_task_snapshot_update, TaskRecord, TaskState, TaskTransition,
