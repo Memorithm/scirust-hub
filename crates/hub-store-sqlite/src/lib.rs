@@ -30,11 +30,11 @@ use hub_core::event::{
     LifecycleEventKind, LifecycleEventRepository, NewLifecycleEvent,
 };
 use hub_core::run::RunRecord;
-use hub_core::task_lifecycle::TaskRecord;
 use hub_core::store::{
     ArtifactMetadataRepository, ComponentRepository, RunRepository, TaskRepository,
     WorkflowRepository,
 };
+use hub_core::task_lifecycle::TaskRecord;
 use rusqlite::OptionalExtension as _;
 
 mod publication;
@@ -449,7 +449,6 @@ impl RunRepository for SqliteStore {
         Ok(out)
     }
 }
-
 
 impl TaskRepository for SqliteStore {
     fn put(&self, record: &TaskRecord) -> Result<(), CoreError> {
@@ -1140,7 +1139,6 @@ mod tests {
         drop(store);
         let _ = std::fs::remove_dir_all(dir);
     }
-
 
     #[test]
     fn tasks_are_durable_append_only_and_evented() {
