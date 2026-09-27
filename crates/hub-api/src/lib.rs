@@ -898,11 +898,13 @@ fn core_error(error: CoreError) -> Response {
         }
         CoreError::ComponentNotFound(_)
         | CoreError::RunNotFound(_)
+        | CoreError::TaskNotFound(_)
         | CoreError::ArtifactNotFound(_)
         | CoreError::BlobNotFound { .. } => (StatusCode::NOT_FOUND, ErrorCode::NotFound),
         CoreError::CapabilityNotDeclared { .. }
         | CoreError::MissingInputBinding { .. }
         | CoreError::InvalidTransition { .. }
+        | CoreError::InvalidTaskTransition { .. }
         | CoreError::InvalidWorkflowTransition { .. }
         | CoreError::RunNotExecutable { .. }
         | CoreError::WorkflowNotExecutable { .. }
