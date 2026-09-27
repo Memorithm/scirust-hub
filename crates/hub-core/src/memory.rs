@@ -15,14 +15,15 @@ use crate::component::ComponentManifest;
 use crate::digest::{self, ContentDigest, RawSha256};
 use crate::error::CoreError;
 use crate::event::{
-    artifact_recorded_event, component_registered_event, derive_run_events, derive_workflow_events,
-    wall_clock_ms, workflow_cancel_requested_event, InMemoryLifecycleEvents, LifecycleEvent,
-    LifecycleEventRepository,
+    artifact_recorded_event, component_registered_event, derive_run_events, derive_task_events,
+    derive_workflow_events, wall_clock_ms, workflow_cancel_requested_event,
+    InMemoryLifecycleEvents, LifecycleEvent, LifecycleEventRepository,
 };
-use crate::id::{ArtifactId, ComponentId, RunId};
+use crate::id::{ArtifactId, ComponentId, RunId, TaskId};
 use crate::run::RunRecord;
+use crate::task_lifecycle::{validate_task_snapshot_update, TaskRecord};
 use crate::store::{
-    ArtifactMetadataRepository, ArtifactStore, ComponentRepository, RunRepository,
+    ArtifactMetadataRepository, ArtifactStore, ComponentRepository, RunRepository, TaskRepository,
     WorkflowRepository,
 };
 use crate::version::Version;
@@ -108,6 +109,40 @@ impl RunRepository for InMemoryRuns {
         // tie-broken by id.
         let mut rows: Vec<&RunRecord> = inner.records.values().collect();
         rows.sort_by_key(|r| (r.created_at, r.id));
+        Ok(rows.into_iter().cloned().collect())
+    }
+}
+
+
+#[derive(Debug, Default)]
+struct TasksInner {
+    records: BTreeMap<TaskId, TaskRecord>,
+}
+
+/// In-memory authoritative task lifecycle backend.
+#[derive(Debug, Default)]
+pub struct InMemoryTasks(Mutex<TasksInner>);
+
+impl TaskRepository for InMemoryTasks {
+    fn put(&self, record: &TaskRecord) -> Result<(), CoreError> {
+        record.validate()?;
+        let mut inner = self.0.lock().map_err(poison)?;
+        if let Some(previous) = inner.records.get(&record.spec.id) {
+            validate_task_snapshot_update(previous, record)?;
+        }
+        inner.records.insert(record.spec.id, record.clone());
+        Ok(())
+    }
+
+    fn get(&self, id: &TaskId) -> Result<Option<TaskRecord>, CoreError> {
+        let inner = self.0.lock().map_err(poison)?;
+        Ok(inner.records.get(id).cloned())
+    }
+
+    fn list(&self) -> Result<Vec<TaskRecord>, CoreError> {
+        let inner = self.0.lock().map_err(poison)?;
+        let mut rows: Vec<&TaskRecord> = inner.records.values().collect();
+        rows.sort_by_key(|record| (record.created_at, record.spec.id));
         Ok(rows.into_iter().cloned().collect())
     }
 }
@@ -542,12 +577,13 @@ impl WorkflowRepository for InMemoryWorkflows {
 }
 
 /// Composite in-memory backend used by the daemon's ephemeral mode. It keeps
-/// the four metadata repositories and lifecycle chronology coupled behind one
+/// the metadata repositories and lifecycle chronology coupled behind one
 /// object, mirroring the durable SQLite adapter's port surface.
 #[derive(Debug, Default)]
 pub struct InMemoryHubStore {
     components: InMemoryComponents,
     runs: InMemoryRuns,
+    tasks: InMemoryTasks,
     artifacts: InMemoryArtifactMeta,
     workflows: InMemoryWorkflows,
     events: InMemoryLifecycleEvents,
@@ -596,6 +632,26 @@ impl RunRepository for InMemoryHubStore {
 
     fn list(&self) -> Result<Vec<RunRecord>, CoreError> {
         RunRepository::list(&self.runs)
+    }
+}
+
+
+impl TaskRepository for InMemoryHubStore {
+    fn put(&self, record: &TaskRecord) -> Result<(), CoreError> {
+        let previous = TaskRepository::get(&self.tasks, &record.spec.id)?;
+        TaskRepository::put(&self.tasks, record)?;
+        for event in derive_task_events(previous.as_ref(), record) {
+            self.events.record(event)?;
+        }
+        Ok(())
+    }
+
+    fn get(&self, id: &TaskId) -> Result<Option<TaskRecord>, CoreError> {
+        TaskRepository::get(&self.tasks, id)
+    }
+
+    fn list(&self) -> Result<Vec<TaskRecord>, CoreError> {
+        TaskRepository::list(&self.tasks)
     }
 }
 
