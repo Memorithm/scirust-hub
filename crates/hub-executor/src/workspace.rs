@@ -128,7 +128,7 @@ impl GitWorkspaceMaterializer {
 
             self.git_clone_without_checkout(source, &destination)?;
             self.verify_commit_exists(&destination, &repository.revision)?;
-            self.reject_submodules(&destination)?;
+            self.reject_submodules(&destination, &repository.revision)?;
             self.checkout_detached(&destination, &repository.revision)?;
 
             let observed_revision =
@@ -192,8 +192,8 @@ impl GitWorkspaceMaterializer {
         Ok(())
     }
 
-    fn reject_submodules(&self, repository: &Path) -> Result<(), CoreError> {
-        let output = self.git_stdout(repository, &["ls-tree", "-r", "HEAD"])?;
+    fn reject_submodules(&self, repository: &Path, revision: &str) -> Result<(), CoreError> {
+        let output = self.git_stdout(repository, &["ls-tree", "-r", revision])?;
         if output.lines().any(|line| line.starts_with("160000 ")) {
             return Err(CoreError::Validation(
                 "workspace materializer v1 rejects Git submodules; declare them as explicit workspace repositories"
@@ -204,10 +204,8 @@ impl GitWorkspaceMaterializer {
     }
 
     fn checkout_detached(&self, repository: &Path, revision: &str) -> Result<(), CoreError> {
-        let output = self.git_output(
-            repository,
-            &["checkout", "--detach", "--quiet", "--", revision],
-        )?;
+        let output =
+            self.git_output(repository, &["checkout", "--detach", "--quiet", revision])?;
         require_git_success("git checkout --detach", output)
     }
 
