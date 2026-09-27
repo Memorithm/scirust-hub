@@ -609,4 +609,8 @@ ax_task_runtime_program:
     branch: agent/ax-task-runtime-foundation
     pull_request: 57
     scope: AXH1
-    status: ci_pending
+    status: merged
+    merged_commit: "1390328a2cd5e8c3c5e193053ff280ef60f2f7d0"
+  next_slice:
+    scope: AXH2
+    objective: durable_task_lifecycle_and_append_only_events
