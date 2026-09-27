@@ -614,12 +614,23 @@ ax_task_runtime_program:
       pull_request: 58
       merged_commit: "7483f1ac83a28a1dabb2438886db8f431b4a1792"
       result: durable_task_lifecycle_SQLite_persistence_and_append_only_events
+  completed_slices:
+    AXH1:
+      pull_request: 57
+      merged_commit: "1390328a2cd5e8c3c5e193053ff280ef60f2f7d0"
+      result: task_workspace_identity_capability_budget_and_sandbox_domain_contracts
+    AXH2:
+      pull_request: 58
+      merged_commit: "7483f1ac83a28a1dabb2438886db8f431b4a1792"
+      result: durable_task_lifecycle_SQLite_persistence_and_append_only_events
+    AXH3:
+      pull_request: 59
+      merged_commit: "9868780b1e6eb163e5d37ca75892a53ab786bdb8"
+      result: exact_revision_workspace_materialization_and_verified_digest
   current_slice:
-    branch: agent/ax-immutable-workspace
-    pull_request: 59
-    scope: AXH3
-    status: ci_pending
-    objective: exact_revision_workspace_materialization_and_verified_digest
-  next_slice:
     scope: AXH4
-    objective: executor_backend_admission_wiring
+    status: active
+    objective: granular_executor_backend_admission_wiring
+  next_slice:
+    scope: AXH5
+    objective: first_real_container_or_stronger_sandbox_backend
