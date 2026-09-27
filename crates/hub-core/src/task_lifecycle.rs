@@ -8,10 +8,11 @@ use serde::{Deserialize, Serialize};
 
 use crate::clock::UnixMillis;
 use crate::error::CoreError;
-use crate::task::TaskSpec;
+use crate::task::{TaskSpec, WorkspaceMaterializationEvidence};
 
 /// Current durable record schema.
-pub const TASK_RECORD_SCHEMA_VERSION: u32 = 1;
+pub const TASK_RECORD_SCHEMA_VERSION: u32 = 2;
+const MIN_TASK_RECORD_SCHEMA_VERSION: u32 = 1;
 
 /// Lifecycle of one logical task.
 ///
@@ -106,6 +107,8 @@ pub struct TaskRecord {
     pub state: TaskState,
     pub created_at: UnixMillis,
     #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub workspace_evidence: Option<WorkspaceMaterializationEvidence>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub admitted_at: Option<UnixMillis>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub started_at: Option<UnixMillis>,
@@ -127,6 +130,7 @@ impl TaskRecord {
             spec,
             state: TaskState::Created,
             created_at: now,
+            workspace_evidence: None,
             admitted_at: None,
             started_at: None,
             finished_at: None,
@@ -134,12 +138,51 @@ impl TaskRecord {
         })
     }
 
-    /// Applies one legal monotonic lifecycle transition.
+    /// Admits a newly created task only after verified workspace evidence exists.
     ///
     /// # Errors
-    /// Returns [`CoreError::InvalidTaskTransition`] for an illegal move and a
-    /// validation error for timestamps that would move backwards.
+    /// Validation errors for workspace-evidence mismatch or lifecycle errors.
+    pub fn admit(
+        &mut self,
+        workspace_evidence: WorkspaceMaterializationEvidence,
+        now: UnixMillis,
+    ) -> Result<(), CoreError> {
+        if self.state != TaskState::Created {
+            return Err(CoreError::InvalidTaskTransition {
+                from: self.state,
+                to: TaskState::Admitted,
+            });
+        }
+        workspace_evidence.validate_against(&self.spec.workspace)?;
+        if self.workspace_evidence.is_some() {
+            return Err(CoreError::Validation(
+                "task workspace evidence is already recorded".to_owned(),
+            ));
+        }
+        self.workspace_evidence = Some(workspace_evidence);
+        self.apply_transition(TaskState::Admitted, now)
+    }
+
+    /// Applies one legal monotonic lifecycle transition after admission.
+    ///
+    /// `Created -> Admitted` is intentionally unavailable here; callers must
+    /// use [`Self::admit`] so durable admission always carries verified
+    /// workspace evidence for schema-v2 task records.
+    ///
+    /// # Errors
+    /// Returns [`CoreError::InvalidTaskTransition`] for illegal moves and a
+    /// validation error when admission is attempted without workspace evidence
+    /// or timestamps would move backwards.
     pub fn transition(&mut self, to: TaskState, now: UnixMillis) -> Result<(), CoreError> {
+        if self.state == TaskState::Created && to == TaskState::Admitted {
+            return Err(CoreError::Validation(
+                "task admission requires verified workspace materialization evidence".to_owned(),
+            ));
+        }
+        self.apply_transition(to, now)
+    }
+
+    fn apply_transition(&mut self, to: TaskState, now: UnixMillis) -> Result<(), CoreError> {
         let from = self.state;
         if !from.can_transition_to(to) {
             return Err(CoreError::InvalidTaskTransition { from, to });
@@ -175,9 +218,11 @@ impl TaskRecord {
     /// Validation errors for schema/spec drift, malformed transition history,
     /// non-monotonic timestamps or inconsistent derived timestamps/state.
     pub fn validate(&self) -> Result<(), CoreError> {
-        if self.schema_version != TASK_RECORD_SCHEMA_VERSION {
+        if !(MIN_TASK_RECORD_SCHEMA_VERSION..=TASK_RECORD_SCHEMA_VERSION)
+            .contains(&self.schema_version)
+        {
             return Err(CoreError::Validation(format!(
-                "unsupported task record schema_version {}; expected {TASK_RECORD_SCHEMA_VERSION}",
+                "unsupported task record schema_version {}; supported range is {MIN_TASK_RECORD_SCHEMA_VERSION}..={TASK_RECORD_SCHEMA_VERSION}",
                 self.schema_version
             )));
         }
@@ -228,6 +273,27 @@ impl TaskRecord {
                 "task lifecycle timestamps do not match retained transitions".to_owned(),
             ));
         }
+
+        if self.schema_version >= 2 {
+            match (self.admitted_at, &self.workspace_evidence) {
+                (Some(_), Some(evidence)) => evidence.validate_against(&self.spec.workspace)?,
+                (Some(_), None) => {
+                    return Err(CoreError::Validation(
+                        "admitted task is missing verified workspace evidence".to_owned(),
+                    ));
+                }
+                (None, Some(_)) => {
+                    return Err(CoreError::Validation(
+                        "workspace evidence cannot be retained before task admission".to_owned(),
+                    ));
+                }
+                (None, None) => {}
+            }
+        } else if self.workspace_evidence.is_some() {
+            return Err(CoreError::Validation(
+                "legacy task record schema cannot carry workspace evidence".to_owned(),
+            ));
+        }
         Ok(())
     }
 }
@@ -247,11 +313,42 @@ pub fn validate_task_snapshot_update(
 ) -> Result<(), CoreError> {
     previous.validate()?;
     current.validate()?;
-    if previous.spec != current.spec || previous.created_at != current.created_at {
+    if previous.schema_version != current.schema_version
+        || previous.spec != current.spec
+        || previous.created_at != current.created_at
+    {
         return Err(CoreError::Validation(
-            "task immutable identity/spec/creation time cannot change".to_owned(),
+            "task immutable schema/identity/spec/creation time cannot change".to_owned(),
         ));
     }
+    match (&previous.workspace_evidence, &current.workspace_evidence) {
+        (Some(before), Some(after)) if before != after => {
+            return Err(CoreError::Validation(
+                "task workspace evidence cannot change after admission".to_owned(),
+            ));
+        }
+        (Some(_), None) => {
+            return Err(CoreError::Validation(
+                "task workspace evidence cannot be removed".to_owned(),
+            ));
+        }
+        (None, Some(_)) => {
+            let new_transitions = current
+                .transitions
+                .get(previous.transitions.len()..)
+                .unwrap_or_default();
+            if !new_transitions
+                .iter()
+                .any(|transition| transition.to == TaskState::Admitted)
+            {
+                return Err(CoreError::Validation(
+                    "workspace evidence may be added only with an admission transition".to_owned(),
+                ));
+            }
+        }
+        _ => {}
+    }
+
     if current.transitions.len() < previous.transitions.len()
         || current.transitions[..previous.transitions.len()] != previous.transitions
     {
@@ -272,7 +369,7 @@ mod tests {
     use super::*;
     use crate::task::{
         CapabilitySet, IsolationLevel, NetworkPolicy, ResourceBudget, SandboxRequirements,
-        TaskIdentity, WorkspaceSpec, TASK_SPEC_SCHEMA_VERSION,
+        TaskIdentity, WorkspaceMaterializationEvidence, WorkspaceSpec, TASK_SPEC_SCHEMA_VERSION,
     };
     use crate::TaskId;
 
@@ -299,11 +396,17 @@ mod tests {
         }
     }
 
+    fn workspace_evidence(spec: &TaskSpec) -> WorkspaceMaterializationEvidence {
+        WorkspaceMaterializationEvidence::new(&spec.workspace, Vec::new()).expect("workspace")
+    }
+
     #[test]
     fn suspend_resume_chain_is_retained() {
-        let mut record = TaskRecord::create(task_spec(), 10).expect("task");
+        let spec = task_spec();
+        let evidence = workspace_evidence(&spec);
+        let mut record = TaskRecord::create(spec, 10).expect("task");
+        record.admit(evidence, 11).expect("admit");
         for (state, at) in [
-            (TaskState::Admitted, 11),
             (TaskState::Running, 12),
             (TaskState::Suspended, 13),
             (TaskState::Running, 14),
@@ -317,6 +420,17 @@ mod tests {
         assert_eq!(record.finished_at, Some(15));
         assert_eq!(record.transitions.len(), 5);
         record.validate().expect("valid retained lifecycle");
+    }
+
+    #[test]
+    fn admission_requires_verified_workspace_evidence() {
+        let mut record = TaskRecord::create(task_spec(), 10).expect("task");
+        assert!(matches!(
+            record.transition(TaskState::Admitted, 11),
+            Err(CoreError::Validation(message)) if message.contains("workspace materialization")
+        ));
+        assert_eq!(record.state, TaskState::Created);
+        assert!(record.workspace_evidence.is_none());
     }
 
     #[test]
@@ -341,7 +455,8 @@ mod tests {
     fn snapshot_updates_must_be_append_only() {
         let created = TaskRecord::create(task_spec(), 10).expect("task");
         let mut running = created.clone();
-        running.transition(TaskState::Admitted, 11).expect("admit");
+        let evidence = workspace_evidence(&running.spec);
+        running.admit(evidence, 11).expect("admit");
         running.transition(TaskState::Running, 12).expect("run");
         validate_task_snapshot_update(&created, &running).expect("forward update");
 
