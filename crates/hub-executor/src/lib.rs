@@ -36,6 +36,7 @@ use std::time::{Duration, Instant};
 
 use hub_core::error::ExecutorFailure;
 use hub_core::exec::{CancelToken, ExecutionOutcome, ExecutionRequest, Executor};
+use hub_core::{IsolationLevel, ResourceEnforcement, SandboxBackendDescriptor};
 
 /// Poll interval while waiting on the child.
 const POLL_INTERVAL_MS: u64 = 10;
@@ -66,6 +67,19 @@ struct CapturedStream {
 impl Executor for ProcessExecutor {
     fn backend_id(&self) -> &str {
         "process"
+    }
+
+    fn backend_descriptor(&self) -> SandboxBackendDescriptor {
+        SandboxBackendDescriptor {
+            backend_id: self.backend_id().to_owned(),
+            isolation: IsolationLevel::Process,
+            enforces_network_policy: false,
+            enforces_workspace_write_policy: false,
+            resources: ResourceEnforcement {
+                wall_clock_ms: true,
+                ..ResourceEnforcement::default()
+            },
+        }
     }
 
     fn execute(
