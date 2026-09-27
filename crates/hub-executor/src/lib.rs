@@ -79,6 +79,7 @@ impl Executor for ProcessExecutor {
                 wall_clock_ms: true,
                 ..ResourceEnforcement::default()
             },
+            capabilities: Default::default(),
         }
     }
 
