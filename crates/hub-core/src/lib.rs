@@ -55,7 +55,7 @@ pub use id::{ArtifactId, AttemptId, ComponentId, RunId, TaskId, WorkflowId};
 pub use limits::Limits;
 pub use memory::{
     FileSystemArtifactStore, InMemoryArtifactMeta, InMemoryComponents, InMemoryHubStore,
-    InMemoryRuns, InMemoryWorkflows,
+    InMemoryRuns, InMemoryTasks, InMemoryWorkflows,
 };
 pub use orchestrator::{Orchestrator, RegistrationStatus};
 pub use publication::{
