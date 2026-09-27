@@ -79,6 +79,10 @@ uuid_id! {
     /// Identity of one submitted workflow (multi-step orchestration).
     WorkflowId
 }
+uuid_id! {
+    /// Identity of one isolated agent/task execution envelope.
+    TaskId
+}
 
 #[cfg(test)]
 mod tests {
