@@ -187,9 +187,7 @@ impl ResourceBudget {
 /// Ordering is intentional so backends can prove they meet or exceed a
 /// requirement without conflating supervised processes with security
 /// sandboxes.
-#[derive(
-    Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize,
-)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum IsolationLevel {
     /// Process supervision only. Not a hostile-code security boundary.
@@ -229,7 +227,11 @@ impl NetworkPolicy {
                 self.allowed_endpoints.len()
             )));
         }
-        validate_unique_tokens("network endpoint", &self.allowed_endpoints, MAX_ENDPOINT_BYTES)
+        validate_unique_tokens(
+            "network endpoint",
+            &self.allowed_endpoints,
+            MAX_ENDPOINT_BYTES,
+        )
     }
 }
 
