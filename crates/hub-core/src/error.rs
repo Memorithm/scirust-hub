@@ -5,6 +5,7 @@
 
 use crate::id::{ArtifactId, ComponentId, RunId};
 use crate::run::RunState;
+use crate::task_lifecycle::TaskState;
 
 #[derive(Debug, Clone, PartialEq, Eq, thiserror::Error)]
 pub enum CoreError {
@@ -40,8 +41,12 @@ pub enum CoreError {
     },
     #[error("run {0} not found")]
     RunNotFound(RunId),
+    #[error("task {0} not found")]
+    TaskNotFound(crate::id::TaskId),
     #[error("invalid transition from {from} to {to}")]
     InvalidTransition { from: RunState, to: RunState },
+    #[error("invalid task transition from {from} to {to}")]
+    InvalidTaskTransition { from: TaskState, to: TaskState },
     #[error("invalid workflow transition from {from:?} to {to:?}")]
     InvalidWorkflowTransition {
         from: crate::workflow::WorkflowState,
