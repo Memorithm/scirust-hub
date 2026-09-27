@@ -383,11 +383,7 @@ impl ResourceCapacity {
     /// A zero GPU request is treated as no GPU demand, so a CPU-only worker
     /// may still satisfy it. Every positive requested dimension needs a
     /// measured capacity and must fit within that capacity.
-    pub fn admit(
-        &self,
-        backend_id: &str,
-        budget: &ResourceBudget,
-    ) -> Result<(), CoreError> {
+    pub fn admit(&self, backend_id: &str, budget: &ResourceBudget) -> Result<(), CoreError> {
         if self.cpu_millis == Some(0) {
             return Err(CoreError::Validation(format!(
                 "backend {backend_id} reported zero CPU capacity"
@@ -399,12 +395,7 @@ impl ResourceCapacity {
             )));
         }
 
-        check_capacity_dimension(
-            backend_id,
-            "cpu_millis",
-            budget.cpu_millis,
-            self.cpu_millis,
-        )?;
+        check_capacity_dimension(backend_id, "cpu_millis", budget.cpu_millis, self.cpu_millis)?;
         check_capacity_dimension(
             backend_id,
             "memory_bytes",
@@ -842,7 +833,9 @@ mod tests {
         ));
 
         capacity.memory_bytes = Some(512 * 1024 * 1024);
-        capacity.admit("worker-a", &budget).expect("capacity admits task");
+        capacity
+            .admit("worker-a", &budget)
+            .expect("capacity admits task");
     }
 
     #[test]
