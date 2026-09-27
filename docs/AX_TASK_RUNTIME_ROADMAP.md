@@ -33,3 +33,10 @@ The target is a Rust-native, executor-neutral Memorithm task runtime. Google AX 
 - no claim that ProcessExecutor is a sandbox;
 - no implicit privilege inheritance from a shared MCP server;
 - no automatic promotion of task telemetry into trusted knowledge.
+
+
+## Implementation status
+
+- **AXH-1 — merged**: Rust domain contracts for task identity, exact-revision workspaces, capabilities, resource budgets and truthful sandbox admission.
+- **AXH-2 — active**: authoritative task lifecycle, append-only transition history, in-memory/SQLite persistence and lifecycle events.
+- **AXH-3+ — pending qualification**: workspace materialization, real sandbox backends, RemoteOps capability attestation, workload identity, suspend/resume backend mechanics and ecosystem qualification.
