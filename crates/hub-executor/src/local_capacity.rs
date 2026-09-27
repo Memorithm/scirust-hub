@@ -4,7 +4,9 @@ use std::sync::{Arc, Condvar, Mutex};
 use std::time::{Duration, Instant};
 
 use hub_core::exec::{CancelToken, ExecutionOutcome, ExecutionRequest, Executor};
-use hub_core::ExecutorFailure;
+use hub_core::{
+    ExecutorFailure, IsolationLevel, ResourceEnforcement, SandboxBackendDescriptor,
+};
 
 use crate::ProcessExecutor;
 
@@ -110,6 +112,19 @@ impl Drop for Slot<'_> {
 impl Executor for LocalCapacityExecutor {
     fn backend_id(&self) -> &str {
         &self.backend
+    }
+
+    fn backend_descriptor(&self) -> SandboxBackendDescriptor {
+        SandboxBackendDescriptor {
+            backend_id: self.backend.clone(),
+            isolation: IsolationLevel::Process,
+            enforces_network_policy: false,
+            enforces_workspace_write_policy: false,
+            resources: ResourceEnforcement {
+                wall_clock_ms: true,
+                ..ResourceEnforcement::default()
+            },
+        }
     }
 
     fn execute(
