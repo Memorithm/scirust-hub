@@ -95,7 +95,12 @@ pub struct WorkspaceSpec {
 }
 
 impl WorkspaceSpec {
-    fn validate(&self) -> Result<(), CoreError> {
+    /// Validates bounded, unique workspace declarations.
+    ///
+    /// # Errors
+    /// Validation errors for duplicate repositories/dependencies, floating Git
+    /// revisions or oversized tokens.
+    pub fn validate(&self) -> Result<(), CoreError> {
         if self.repositories.len() > MAX_REPOSITORIES {
             return Err(CoreError::Validation(format!(
                 "workspace has {} repositories; maximum is {MAX_REPOSITORIES}",
