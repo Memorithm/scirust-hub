@@ -356,9 +356,7 @@ fn validate_unique_tokens(
     for value in values {
         validate_bounded_token(kind, value, max_bytes)?;
         if !seen.insert(value.as_str()) {
-            return Err(CoreError::Validation(format!(
-                "duplicate {kind} {value:?}"
-            )));
+            return Err(CoreError::Validation(format!("duplicate {kind} {value:?}")));
         }
     }
     Ok(())
