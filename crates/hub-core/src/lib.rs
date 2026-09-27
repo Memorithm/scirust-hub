@@ -70,7 +70,8 @@ pub use run::{
 };
 pub use task::{
     CapabilitySet, IsolationLevel, MaterializedRepositoryEvidence, NetworkPolicy, ResourceBudget,
-    ResourceEnforcement, SandboxBackendDescriptor, SandboxRequirements, TaskIdentity, TaskSpec,
+    ResourceCapacity, ResourceEnforcement, SandboxBackendDescriptor, SandboxRequirements, TaskIdentity,
+    TaskSpec,
     WorkspaceMaterializationEvidence, WorkspaceRepository, WorkspaceSpec, TASK_SPEC_SCHEMA_VERSION,
     WORKSPACE_MATERIALIZATION_SCHEMA_VERSION,
 };
