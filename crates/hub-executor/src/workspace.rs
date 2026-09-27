@@ -478,10 +478,8 @@ mod tests {
     fn unknown_exact_commit_fails_and_cleans_target() {
         let (source, _) = source_repository();
         let spec = spec("0000000000000000000000000000000000000000".to_owned());
-        let sources = BTreeMap::from([(
-            "Memorithm/example".to_owned(),
-            source.display().to_string(),
-        )]);
+        let sources =
+            BTreeMap::from([("Memorithm/example".to_owned(), source.display().to_string())]);
         let root = std::env::temp_dir().join(format!("hub-workspace-out-{}", uuid::Uuid::new_v4()));
         let error = GitWorkspaceMaterializer::default()
             .materialize(&spec, &root, &sources)
