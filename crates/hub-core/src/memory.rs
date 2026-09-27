@@ -21,11 +21,11 @@ use crate::event::{
 };
 use crate::id::{ArtifactId, ComponentId, RunId, TaskId};
 use crate::run::RunRecord;
-use crate::task_lifecycle::{validate_task_snapshot_update, TaskRecord};
 use crate::store::{
     ArtifactMetadataRepository, ArtifactStore, ComponentRepository, RunRepository, TaskRepository,
     WorkflowRepository,
 };
+use crate::task_lifecycle::{validate_task_snapshot_update, TaskRecord};
 use crate::version::Version;
 
 #[derive(Debug, Default)]
@@ -112,7 +112,6 @@ impl RunRepository for InMemoryRuns {
         Ok(rows.into_iter().cloned().collect())
     }
 }
-
 
 #[derive(Debug, Default)]
 struct TasksInner {
@@ -634,7 +633,6 @@ impl RunRepository for InMemoryHubStore {
         RunRepository::list(&self.runs)
     }
 }
-
 
 impl TaskRepository for InMemoryHubStore {
     fn put(&self, record: &TaskRecord) -> Result<(), CoreError> {
