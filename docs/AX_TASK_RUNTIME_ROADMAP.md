@@ -39,5 +39,6 @@ The target is a Rust-native, executor-neutral Memorithm task runtime. Google AX 
 
 - **AXH-1 — merged**: Rust domain contracts for task identity, exact-revision workspaces, capabilities, resource budgets and truthful sandbox admission.
 - **AXH-2 — merged**: authoritative task lifecycle, append-only transition history, in-memory/SQLite persistence and lifecycle events (PR #58, merge 7483f1ac83a28a1dabb2438886db8f431b4a1792).
-- **AXH-3 — active**: exact-commit Git materialization, clean-worktree verification, materialized-content digest and durable admission evidence.
-- **AXH-4+ — pending qualification**: backend admission wiring, real sandbox backends, RemoteOps capability attestation, workload identity, suspend/resume backend mechanics and ecosystem qualification.
+- **AXH-3 — merged**: exact-commit Git materialization, clean-worktree verification, materialized-content digest and durable admission evidence (PR #59, merge 9868780b1e6eb163e5d37ca75892a53ab786bdb8).
+- **AXH-4 — active**: granular backend admission by isolation, network, workspace-write and individual resource dimensions; unsupported controls fail closed before dispatch.
+- **AXH-5+ — pending qualification**: real sandbox backends, RemoteOps capability attestation, workload identity, suspend/resume backend mechanics and ecosystem qualification.

@@ -11,6 +11,7 @@ use std::sync::Arc;
 use serde::{Deserialize, Serialize};
 
 use crate::error::ExecutorFailure;
+use crate::task::{IsolationLevel, ResourceEnforcement, SandboxBackendDescriptor, TaskSpec};
 
 /// Cooperative cancellation flag shared between the caller and executor.
 #[derive(Clone, Debug, Default)]
@@ -94,10 +95,37 @@ pub struct ExecutionReport {
     pub backend_id: String,
 }
 
+/// Task-aware execution observation.
+///
+/// The admitted backend descriptor is retained beside the process observation
+/// so callers can persist exactly which isolation/resource claims were checked
+/// before dispatch.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct TaskExecutionReport {
+    pub execution: ExecutionReport,
+    pub admitted_backend: SandboxBackendDescriptor,
+}
+
 /// A backend capable of executing [`ExecutionRequest`]s.
 pub trait Executor: Send + Sync {
     /// Stable identifier recorded in run provenance.
     fn backend_id(&self) -> &str;
+
+    /// Truthful enforcement capabilities available to task-aware dispatch.
+    ///
+    /// The default intentionally claims only supervised-process isolation and
+    /// no enforceable network, workspace-write, or resource controls. Concrete
+    /// executors must opt in dimension by dimension.
+    #[must_use]
+    fn backend_descriptor(&self) -> SandboxBackendDescriptor {
+        SandboxBackendDescriptor {
+            backend_id: self.backend_id().to_owned(),
+            isolation: IsolationLevel::Process,
+            enforces_network_policy: false,
+            enforces_workspace_write_policy: false,
+            resources: ResourceEnforcement::default(),
+        }
+    }
 
     /// Executes one request to completion (success, failure, timeout or
     /// cancellation). Implementations must respect `cancel` between polls and
@@ -128,5 +156,33 @@ pub trait Executor: Send + Sync {
                 outcome,
                 backend_id: self.backend_id().to_owned(),
             })
+    }
+
+    /// Admits and executes one request under an explicit task envelope.
+    ///
+    /// Admission occurs before dispatch. A backend that cannot prove every
+    /// requested isolation/network/workspace/resource dimension fails closed
+    /// without invoking [`Self::execute_report`].
+    ///
+    /// # Errors
+    /// [`ExecutorFailure::Backend`] for admission rejection or the same
+    /// backend failures as [`Self::execute_report`].
+    fn execute_task_report(
+        &self,
+        task: &TaskSpec,
+        request: &ExecutionRequest,
+        cancel: &CancelToken,
+    ) -> Result<TaskExecutionReport, ExecutorFailure> {
+        let descriptor = self.backend_descriptor();
+        descriptor
+            .admit(task)
+            .map_err(|error| ExecutorFailure::Backend {
+                reason: format!("task backend admission rejected: {error}"),
+            })?;
+        let execution = self.execute_report(request, cancel)?;
+        Ok(TaskExecutionReport {
+            execution,
+            admitted_backend: descriptor,
+        })
     }
 }

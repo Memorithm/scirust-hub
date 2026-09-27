@@ -36,6 +36,7 @@ use std::time::{Duration, Instant};
 
 use hub_core::error::ExecutorFailure;
 use hub_core::exec::{CancelToken, ExecutionOutcome, ExecutionRequest, Executor};
+use hub_core::{IsolationLevel, ResourceEnforcement, SandboxBackendDescriptor};
 
 /// Poll interval while waiting on the child.
 const POLL_INTERVAL_MS: u64 = 10;
@@ -66,6 +67,19 @@ struct CapturedStream {
 impl Executor for ProcessExecutor {
     fn backend_id(&self) -> &str {
         "process"
+    }
+
+    fn backend_descriptor(&self) -> SandboxBackendDescriptor {
+        SandboxBackendDescriptor {
+            backend_id: self.backend_id().to_owned(),
+            isolation: IsolationLevel::Process,
+            enforces_network_policy: false,
+            enforces_workspace_write_policy: false,
+            resources: ResourceEnforcement {
+                wall_clock_ms: true,
+                ..ResourceEnforcement::default()
+            },
+        }
     }
 
     fn execute(
@@ -357,6 +371,77 @@ mod tests {
     //! PATH; they stay hermetic (no network, no GPU).
 
     use super::*;
+
+    fn task_for_process_budget() -> hub_core::TaskSpec {
+        let id = hub_core::TaskId::generate();
+        hub_core::TaskSpec {
+            schema_version: hub_core::TASK_SPEC_SCHEMA_VERSION,
+            id,
+            identity: hub_core::TaskIdentity {
+                task_id: id,
+                principal: format!("task://memorithm/executor/{id}"),
+            },
+            workspace: hub_core::WorkspaceSpec::default(),
+            capabilities: hub_core::CapabilitySet::default(),
+            budget: hub_core::ResourceBudget {
+                wall_clock_ms: Some(30_000),
+                ..hub_core::ResourceBudget::default()
+            },
+            sandbox: hub_core::SandboxRequirements {
+                minimum_isolation: hub_core::IsolationLevel::Process,
+                network: hub_core::NetworkPolicy {
+                    default_deny: false,
+                    allowed_endpoints: Vec::new(),
+                },
+                writable_workspace: true,
+            },
+        }
+    }
+
+    #[test]
+    fn task_aware_process_execution_admits_only_enforceable_dimensions() {
+        let exec = ProcessExecutor::new();
+        let task = task_for_process_budget();
+        let outcome = exec
+            .execute_task_report(
+                &task,
+                &base_request("echo", &["task-aware"]),
+                &CancelToken::new(),
+            )
+            .expect("wall-clock-only task is admissible");
+        assert!(outcome.execution.outcome.exited_cleanly());
+        assert_eq!(
+            outcome.admitted_backend.resources,
+            hub_core::ResourceEnforcement {
+                wall_clock_ms: true,
+                ..hub_core::ResourceEnforcement::default()
+            }
+        );
+
+        let mut memory_task = task;
+        memory_task.budget.memory_bytes = Some(1024);
+        let error = exec
+            .execute_task_report(&memory_task, &base_request("x", &[]), &CancelToken::new())
+            .expect_err("memory budget must fail before process dispatch");
+        assert!(matches!(
+            error,
+            ExecutorFailure::Backend { reason } if reason.contains("memory_bytes")
+        ));
+    }
+
+    #[test]
+    fn task_aware_process_execution_rejects_read_only_workspace_policy() {
+        let exec = ProcessExecutor::new();
+        let mut task = task_for_process_budget();
+        task.sandbox.writable_workspace = false;
+        let error = exec
+            .execute_task_report(&task, &base_request("x", &[]), &CancelToken::new())
+            .expect_err("plain process cannot enforce read-only workspace");
+        assert!(matches!(
+            error,
+            ExecutorFailure::Backend { reason } if reason.contains("read-only workspace")
+        ));
+    }
 
     #[test]
     fn termination_failure_does_not_wait_or_report_completion() {

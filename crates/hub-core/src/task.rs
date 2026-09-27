@@ -472,15 +472,74 @@ impl TaskSpec {
     }
 }
 
+/// Resource dimensions that one backend can actually enforce.
+///
+/// Capability is per dimension. A timeout-capable process executor must not
+/// claim memory/GPU/token enforcement merely because it can enforce wall time.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct ResourceEnforcement {
+    #[serde(default)]
+    pub wall_clock_ms: bool,
+    #[serde(default)]
+    pub cpu_millis: bool,
+    #[serde(default)]
+    pub memory_bytes: bool,
+    #[serde(default)]
+    pub gpu_devices: bool,
+    #[serde(default)]
+    pub model_tokens: bool,
+}
+
+impl ResourceEnforcement {
+    fn admit(&self, backend_id: &str, budget: &ResourceBudget) -> Result<(), CoreError> {
+        for (requested, enforced, dimension) in [
+            (
+                budget.wall_clock_ms.is_some(),
+                self.wall_clock_ms,
+                "wall_clock_ms",
+            ),
+            (budget.cpu_millis.is_some(), self.cpu_millis, "cpu_millis"),
+            (
+                budget.memory_bytes.is_some(),
+                self.memory_bytes,
+                "memory_bytes",
+            ),
+            (
+                budget.gpu_devices.is_some(),
+                self.gpu_devices,
+                "gpu_devices",
+            ),
+            (
+                budget.model_tokens.is_some(),
+                self.model_tokens,
+                "model_tokens",
+            ),
+        ] {
+            if requested && !enforced {
+                return Err(CoreError::Validation(format!(
+                    "sandbox backend {backend_id} cannot enforce requested resource dimension {dimension}"
+                )));
+            }
+        }
+        Ok(())
+    }
+}
+
 /// Minimal executor-facing sandbox capability description.
 ///
 /// This is a truthful capability contract, not an implementation of sandboxing.
-#[derive(Clone, Debug, PartialEq, Eq)]
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct SandboxBackendDescriptor {
     pub backend_id: String,
     pub isolation: IsolationLevel,
+    #[serde(default)]
     pub enforces_network_policy: bool,
-    pub enforces_resource_budget: bool,
+    #[serde(default)]
+    pub enforces_workspace_write_policy: bool,
+    #[serde(default)]
+    pub resources: ResourceEnforcement,
 }
 
 impl SandboxBackendDescriptor {
@@ -510,19 +569,14 @@ impl SandboxBackendDescriptor {
             )));
         }
 
-        let budget_requires_enforcement = task.budget.cpu_millis.is_some()
-            || task.budget.memory_bytes.is_some()
-            || task.budget.wall_clock_ms.is_some()
-            || task.budget.gpu_devices.is_some()
-            || task.budget.model_tokens.is_some();
-        if budget_requires_enforcement && !self.enforces_resource_budget {
+        if !task.sandbox.writable_workspace && !self.enforces_workspace_write_policy {
             return Err(CoreError::Validation(format!(
-                "sandbox backend {} cannot enforce the task resource budget",
+                "sandbox backend {} cannot enforce the task read-only workspace policy",
                 self.backend_id
             )));
         }
 
-        Ok(())
+        self.resources.admit(&self.backend_id, &task.budget)
     }
 }
 
@@ -616,7 +670,14 @@ mod tests {
             backend_id: "microvm-v1".to_owned(),
             isolation: IsolationLevel::MicroVm,
             enforces_network_policy: true,
-            enforces_resource_budget: true,
+            enforces_workspace_write_policy: true,
+            resources: ResourceEnforcement {
+                wall_clock_ms: true,
+                cpu_millis: true,
+                memory_bytes: true,
+                gpu_devices: true,
+                model_tokens: true,
+            },
         };
         backend.admit(&task).expect("backend admits task");
     }
@@ -658,7 +719,8 @@ mod tests {
             backend_id: "process".to_owned(),
             isolation: IsolationLevel::Process,
             enforces_network_policy: false,
-            enforces_resource_budget: false,
+            enforces_workspace_write_policy: false,
+            resources: ResourceEnforcement::default(),
         };
         assert!(matches!(
             backend.admit(&task),
@@ -674,11 +736,69 @@ mod tests {
             backend_id: "process".to_owned(),
             isolation: IsolationLevel::Process,
             enforces_network_policy: false,
-            enforces_resource_budget: true,
+            enforces_workspace_write_policy: true,
+            resources: ResourceEnforcement {
+                wall_clock_ms: true,
+                cpu_millis: true,
+                memory_bytes: true,
+                gpu_devices: true,
+                model_tokens: true,
+            },
         };
         assert!(matches!(
             backend.admit(&task),
             Err(CoreError::Validation(message)) if message.contains("network policy")
+        ));
+    }
+
+    #[test]
+    fn resource_enforcement_is_dimension_specific() {
+        let mut task = base_task();
+        task.sandbox.minimum_isolation = IsolationLevel::Process;
+        task.sandbox.network.default_deny = false;
+        task.sandbox.network.allowed_endpoints.clear();
+        task.sandbox.writable_workspace = true;
+        task.budget = ResourceBudget {
+            wall_clock_ms: Some(1_000),
+            ..ResourceBudget::default()
+        };
+        let wall_clock_only = SandboxBackendDescriptor {
+            backend_id: "process-timeout".to_owned(),
+            isolation: IsolationLevel::Process,
+            enforces_network_policy: false,
+            enforces_workspace_write_policy: false,
+            resources: ResourceEnforcement {
+                wall_clock_ms: true,
+                ..ResourceEnforcement::default()
+            },
+        };
+        wall_clock_only.admit(&task).expect("wall-clock admitted");
+
+        task.budget.memory_bytes = Some(1024);
+        assert!(matches!(
+            wall_clock_only.admit(&task),
+            Err(CoreError::Validation(message)) if message.contains("memory_bytes")
+        ));
+    }
+
+    #[test]
+    fn read_only_workspace_requires_enforcement() {
+        let mut task = base_task();
+        task.sandbox.minimum_isolation = IsolationLevel::Process;
+        task.sandbox.network.default_deny = false;
+        task.sandbox.network.allowed_endpoints.clear();
+        task.sandbox.writable_workspace = false;
+        task.budget = ResourceBudget::default();
+        let backend = SandboxBackendDescriptor {
+            backend_id: "plain-process".to_owned(),
+            isolation: IsolationLevel::Process,
+            enforces_network_policy: false,
+            enforces_workspace_write_policy: false,
+            resources: ResourceEnforcement::default(),
+        };
+        assert!(matches!(
+            backend.admit(&task),
+            Err(CoreError::Validation(message)) if message.contains("read-only workspace")
         ));
     }
 
