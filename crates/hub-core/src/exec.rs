@@ -124,6 +124,7 @@ pub trait Executor: Send + Sync {
             enforces_network_policy: false,
             enforces_workspace_write_policy: false,
             resources: ResourceEnforcement::default(),
+            capabilities: Default::default(),
         }
     }
 

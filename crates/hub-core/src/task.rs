@@ -540,6 +540,8 @@ pub struct SandboxBackendDescriptor {
     pub enforces_workspace_write_policy: bool,
     #[serde(default)]
     pub resources: ResourceEnforcement,
+    #[serde(default)]
+    pub capabilities: CapabilitySet,
 }
 
 impl SandboxBackendDescriptor {
@@ -576,7 +578,17 @@ impl SandboxBackendDescriptor {
             )));
         }
 
-        self.resources.admit(&self.backend_id, &task.budget)
+        self.resources.admit(&self.backend_id, &task.budget)?;
+        self.capabilities.validate()?;
+        for capability in &task.capabilities.0 {
+            if !self.capabilities.contains(capability) {
+                return Err(CoreError::Validation(format!(
+                    "sandbox backend {} cannot enforce requested capability {capability}",
+                    self.backend_id
+                )));
+            }
+        }
+        Ok(())
     }
 }
 
@@ -678,6 +690,7 @@ mod tests {
                 gpu_devices: true,
                 model_tokens: true,
             },
+            capabilities: CapabilitySet(vec!["github:read".to_owned()]),
         };
         backend.admit(&task).expect("backend admits task");
     }
@@ -721,6 +734,7 @@ mod tests {
             enforces_network_policy: false,
             enforces_workspace_write_policy: false,
             resources: ResourceEnforcement::default(),
+            capabilities: CapabilitySet::default(),
         };
         assert!(matches!(
             backend.admit(&task),
@@ -744,6 +758,7 @@ mod tests {
                 gpu_devices: true,
                 model_tokens: true,
             },
+            capabilities: CapabilitySet::default(),
         };
         assert!(matches!(
             backend.admit(&task),
@@ -771,6 +786,7 @@ mod tests {
                 wall_clock_ms: true,
                 ..ResourceEnforcement::default()
             },
+            capabilities: CapabilitySet(vec!["github:read".to_owned()]),
         };
         wall_clock_only.admit(&task).expect("wall-clock admitted");
 
@@ -795,10 +811,35 @@ mod tests {
             enforces_network_policy: false,
             enforces_workspace_write_policy: false,
             resources: ResourceEnforcement::default(),
+            capabilities: CapabilitySet::default(),
         };
         assert!(matches!(
             backend.admit(&task),
             Err(CoreError::Validation(message)) if message.contains("read-only workspace")
+        ));
+    }
+
+    #[test]
+    fn unsupported_backend_capability_is_rejected() {
+        let task = base_task();
+        let backend = SandboxBackendDescriptor {
+            backend_id: "microvm-v1".to_owned(),
+            isolation: IsolationLevel::MicroVm,
+            enforces_network_policy: true,
+            enforces_workspace_write_policy: true,
+            resources: ResourceEnforcement {
+                wall_clock_ms: true,
+                cpu_millis: true,
+                memory_bytes: true,
+                gpu_devices: true,
+                model_tokens: true,
+            },
+            capabilities: CapabilitySet::default(),
+        };
+        assert!(matches!(
+            backend.admit(&task),
+            Err(CoreError::Validation(message))
+                if message.contains("cannot enforce requested capability github:read")
         ));
     }
 

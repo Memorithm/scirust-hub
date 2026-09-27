@@ -122,6 +122,7 @@ impl Executor for LocalCapacityExecutor {
                 wall_clock_ms: true,
                 ..ResourceEnforcement::default()
             },
+            capabilities: Default::default(),
         }
     }
 
