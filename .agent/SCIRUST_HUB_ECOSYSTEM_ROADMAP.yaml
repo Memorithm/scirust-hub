@@ -635,12 +635,18 @@ ax_task_runtime_program:
     scope: AXH5
     objective: first_real_container_or_stronger_sandbox_backend
 
-axh4_active_slice_2026_09_27:
+axh4_completed_slice_2026_09_27:
   branch: agent/ax-backend-admission
   pull_request: 60
+  merged_commit: "d2803e4df8b21f736f5af10ba4adc8161d04f7cf"
   scope: AXH4
-  status: ci_pending
+  status: merged
   objective: granular_backend_admission_and_task_aware_fail_closed_dispatch
+axh5_active_slice_2026_09_27:
+  scope: AXH5
+  status: active
+  owner: Memorithm/RemoteOps
+  objective: first_real_container_or_stronger_sandbox_backend
   invariants:
     - process_backend_claims_only_wall_clock_enforcement
     - network_workspace_write_RAM_CPU_GPU_and_token_controls_fail_closed_when_unenforced
