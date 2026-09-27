@@ -4,9 +4,7 @@ use std::sync::{Arc, Condvar, Mutex};
 use std::time::{Duration, Instant};
 
 use hub_core::exec::{CancelToken, ExecutionOutcome, ExecutionRequest, Executor};
-use hub_core::{
-    ExecutorFailure, IsolationLevel, ResourceEnforcement, SandboxBackendDescriptor,
-};
+use hub_core::{ExecutorFailure, IsolationLevel, ResourceEnforcement, SandboxBackendDescriptor};
 
 use crate::ProcessExecutor;
 
