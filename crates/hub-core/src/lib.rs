@@ -57,11 +57,6 @@ pub use memory::{
     InMemoryRuns, InMemoryWorkflows,
 };
 pub use orchestrator::{Orchestrator, RegistrationStatus};
-pub use task::{
-    CapabilitySet, IsolationLevel, NetworkPolicy, ResourceBudget, SandboxBackendDescriptor,
-    SandboxRequirements, TaskIdentity, TaskSpec, WorkspaceRepository, WorkspaceSpec,
-    TASK_SPEC_SCHEMA_VERSION,
-};
 pub use publication::{
     AuthoritativeStepPublication, InMemoryPublicationFences, PublicationCommit, PublicationFence,
     PublicationFenceRepository, MAX_PUBLICATION_OUTPUTS, PUBLICATION_FENCE_SCHEMA_VERSION,
@@ -69,6 +64,11 @@ pub use publication::{
 pub use run::{
     ComponentAdmissionPin, InputBinding, InputProvenance, OutputRef, RunOutcome, RunRecord,
     RunSpec, RunState, Transition,
+};
+pub use task::{
+    CapabilitySet, IsolationLevel, NetworkPolicy, ResourceBudget, SandboxBackendDescriptor,
+    SandboxRequirements, TaskIdentity, TaskSpec, WorkspaceRepository, WorkspaceSpec,
+    TASK_SPEC_SCHEMA_VERSION,
 };
 pub use version::Version;
 pub use workflow::{
