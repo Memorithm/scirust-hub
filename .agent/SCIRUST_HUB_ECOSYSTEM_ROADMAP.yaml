@@ -634,3 +634,14 @@ ax_task_runtime_program:
   next_slice:
     scope: AXH5
     objective: first_real_container_or_stronger_sandbox_backend
+
+axh4_active_slice_2026_09_27:
+  branch: agent/ax-backend-admission
+  pull_request: 60
+  scope: AXH4
+  status: ci_pending
+  objective: granular_backend_admission_and_task_aware_fail_closed_dispatch
+  invariants:
+    - process_backend_claims_only_wall_clock_enforcement
+    - network_workspace_write_RAM_CPU_GPU_and_token_controls_fail_closed_when_unenforced
+    - remote_workers_remain_task_admission_fail_closed_until_versioned_capabilities_exist
