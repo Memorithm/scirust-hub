@@ -25,13 +25,15 @@ use hub_core::artifact::ArtifactMeta;
 use hub_core::component::ComponentManifest;
 use hub_core::error::CoreError;
 use hub_core::event::{
-    artifact_recorded_event, component_registered_event, derive_run_events, derive_workflow_events,
-    workflow_cancel_requested_event, LifecycleEntityType, LifecycleEvent, LifecycleEventKind,
-    LifecycleEventRepository, NewLifecycleEvent,
+    artifact_recorded_event, component_registered_event, derive_run_events, derive_task_events,
+    derive_workflow_events, workflow_cancel_requested_event, LifecycleEntityType, LifecycleEvent,
+    LifecycleEventKind, LifecycleEventRepository, NewLifecycleEvent,
 };
 use hub_core::run::RunRecord;
+use hub_core::task_lifecycle::TaskRecord;
 use hub_core::store::{
-    ArtifactMetadataRepository, ComponentRepository, RunRepository, WorkflowRepository,
+    ArtifactMetadataRepository, ComponentRepository, RunRepository, TaskRepository,
+    WorkflowRepository,
 };
 use rusqlite::OptionalExtension as _;
 
@@ -90,6 +92,14 @@ const MIGRATIONS: &[&str] = &[
         publication_json TEXT,
         PRIMARY KEY (workflow_id, step_key)
     );",
+    // v5: authoritative isolated-task lifecycle records.
+    "CREATE TABLE tasks (
+        id          TEXT PRIMARY KEY,
+        created_at  INTEGER NOT NULL,
+        state       TEXT    NOT NULL,
+        record_json TEXT    NOT NULL
+    );
+    CREATE INDEX idx_tasks_created ON tasks (created_at);",
 ];
 
 /// SQLite-backed implementation of all three metadata repository ports.
@@ -434,6 +444,95 @@ impl RunRepository for SqliteStore {
             let json = row.map_err(storage("reading run row"))?;
             out.push(serde_json::from_str(&json).map_err(|e| {
                 CoreError::Storage(format!("stored run failed to deserialize: {e}"))
+            })?);
+        }
+        Ok(out)
+    }
+}
+
+
+impl TaskRepository for SqliteStore {
+    fn put(&self, record: &TaskRecord) -> Result<(), CoreError> {
+        record.validate()?;
+        let json = serde_json::to_string(record)
+            .map_err(|e| CoreError::Storage(format!("serializing task record: {e}")))?;
+        let mut conn = self.lock()?;
+        let tx = conn
+            .transaction()
+            .map_err(storage("beginning task upsert"))?;
+
+        let previous_json: Option<String> = tx
+            .query_row(
+                "SELECT record_json FROM tasks WHERE id = ?1",
+                rusqlite::params![record.spec.id.to_string()],
+                |row| row.get(0),
+            )
+            .optional()
+            .map_err(storage("loading task before upsert"))?;
+        let previous = previous_json
+            .map(|value| {
+                serde_json::from_str::<TaskRecord>(&value).map_err(|e| {
+                    CoreError::Storage(format!("stored task failed to deserialize: {e}"))
+                })
+            })
+            .transpose()?;
+
+        if let Some(before) = &previous {
+            hub_core::validate_task_snapshot_update(before, record)?;
+        }
+
+        tx.execute(
+            "INSERT INTO tasks (id, created_at, state, record_json)
+             VALUES (?1, ?2, ?3, ?4)
+             ON CONFLICT(id) DO UPDATE SET
+                state = excluded.state,
+                record_json = excluded.record_json",
+            rusqlite::params![
+                record.spec.id.to_string(),
+                record.created_at,
+                record.state.as_str(),
+                json
+            ],
+        )
+        .map_err(storage("upserting task"))?;
+
+        for event in derive_task_events(previous.as_ref(), record) {
+            append_event_tx(&tx, &event)?;
+        }
+        tx.commit().map_err(storage("committing task upsert"))?;
+        Ok(())
+    }
+
+    fn get(&self, id: &hub_core::TaskId) -> Result<Option<TaskRecord>, CoreError> {
+        let conn = self.lock()?;
+        let json: Option<String> = conn
+            .query_row(
+                "SELECT record_json FROM tasks WHERE id = ?1",
+                rusqlite::params![id.to_string()],
+                |row| row.get(0),
+            )
+            .optional()
+            .map_err(storage("loading task"))?;
+        json.map(|value| {
+            serde_json::from_str::<TaskRecord>(&value)
+                .map_err(|e| CoreError::Storage(format!("stored task failed to deserialize: {e}")))
+        })
+        .transpose()
+    }
+
+    fn list(&self) -> Result<Vec<TaskRecord>, CoreError> {
+        let conn = self.lock()?;
+        let mut stmt = conn
+            .prepare("SELECT record_json FROM tasks ORDER BY created_at, id")
+            .map_err(storage("listing tasks"))?;
+        let rows = stmt
+            .query_map([], |row| row.get::<_, String>(0))
+            .map_err(storage("listing tasks"))?;
+        let mut out = Vec::new();
+        for row in rows {
+            let json = row.map_err(storage("reading task row"))?;
+            out.push(serde_json::from_str::<TaskRecord>(&json).map_err(|e| {
+                CoreError::Storage(format!("stored task failed to deserialize: {e}"))
             })?);
         }
         Ok(out)
@@ -1038,6 +1137,75 @@ mod tests {
         assert_eq!(restored.id, stored_id);
         assert_eq!(restored.state, hub_core::workflow::WorkflowState::Running);
         assert_eq!(restored.steps.len(), 1);
+        drop(store);
+        let _ = std::fs::remove_dir_all(dir);
+    }
+
+
+    #[test]
+    fn tasks_are_durable_append_only_and_evented() {
+        let dir = std::env::temp_dir().join(format!("hub-sqlite-task-{}", uuid::Uuid::new_v4()));
+        let db = dir.join("hub.db");
+        let task_id;
+        {
+            let store = SqliteStore::open(&db).expect("open");
+            let id = hub_core::TaskId::generate();
+            let spec = hub_core::TaskSpec {
+                schema_version: hub_core::TASK_SPEC_SCHEMA_VERSION,
+                id,
+                identity: hub_core::TaskIdentity {
+                    task_id: id,
+                    principal: format!("task://memorithm/sqlite/{id}"),
+                },
+                workspace: hub_core::WorkspaceSpec::default(),
+                capabilities: hub_core::CapabilitySet::default(),
+                budget: hub_core::ResourceBudget::default(),
+                sandbox: hub_core::SandboxRequirements {
+                    minimum_isolation: hub_core::IsolationLevel::Process,
+                    network: hub_core::NetworkPolicy {
+                        default_deny: false,
+                        allowed_endpoints: Vec::new(),
+                    },
+                    writable_workspace: false,
+                },
+            };
+            let mut record = hub_core::TaskRecord::create(spec, 50).expect("task");
+            task_id = record.spec.id;
+            let created = record.clone();
+            TaskRepository::put(&store, &record).expect("created");
+
+            for (state, at) in [
+                (hub_core::TaskState::Admitted, 51),
+                (hub_core::TaskState::Running, 52),
+                (hub_core::TaskState::Suspended, 53),
+                (hub_core::TaskState::Running, 54),
+            ] {
+                record.transition(state, at).expect("transition");
+                TaskRepository::put(&store, &record).expect("persist transition");
+            }
+            TaskRepository::put(&store, &record).expect("idempotent snapshot");
+            assert!(
+                TaskRepository::put(&store, &created).is_err(),
+                "stale snapshot must not roll the task backwards"
+            );
+
+            let events = LifecycleEventRepository::list_after(&store, 0, 100).expect("events");
+            let task_events: Vec<_> = events
+                .iter()
+                .filter(|event| event.entity_type == LifecycleEntityType::Task)
+                .collect();
+            assert_eq!(task_events.len(), 5);
+            assert_eq!(task_events[0].kind, LifecycleEventKind::TaskCreated);
+            assert_eq!(task_events.last().unwrap().attributes["to"], "running");
+        }
+
+        let store = SqliteStore::open(&db).expect("reopen");
+        let restored = TaskRepository::get(&store, &task_id)
+            .expect("get")
+            .expect("task survived reopen");
+        assert_eq!(restored.state, hub_core::TaskState::Running);
+        assert_eq!(restored.transitions.len(), 4);
+        assert_eq!(TaskRepository::list(&store).expect("list").len(), 1);
         drop(store);
         let _ = std::fs::remove_dir_all(dir);
     }
