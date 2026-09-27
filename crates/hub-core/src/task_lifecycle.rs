@@ -467,8 +467,10 @@ mod tests {
 
     #[test]
     fn retained_transition_timestamps_must_be_monotonic() {
-        let mut record = TaskRecord::create(task_spec(), 10).expect("task");
-        record.transition(TaskState::Admitted, 12).expect("admit");
+        let spec = task_spec();
+        let evidence = workspace_evidence(&spec);
+        let mut record = TaskRecord::create(spec, 10).expect("task");
+        record.admit(evidence, 12).expect("admit");
         assert!(record.transition(TaskState::Running, 11).is_err());
     }
 }
