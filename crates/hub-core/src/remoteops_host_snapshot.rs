@@ -260,8 +260,7 @@ mod tests {
             Err(HostSnapshotError::InvalidJson)
         );
 
-        let missing_nullable_resource_field =
-            FIXTURE.replace("\"cpu_logical_count\":8,", "");
+        let missing_nullable_resource_field = FIXTURE.replace("\"cpu_logical_count\":8,", "");
         assert_eq!(
             RemoteOpsHostCapabilitySnapshotV1::parse(&missing_nullable_resource_field),
             Err(HostSnapshotError::InvalidJson)
