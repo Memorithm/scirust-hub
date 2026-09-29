@@ -620,8 +620,15 @@ impl ResourceEnforcement {
 pub struct SandboxBackendDescriptor {
     pub backend_id: String,
     pub isolation: IsolationLevel,
+    /// Whether this backend applies task network policy rules such as endpoint restrictions.
     #[serde(default)]
     pub enforces_network_policy: bool,
+    /// Whether destinations outside an explicit allowlist are denied.
+    ///
+    /// Missing legacy values deserialize to false and fail closed for
+    /// default-deny tasks.
+    #[serde(default)]
+    pub enforces_default_deny_network: bool,
     #[serde(default)]
     pub enforces_workspace_write_policy: bool,
     #[serde(default)]
@@ -653,6 +660,12 @@ impl SandboxBackendDescriptor {
         if network_policy_requires_enforcement && !self.enforces_network_policy {
             return Err(CoreError::Validation(format!(
                 "sandbox backend {} cannot enforce the task network policy",
+                self.backend_id
+            )));
+        }
+        if task.sandbox.network.default_deny && !self.enforces_default_deny_network {
+            return Err(CoreError::Validation(format!(
+                "sandbox backend {} cannot enforce the task default-deny network policy",
                 self.backend_id
             )));
         }
@@ -781,6 +794,7 @@ mod tests {
             backend_id: "microvm-v1".to_owned(),
             isolation: IsolationLevel::MicroVm,
             enforces_network_policy: true,
+            enforces_default_deny_network: true,
             enforces_workspace_write_policy: true,
             resources: ResourceEnforcement {
                 wall_clock_ms: true,
@@ -875,6 +889,7 @@ mod tests {
             backend_id: "process".to_owned(),
             isolation: IsolationLevel::Process,
             enforces_network_policy: false,
+            enforces_default_deny_network: false,
             enforces_workspace_write_policy: false,
             resources: ResourceEnforcement::default(),
             capabilities: CapabilitySet::default(),
@@ -893,6 +908,7 @@ mod tests {
             backend_id: "process".to_owned(),
             isolation: IsolationLevel::Process,
             enforces_network_policy: false,
+            enforces_default_deny_network: false,
             enforces_workspace_write_policy: true,
             resources: ResourceEnforcement {
                 wall_clock_ms: true,
@@ -910,6 +926,42 @@ mod tests {
     }
 
     #[test]
+    fn default_deny_requires_an_independent_backend_claim() {
+        let mut task = base_task();
+        task.sandbox.minimum_isolation = IsolationLevel::Process;
+        task.sandbox.network.allowed_endpoints.clear();
+        task.sandbox.writable_workspace = true;
+        task.capabilities = CapabilitySet::default();
+        task.budget = ResourceBudget::default();
+
+        let mut backend = SandboxBackendDescriptor {
+            backend_id: "network-filter".to_owned(),
+            isolation: IsolationLevel::Process,
+            enforces_network_policy: true,
+            enforces_default_deny_network: false,
+            enforces_workspace_write_policy: true,
+            resources: ResourceEnforcement::default(),
+            capabilities: CapabilitySet::default(),
+        };
+        assert!(matches!(
+            backend.admit(&task),
+            Err(CoreError::Validation(message)) if message.contains("default-deny")
+        ));
+
+        backend.enforces_default_deny_network = true;
+        backend.admit(&task).expect("default-deny admitted");
+    }
+
+    #[test]
+    fn legacy_backend_descriptor_defaults_default_deny_to_false() {
+        let legacy =
+            r#"{"backend_id":"legacy","isolation":"process","enforces_network_policy":true}"#;
+        let backend: SandboxBackendDescriptor =
+            serde_json::from_str(legacy).expect("legacy descriptor shape");
+        assert!(!backend.enforces_default_deny_network);
+    }
+
+    #[test]
     fn resource_enforcement_is_dimension_specific() {
         let mut task = base_task();
         task.sandbox.minimum_isolation = IsolationLevel::Process;
@@ -924,6 +976,7 @@ mod tests {
             backend_id: "process-timeout".to_owned(),
             isolation: IsolationLevel::Process,
             enforces_network_policy: false,
+            enforces_default_deny_network: false,
             enforces_workspace_write_policy: false,
             resources: ResourceEnforcement {
                 wall_clock_ms: true,
@@ -952,6 +1005,7 @@ mod tests {
             backend_id: "plain-process".to_owned(),
             isolation: IsolationLevel::Process,
             enforces_network_policy: false,
+            enforces_default_deny_network: false,
             enforces_workspace_write_policy: false,
             resources: ResourceEnforcement::default(),
             capabilities: CapabilitySet::default(),
@@ -969,6 +1023,7 @@ mod tests {
             backend_id: "microvm-v1".to_owned(),
             isolation: IsolationLevel::MicroVm,
             enforces_network_policy: true,
+            enforces_default_deny_network: true,
             enforces_workspace_write_policy: true,
             resources: ResourceEnforcement {
                 wall_clock_ms: true,
