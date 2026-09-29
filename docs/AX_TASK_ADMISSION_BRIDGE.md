@@ -30,6 +30,8 @@ admitted only when the backend separately claims both network-policy
 enforcement and default-deny enforcement. Legacy descriptors default
 qualification fields to false or absent and remain fail-closed.
 
+Hub consumes RemoteOps backend qualification v2 with strict schema and bounded-reference validation. It maps only the shared isolation and network controls. The source record's broad resource-limits flag is retained but does not satisfy Hub's per-dimension CPU, memory, GPU or token enforcement requirements.
+
 A registered component is metadata only and is never executed during discovery.
 
 ## Boundary

@@ -1,0 +1,1 @@
+{"schema":"remoteops.backend-qualification/v2","backend":"runsc","isolation":"userspace_kernel","isolation_qualified":true,"controls":{"network_egress":true,"default_deny_network":true,"resource_limits":true},"evidence_id":"qualification/runsc/2026-09-27"}
