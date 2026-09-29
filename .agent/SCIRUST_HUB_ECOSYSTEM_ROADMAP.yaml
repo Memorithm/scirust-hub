@@ -700,3 +700,11 @@ axh6_host_snapshot_parser_2026_09_29:
   merge_commit: "c39e4cd3e9f10414d7477735a7ca5e76173e36d1"
   result: strict_bounded_parser_preserves_unsigned_observations_without_admission_projection
   required_CI: CI_success_on_final_exact_head
+
+axh6_required_nullable_fields_2026_09_29:
+  status: merged_contract_conformance
+  pull_request: 77
+  final_exact_head: "50783aadb7fabea9e093976f6f43dc08c6d59b21"
+  merge_commit: "59b8e06f141f96bc36d5fe633dbd3f0662a5dddf"
+  result: nullable_fields_must_be_present_while_explicit_null_remains_valid
+  required_CI: CI_success_on_final_exact_head
