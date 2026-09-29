@@ -642,6 +642,9 @@ ax_task_runtime_program:
       - pull_request: 68
         merged_commit: "1701d2edb38dbd7497401f8b2ab1823e92226593"
         result: generic_RemoteOps_resource_limits_do_not_satisfy_CPU_or_memory_admission_without_dimension_specific_enforcement
+      - pull_request: 69
+        merged_commit: "51a183edbcb796c19c6b08ab34fd2fd94c34ab69"
+        result: network_policy_and_default_deny_are_independent_admission_claims
       - pull_request: 70
         merged_commit: "7de2369e8f9290b8caf4487eaa3d92839c61c848"
         result: generic_RemoteOps_resource_limits_do_not_satisfy_wall_clock_GPU_or_model_token_admission_without_dimension_specific_enforcement
@@ -651,6 +654,12 @@ ax_task_runtime_program:
       - pull_request: 72
         merged_commit: "d0e457d5a0ed263bf3b6047935409af363076913"
         result: RemoteOps_v2_does_not_imply_workspace_write_enforcement_or_Hub_capability_grants
+      - pull_request: 73
+        merged_commit: "90617a65f7f5895d997cdf69ca457897beb372fa"
+        result: unqualified_imported_isolation_and_supervised_process_do_not_admit_container_tasks
+      - pull_request: 74
+        merged_commit: "1e503ea647064a8fe7b5f7de6073ce6af5fc2520"
+        result: observed_capacity_is_required_across_CPU_memory_GPU_and_model_token_dimensions
   next_slice:
     scope: AXH6
     objective: versioned_RemoteOps_worker_capability_discovery_and_attestation
