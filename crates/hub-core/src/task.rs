@@ -1013,8 +1013,7 @@ mod tests {
     fn imported_remoteops_backend_does_not_claim_workspace_or_capability_enforcement() {
         use crate::remoteops_qualification::RemoteOpsBackendQualificationV2;
 
-        let fixture =
-            include_str!("../tests/fixtures/remoteops-backend-qualification-v2.json");
+        let fixture = include_str!("../tests/fixtures/remoteops-backend-qualification-v2.json");
         let backend = RemoteOpsBackendQualificationV2::parse(fixture)
             .expect("valid RemoteOps qualification")
             .to_sandbox_backend_descriptor();
