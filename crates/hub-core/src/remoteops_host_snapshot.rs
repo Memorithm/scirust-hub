@@ -268,6 +268,36 @@ mod tests {
     }
 
     #[test]
+    fn rejects_nested_schema_drift_and_invalid_limit_shapes() {
+        let future_probe_field = FIXTURE.replace(
+            "\\"bubblewrap\\":{\\"present\\":true,",
+            "\\"bubblewrap\\":{\\"present\\":true,\\"trusted\\":true,",
+        );
+        assert_eq!(
+            RemoteOpsHostCapabilitySnapshotV1::parse(&future_probe_field),
+            Err(HostSnapshotError::InvalidJson)
+        );
+
+        let future_limit_state = FIXTURE.replace(
+            "\\"cgroup_memory_limit_bytes\\":{\\"state\\":\\"unknown\\"}",
+            "\\"cgroup_memory_limit_bytes\\":{\\"state\\":\\"future\\"}",
+        );
+        assert_eq!(
+            RemoteOpsHostCapabilitySnapshotV1::parse(&future_limit_state),
+            Err(HostSnapshotError::InvalidJson)
+        );
+
+        let missing_limit_value = FIXTURE.replace(
+            "\\"cgroup_cpu_quota_millis\\":{\\"state\\":\\"limited\\",\\"value\\":2500}",
+            "\\"cgroup_cpu_quota_millis\\":{\\"state\\":\\"limited\\"}",
+        );
+        assert_eq!(
+            RemoteOpsHostCapabilitySnapshotV1::parse(&missing_limit_value),
+            Err(HostSnapshotError::InvalidJson)
+        );
+    }
+
+    #[test]
     fn document_size_is_bounded() {
         assert_eq!(
             RemoteOpsHostCapabilitySnapshotV1::parse(
