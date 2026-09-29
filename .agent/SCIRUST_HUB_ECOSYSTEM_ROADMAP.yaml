@@ -758,3 +758,11 @@ axh6_host_snapshot_cli_validator_2026_09_29:
   merge_commit: "7849e8395480d9fb50eb80190105ddd4610b23f7"
   result: bounded_offline_cli_validates_unsigned_remoteops_snapshot_without_daemon_admission
   required_CI: CI_256_success_on_final_exact_head
+
+axh6_snapshot_cli_stdin_boundary_2026_09_29:
+  status: merged
+  pull_request: 81
+  final_exact_head: "bb1b1f38f35987b1b056e0261d2cc1559f73034e"
+  merge_commit: "9eebdcc80633680f83f3649f6fdad697dfb09aab"
+  result: offline_cli_stdin_acceptance_and_16_KiB_boundary_are_integration_tested
+  required_CI: CI_259_success_on_final_exact_head
