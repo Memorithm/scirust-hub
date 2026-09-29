@@ -936,8 +936,7 @@ mod tests {
     fn imported_remoteops_network_controls_are_independent_at_admission() {
         use crate::remoteops_qualification::RemoteOpsBackendQualificationV2;
 
-        let fixture =
-            include_str!("../tests/fixtures/remoteops-backend-qualification-v2.json");
+        let fixture = include_str!("../tests/fixtures/remoteops-backend-qualification-v2.json");
         let qualification =
             RemoteOpsBackendQualificationV2::parse(fixture).expect("valid qualification");
         let backend = qualification.to_sandbox_backend_descriptor();
