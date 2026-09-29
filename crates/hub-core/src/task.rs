@@ -949,10 +949,8 @@ mod tests {
             .admit(&task)
             .expect("both imported network controls satisfy this task");
 
-        let egress_disabled = fixture.replace(
-            "\"network_egress\":true",
-            "\"network_egress\":false",
-        );
+        let egress_disabled =
+            fixture.replace("\"network_egress\":true", "\"network_egress\":false");
         let egress_backend = RemoteOpsBackendQualificationV2::parse(&egress_disabled)
             .expect("valid qualification with no egress policy enforcement")
             .to_sandbox_backend_descriptor();
