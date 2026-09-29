@@ -1035,6 +1035,46 @@ mod tests {
     }
 
     #[test]
+    fn imported_remoteops_network_controls_are_independent_at_admission() {
+        use crate::remoteops_qualification::RemoteOpsBackendQualificationV2;
+
+        let fixture = include_str!("../tests/fixtures/remoteops-backend-qualification-v2.json");
+        let qualification =
+            RemoteOpsBackendQualificationV2::parse(fixture).expect("valid qualification");
+        let backend = qualification.to_sandbox_backend_descriptor();
+        let mut task = base_task();
+        task.budget = ResourceBudget::default();
+        task.capabilities = CapabilitySet::default();
+        task.sandbox.writable_workspace = true;
+
+        backend
+            .admit(&task)
+            .expect("both imported network controls satisfy this task");
+
+        let egress_disabled =
+            fixture.replace("\"network_egress\":true", "\"network_egress\":false");
+        let egress_backend = RemoteOpsBackendQualificationV2::parse(&egress_disabled)
+            .expect("valid qualification with no egress policy enforcement")
+            .to_sandbox_backend_descriptor();
+        assert!(matches!(
+            egress_backend.admit(&task),
+            Err(CoreError::Validation(message)) if message.contains("network policy")
+        ));
+
+        let default_deny_disabled = fixture.replace(
+            "\"default_deny_network\":true",
+            "\"default_deny_network\":false",
+        );
+        let default_deny_backend = RemoteOpsBackendQualificationV2::parse(&default_deny_disabled)
+            .expect("valid qualification without default-deny enforcement")
+            .to_sandbox_backend_descriptor();
+        assert!(matches!(
+            default_deny_backend.admit(&task),
+            Err(CoreError::Validation(message)) if message.contains("default-deny")
+        ));
+    }
+
+    #[test]
     fn rejects_floating_git_revision() {
         let mut task = base_task();
         task.workspace.repositories[0].revision = "main".to_owned();
