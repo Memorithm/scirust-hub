@@ -636,6 +636,9 @@ ax_task_runtime_program:
       - pull_request: 66
         merged_commit: "327fbe25ce47d40d4bdc836a51b4a6d20ffd47e2"
         result: Hub_requires_explicit_isolation_qualification_and_bounded_evidence_reference
+      - pull_request: 67
+        merged_commit: "58997d0009c223b4791ff106fd30d42cb7a4c07e"
+        result: strict_RemoteOps_qualification_v2_consumer_preserves_evidence_and_unmapped_resource_claims
   next_slice:
     scope: AXH6
     objective: versioned_RemoteOps_worker_capability_discovery_and_attestation
