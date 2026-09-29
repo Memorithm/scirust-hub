@@ -151,18 +151,23 @@ impl RemoteOpsHostCapabilitySnapshotV1 {
 fn valid_platform(value: &str) -> bool {
     !value.is_empty()
         && value.len() <= 64
-        && value.bytes().all(|b| b.is_ascii_alphanumeric() || matches!(b, b'_' | b'-' | b'.'))
+        && value
+            .bytes()
+            .all(|b| b.is_ascii_alphanumeric() || matches!(b, b'_' | b'-' | b'.'))
 }
 
 fn valid_probe(probe: &CommandObservation) -> bool {
     if !probe.present && (probe.executable.is_some() || probe.version.is_some()) {
         return false;
     }
-    probe.executable.as_ref().is_none_or(|s| {
-        !s.is_empty() && s.len() <= 4096 && !s.chars().any(char::is_control)
-    }) && probe.version.as_ref().is_none_or(|s| {
-        !s.is_empty() && s.len() <= 512 && !s.chars().any(char::is_control)
-    })
+    probe
+        .executable
+        .as_ref()
+        .is_none_or(|s| !s.is_empty() && s.len() <= 4096 && !s.chars().any(char::is_control))
+        && probe
+            .version
+            .as_ref()
+            .is_none_or(|s| !s.is_empty() && s.len() <= 512 && !s.chars().any(char::is_control))
 }
 
 #[cfg(test)]
@@ -178,7 +183,9 @@ mod tests {
         assert_eq!(snapshot.observed_at_unix_seconds, 1_798_000_000);
         assert_eq!(snapshot.host_sandbox_observations.os, "linux");
         assert_eq!(
-            snapshot.host_resource_observations.cgroup_memory_limit_bytes,
+            snapshot
+                .host_resource_observations
+                .cgroup_memory_limit_bytes,
             LimitObservation::Unknown
         );
     }
