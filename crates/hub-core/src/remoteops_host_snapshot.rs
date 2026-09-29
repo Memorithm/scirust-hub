@@ -276,7 +276,9 @@ mod tests {
         let snapshot =
             RemoteOpsHostCapabilitySnapshotV1::parse(&unbounded).expect("valid unbounded limit");
         assert_eq!(
-            snapshot.host_resource_observations.cgroup_memory_limit_bytes,
+            snapshot
+                .host_resource_observations
+                .cgroup_memory_limit_bytes,
             LimitObservation::Unbounded
         );
 
