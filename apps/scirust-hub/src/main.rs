@@ -266,10 +266,12 @@ fn dispatch(args: &Args) -> Result<(), CliError> {
         }
         Command::RemoteOps(RemoteOpsCommand::SnapshotValidate { path }) => {
             let text = read_host_snapshot(path)?;
-            let snapshot = RemoteOpsHostCapabilitySnapshotV1::parse(&text)
-                .map_err(|error| CliError::Usage(format!("invalid RemoteOps host snapshot: {error}")))?;
-            let raw: Value = serde_json::from_str(&text)
-                .map_err(|error| CliError::BadResponse(format!("validated snapshot JSON changed: {error}")))?;
+            let snapshot = RemoteOpsHostCapabilitySnapshotV1::parse(&text).map_err(|error| {
+                CliError::Usage(format!("invalid RemoteOps host snapshot: {error}"))
+            })?;
+            let raw: Value = serde_json::from_str(&text).map_err(|error| {
+                CliError::BadResponse(format!("validated snapshot JSON changed: {error}"))
+            })?;
             let output = serde_json::json!({
                 "validation": "accepted",
                 "diagnostic_only": true,
@@ -285,8 +287,7 @@ fn dispatch(args: &Args) -> Result<(), CliError> {
                 );
                 println!(
                     "host: {} / {}",
-                    snapshot.host_sandbox_observations.os,
-                    snapshot.host_sandbox_observations.arch
+                    snapshot.host_sandbox_observations.os, snapshot.host_sandbox_observations.arch
                 );
             })
         }
