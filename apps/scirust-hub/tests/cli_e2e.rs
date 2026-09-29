@@ -342,7 +342,9 @@ fn cli_host_snapshot_stdin_accepts_fixture_and_rejects_oversize_input() {
             .expect("child stdin")
             .write_all(input)
             .expect("write snapshot to stdin");
-        child.wait_with_output().expect("wait for snapshot validator")
+        child
+            .wait_with_output()
+            .expect("wait for snapshot validator")
     };
 
     let accepted = run_with_stdin(fixture.as_bytes());
@@ -356,7 +358,8 @@ fn cli_host_snapshot_stdin_accepts_fixture_and_rejects_oversize_input() {
     assert_eq!(value["validation"], "accepted");
     assert_eq!(value["diagnostic_only"], true);
 
-    let rejected = run_with_stdin(&vec![b' '; 16 * 1024 + 1]);
+    let oversized = vec![b' '; 16 * 1024 + 1];
+    let rejected = run_with_stdin(&oversized);
     assert!(!rejected.status.success());
     assert!(String::from_utf8_lossy(&rejected.stderr).contains("exceeds the 16 KiB limit"));
 }
