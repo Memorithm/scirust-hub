@@ -680,3 +680,15 @@ axh5_active_slice_2026_09_27:
     - process_backend_claims_only_wall_clock_enforcement
     - network_workspace_write_RAM_CPU_GPU_and_token_controls_fail_closed_when_unenforced
     - remote_workers_remain_task_admission_fail_closed_until_versioned_capabilities_exist
+
+
+axh6_unsigned_snapshot_consumer_2026_09_29:
+  status: merged_contract_documentation
+  pull_request: 75
+  merge_commit: "c4b94dbb7d5e30ebbea9f3a50d1ccd05ca2624b0"
+  contract: remoteops.host-capability-snapshot/v1
+  result: Hub_consumer_boundary_keeps_unsigned_host_snapshot_diagnostic_only
+  limitations:
+    - no_worker_identity_or_attestation
+    - no_backend_qualification_capability_grant_capacity_proof_or_admission_from_snapshot
+    - strict_code_consumer_and_schema_fixture_remain_follow_up_work
