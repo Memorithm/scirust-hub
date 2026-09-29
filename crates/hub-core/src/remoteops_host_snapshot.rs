@@ -268,6 +268,45 @@ mod tests {
     }
 
     #[test]
+    fn preserves_unbounded_limits_and_explicit_null_observations() {
+        let unbounded = FIXTURE.replace(
+            "\"cgroup_memory_limit_bytes\":{\"state\":\"unknown\"}",
+            "\"cgroup_memory_limit_bytes\":{\"state\":\"unbounded\"}",
+        );
+        let snapshot =
+            RemoteOpsHostCapabilitySnapshotV1::parse(&unbounded).expect("valid unbounded limit");
+        assert_eq!(
+            snapshot
+                .host_resource_observations
+                .cgroup_memory_limit_bytes,
+            LimitObservation::Unbounded
+        );
+
+        let nullable = FIXTURE
+            .replace(
+                "\"unprivileged_userns_clone\":false",
+                "\"unprivileged_userns_clone\":null",
+            )
+            .replace("\"seccomp_mode\":2", "\"seccomp_mode\":null")
+            .replace("\"apparmor_enabled\":true", "\"apparmor_enabled\":null")
+            .replace("\"cpu_logical_count\":8", "\"cpu_logical_count\":null")
+            .replace(
+                "\"memory_total_bytes\":17179869184",
+                "\"memory_total_bytes\":null",
+            );
+        let snapshot =
+            RemoteOpsHostCapabilitySnapshotV1::parse(&nullable).expect("valid null observations");
+        assert_eq!(
+            snapshot.host_sandbox_observations.unprivileged_userns_clone,
+            None
+        );
+        assert_eq!(snapshot.host_sandbox_observations.seccomp_mode, None);
+        assert_eq!(snapshot.host_sandbox_observations.apparmor_enabled, None);
+        assert_eq!(snapshot.host_resource_observations.cpu_logical_count, None);
+        assert_eq!(snapshot.host_resource_observations.memory_total_bytes, None);
+    }
+
+    #[test]
     fn rejects_nested_schema_drift_and_invalid_limit_shapes() {
         let future_probe_field = FIXTURE.replace(
             "\"bubblewrap\":{\"present\":true,",
