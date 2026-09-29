@@ -1157,6 +1157,47 @@ mod tests {
     }
 
     #[test]
+    fn imported_unqualified_isolation_and_process_do_not_admit_container_tasks() {
+        use crate::remoteops_qualification::RemoteOpsBackendQualificationV2;
+
+        const FIXTURE: &str =
+            include_str!("../tests/fixtures/remoteops-backend-qualification-v2.json");
+
+        let unqualified_fixture = FIXTURE.replace(
+            "\"isolation_qualified\":true",
+            "\"isolation_qualified\":false",
+        );
+        let unqualified_backend = RemoteOpsBackendQualificationV2::parse(&unqualified_fixture)
+            .expect("network claims retain their source evidence")
+            .to_sandbox_backend_descriptor();
+        let mut task = base_task();
+        task.budget = ResourceBudget::default();
+        task.capabilities = CapabilitySet::default();
+        task.sandbox.writable_workspace = true;
+        assert!(matches!(
+            unqualified_backend.admit(&task),
+            Err(CoreError::Validation(message)) if message.contains("lacks qualification evidence")
+        ));
+
+        let process_fixture = FIXTURE
+            .replace(
+                "\"isolation\":\"userspace_kernel\"",
+                "\"isolation\":\"supervised_process\"",
+            )
+            .replace(
+                "\"isolation_qualified\":true",
+                "\"isolation_qualified\":false",
+            );
+        let process_backend = RemoteOpsBackendQualificationV2::parse(&process_fixture)
+            .expect("supervised process may be reported without isolation qualification")
+            .to_sandbox_backend_descriptor();
+        assert!(matches!(
+            process_backend.admit(&task),
+            Err(CoreError::Validation(message)) if message.contains("isolation Process")
+        ));
+    }
+
+    #[test]
     fn stronger_isolation_requires_qualification_evidence() {
         let mut backend = SandboxBackendDescriptor {
             backend_id: "container-v1".to_owned(),
