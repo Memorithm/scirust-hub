@@ -5,6 +5,7 @@
 //! Requires both workspace binaries to be built (`cargo test --workspace`
 //! does this); the sibling binary is located in the shared target directory.
 
+use std::io::Write as _;
 use std::net::{TcpListener, TcpStream};
 use std::path::PathBuf;
 use std::process::{Child, Command, Output, Stdio};
@@ -320,4 +321,42 @@ fn cli_validates_unsigned_host_snapshot_without_daemon_access() {
     assert!(!rejected.status.success());
     assert!(String::from_utf8_lossy(&rejected.stderr).contains("invalid RemoteOps host snapshot"));
     let _ = std::fs::remove_file(path);
+}
+
+#[test]
+fn cli_host_snapshot_stdin_accepts_fixture_and_rejects_oversize_input() {
+    let fixture = include_str!(
+        "../../../crates/hub-core/tests/fixtures/remoteops-host-capability-snapshot-v1.json"
+    );
+    let run_with_stdin = |input: &[u8]| {
+        let mut child = Command::new(sibling_bin("scirust-hub"))
+            .args(["--output", "json", "remote-ops", "snapshot-validate", "-"])
+            .stdin(Stdio::piped())
+            .stdout(Stdio::piped())
+            .stderr(Stdio::piped())
+            .spawn()
+            .expect("spawn snapshot validator");
+        child
+            .stdin
+            .take()
+            .expect("child stdin")
+            .write_all(input)
+            .expect("write snapshot to stdin");
+        child.wait_with_output().expect("wait for snapshot validator")
+    };
+
+    let accepted = run_with_stdin(fixture.as_bytes());
+    assert!(
+        accepted.status.success(),
+        "validator failed: {}",
+        String::from_utf8_lossy(&accepted.stderr)
+    );
+    let value: serde_json::Value =
+        serde_json::from_slice(&accepted.stdout).expect("valid JSON response");
+    assert_eq!(value["validation"], "accepted");
+    assert_eq!(value["diagnostic_only"], true);
+
+    let rejected = run_with_stdin(&vec![b' '; 16 * 1024 + 1]);
+    assert!(!rejected.status.success());
+    assert!(String::from_utf8_lossy(&rejected.stderr).contains("exceeds the 16 KiB limit"));
 }
