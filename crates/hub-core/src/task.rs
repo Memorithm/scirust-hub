@@ -825,6 +825,61 @@ mod tests {
     }
 
     #[test]
+    fn backend_enforcement_does_not_replace_observed_capacity_admission() {
+        let mut task = base_task();
+        task.budget = ResourceBudget {
+            cpu_millis: Some(1_000),
+            ..ResourceBudget::default()
+        };
+        task.capabilities = CapabilitySet::default();
+        task.sandbox.network.default_deny = false;
+        task.sandbox.network.allowed_endpoints.clear();
+        task.sandbox.writable_workspace = true;
+
+        let backend = SandboxBackendDescriptor {
+            backend_id: "qualified-microvm".to_owned(),
+            isolation: IsolationLevel::MicroVm,
+            isolation_qualified: true,
+            isolation_evidence_id: Some("qualification/microvm".to_owned()),
+            enforces_network_policy: true,
+            enforces_default_deny_network: true,
+            enforces_workspace_write_policy: true,
+            resources: ResourceEnforcement {
+                cpu_millis: true,
+                ..ResourceEnforcement::default()
+            },
+            capabilities: CapabilitySet::default(),
+        };
+        backend
+            .admit(&task)
+            .expect("backend proves it can enforce the task CPU budget");
+
+        assert!(matches!(
+            backend.admit_with_capacity(&task, &ResourceCapacity::default()),
+            Err(CoreError::Validation(message)) if message.contains("unknown capacity")
+        ));
+        assert!(matches!(
+            backend.admit_with_capacity(
+                &task,
+                &ResourceCapacity {
+                    cpu_millis: Some(999),
+                    ..ResourceCapacity::default()
+                }
+            ),
+            Err(CoreError::Validation(message)) if message.contains("cpu_millis")
+        ));
+        backend
+            .admit_with_capacity(
+                &task,
+                &ResourceCapacity {
+                    cpu_millis: Some(1_000),
+                    ..ResourceCapacity::default()
+                },
+            )
+            .expect("observed capacity independently satisfies the budget");
+    }
+
+    #[test]
     fn valid_task_is_admitted_by_stronger_backend() {
         let task = base_task();
         task.validate().expect("task valid");
