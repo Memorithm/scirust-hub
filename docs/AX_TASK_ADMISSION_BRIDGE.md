@@ -11,7 +11,7 @@ execution enforcement in RemoteOps.
 | Task | immutable run/task identity | goal, capability, resource envelope, policy revision |
 | Workspace | materialization request | repository, exact object ID, input digest |
 | Model | inference policy reference | provider/model label, limit, credential reference |
-| Runtime | executor selection | RemoteOps backend descriptor and capability proof |
+| Runtime | executor selection | RemoteOps backend descriptor and capability proof, including a separate default-deny claim |
 | Evidence | artifact/event references | append-only lifecycle events and result digests |
 
 ## Admission sequence
@@ -22,8 +22,12 @@ declare → validate schema → bind workspace objects → request capability pr
 ```
 
 The Hub must refuse dispatch when source identity, capability requirements,
-resource bounds or evidence destination are incomplete. A registered component
-is metadata only and is never executed during discovery.
+resource bounds or evidence destination are incomplete. A task requesting
+default-deny egress is admitted only when the backend separately claims both
+network-policy enforcement and default-deny enforcement. A legacy descriptor
+without the new default-deny field reads as false and remains fail-closed.
+
+A registered component is metadata only and is never executed during discovery.
 
 ## Boundary
 
