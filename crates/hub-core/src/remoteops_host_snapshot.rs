@@ -270,8 +270,8 @@ mod tests {
     #[test]
     fn preserves_unbounded_limits_and_explicit_null_observations() {
         let unbounded = FIXTURE.replace(
-            "\\"cgroup_memory_limit_bytes\\":{\\"state\\":\\"unknown\\"}",
-            "\\"cgroup_memory_limit_bytes\\":{\\"state\\":\\"unbounded\\"}",
+            "\"cgroup_memory_limit_bytes\":{\"state\":\"unknown\"}",
+            "\"cgroup_memory_limit_bytes\":{\"state\":\"unbounded\"}",
         );
         let snapshot =
             RemoteOpsHostCapabilitySnapshotV1::parse(&unbounded).expect("valid unbounded limit");
@@ -281,11 +281,17 @@ mod tests {
         );
 
         let nullable = FIXTURE
-            .replace("\\"unprivileged_userns_clone\\":false", "\\"unprivileged_userns_clone\\":null")
-            .replace("\\"seccomp_mode\\":2", "\\"seccomp_mode\\":null")
-            .replace("\\"apparmor_enabled\\":true", "\\"apparmor_enabled\\":null")
-            .replace("\\"cpu_logical_count\\":8", "\\"cpu_logical_count\\":null")
-            .replace("\\"memory_total_bytes\\":17179869184", "\\"memory_total_bytes\\":null");
+            .replace(
+                "\"unprivileged_userns_clone\":false",
+                "\"unprivileged_userns_clone\":null",
+            )
+            .replace("\"seccomp_mode\":2", "\"seccomp_mode\":null")
+            .replace("\"apparmor_enabled\":true", "\"apparmor_enabled\":null")
+            .replace("\"cpu_logical_count\":8", "\"cpu_logical_count\":null")
+            .replace(
+                "\"memory_total_bytes\":17179869184",
+                "\"memory_total_bytes\":null",
+            );
         let snapshot =
             RemoteOpsHostCapabilitySnapshotV1::parse(&nullable).expect("valid null observations");
         assert_eq!(
