@@ -1010,6 +1010,39 @@ mod tests {
     }
 
     #[test]
+    fn imported_remoteops_backend_does_not_claim_workspace_or_capability_enforcement() {
+        use crate::remoteops_qualification::RemoteOpsBackendQualificationV2;
+
+        let fixture =
+            include_str!("../tests/fixtures/remoteops-backend-qualification-v2.json");
+        let backend = RemoteOpsBackendQualificationV2::parse(fixture)
+            .expect("valid RemoteOps qualification")
+            .to_sandbox_backend_descriptor();
+        assert!(!backend.enforces_workspace_write_policy);
+        assert!(backend.capabilities.0.is_empty());
+
+        let mut read_only_task = base_task();
+        read_only_task.budget = ResourceBudget::default();
+        read_only_task.capabilities = CapabilitySet::default();
+        read_only_task.sandbox.network.default_deny = false;
+        read_only_task.sandbox.network.allowed_endpoints.clear();
+        assert!(matches!(
+            backend.admit(&read_only_task),
+            Err(CoreError::Validation(message)) if message.contains("read-only workspace policy")
+        ));
+
+        let mut capability_task = base_task();
+        capability_task.budget = ResourceBudget::default();
+        capability_task.sandbox.network.default_deny = false;
+        capability_task.sandbox.network.allowed_endpoints.clear();
+        capability_task.sandbox.writable_workspace = true;
+        assert!(matches!(
+            backend.admit(&capability_task),
+            Err(CoreError::Validation(message)) if message.contains("requested capability")
+        ));
+    }
+
+    #[test]
     fn process_supervision_cannot_claim_container_isolation() {
         let task = base_task();
         let backend = SandboxBackendDescriptor {
