@@ -243,7 +243,7 @@ mod tests {
     fn unknown_fields_and_schema_versions_fail_closed() {
         let unknown = format!(
             "{}{}",
-            FIXTURE.trim_end_matches('\\n').trim_end_matches('}'),
+            FIXTURE.trim_end().trim_end_matches('}'),
             r#","future":true}"#
         );
         assert_eq!(
