@@ -633,6 +633,7 @@ fn read_host_snapshot(path: &str) -> Result<String, CliError> {
         .map_err(|error| CliError::Usage(format!("snapshot is not UTF-8: {error}")))
 }
 
+#[allow(clippy::result_large_err)] // CliError keeps full API context
 fn read_bounded_snapshot(
     input: &mut impl std::io::Read,
     bytes: &mut Vec<u8>,
@@ -649,6 +650,7 @@ fn read_bounded_snapshot(
     Ok(())
 }
 
+#[allow(clippy::result_large_err)] // CliError keeps full API context
 fn read_manifest(path: &str) -> Result<Value, CliError> {
     let text = if path == "-" {
         let mut buf = String::new();
