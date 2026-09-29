@@ -728,3 +728,10 @@ axh6_remoteops_bounded_probes_2026_09_29:
   final_exact_head: "35dc9a664b3ad30ccacf076eea67320855099699"
   merge_commit: "4d9dfd9135d92cd0e4b77c94cafe443285af334b"
   result: host_discovery_version_commands_are_time_and_output_bounded
+
+axh6_remoteops_probe_global_timeout_2026_09_29:
+  repository: Memorithm/RemoteOps
+  pull_request: 96
+  final_exact_head: "b81820af14ad5cfd220d527eaaca1b682ae3ce40"
+  merge_commit: "d3630ffb78dc7aad30e8ff2c85186a32d0b44629"
+  result: probe_stdout_drain_timeout_covers_descendants_holding_the_pipe
