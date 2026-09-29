@@ -67,9 +67,8 @@ pub use publication::{
 };
 pub use remoteops_qualification::{
     RemoteOpsBackendQualificationV2, RemoteOpsControlsV2, RemoteOpsIsolationV2,
-    RemoteOpsQualificationError, MAX_REMOTEOPS_BACKEND_NAME_BYTES,
-    MAX_REMOTEOPS_EVIDENCE_ID_BYTES, MAX_REMOTEOPS_QUALIFICATION_JSON_BYTES,
-    REMOTEOPS_BACKEND_QUALIFICATION_V2_SCHEMA,
+    RemoteOpsQualificationError, MAX_REMOTEOPS_BACKEND_NAME_BYTES, MAX_REMOTEOPS_EVIDENCE_ID_BYTES,
+    MAX_REMOTEOPS_QUALIFICATION_JSON_BYTES, REMOTEOPS_BACKEND_QUALIFICATION_V2_SCHEMA,
 };
 pub use run::{
     ComponentAdmissionPin, InputBinding, InputProvenance, OutputRef, RunOutcome, RunRecord,
