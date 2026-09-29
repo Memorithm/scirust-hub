@@ -900,8 +900,7 @@ mod tests {
         const FIXTURE: &str =
             include_str!("../tests/fixtures/remoteops-backend-qualification-v2.json");
 
-        let qualification =
-            RemoteOpsBackendQualificationV2::parse(FIXTURE).expect("qualification");
+        let qualification = RemoteOpsBackendQualificationV2::parse(FIXTURE).expect("qualification");
         assert!(qualification.controls().resource_limits);
         let backend = qualification.to_sandbox_backend_descriptor();
 
