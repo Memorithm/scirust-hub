@@ -60,7 +60,7 @@ struct RemoteOpsBackendQualificationWireV2 {
     isolation: RemoteOpsIsolationV2,
     isolation_qualified: bool,
     controls: RemoteOpsControlsV2,
-    evidence_id: Option<String>,
+    evidence_id: serde_json::Value,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -104,6 +104,11 @@ impl RemoteOpsBackendQualificationV2 {
         if wire.schema != REMOTEOPS_BACKEND_QUALIFICATION_V2_SCHEMA {
             return Err(RemoteOpsQualificationError::UnsupportedSchema);
         }
+        let evidence_id = match wire.evidence_id {
+            serde_json::Value::Null => None,
+            serde_json::Value::String(value) => Some(value),
+            _ => return Err(RemoteOpsQualificationError::InvalidJson),
+        };
         validate_label(
             &wire.backend,
             MAX_REMOTEOPS_BACKEND_NAME_BYTES,
@@ -117,7 +122,7 @@ impl RemoteOpsBackendQualificationV2 {
             || wire.controls.network_egress
             || wire.controls.default_deny_network
             || wire.controls.resource_limits;
-        match wire.evidence_id.as_deref() {
+        match evidence_id.as_deref() {
             Some(evidence_id) => validate_label(
                 evidence_id,
                 MAX_REMOTEOPS_EVIDENCE_ID_BYTES,
@@ -134,7 +139,7 @@ impl RemoteOpsBackendQualificationV2 {
             isolation: wire.isolation,
             isolation_qualified: wire.isolation_qualified,
             controls: wire.controls,
-            evidence_id: wire.evidence_id,
+            evidence_id,
         })
     }
 
@@ -269,6 +274,12 @@ mod tests {
         assert_eq!(
             RemoteOpsBackendQualificationV2::parse(missing_evidence),
             Err(RemoteOpsQualificationError::MissingEvidence)
+        );
+
+        let omitted_evidence = r#"{"schema":"remoteops.backend-qualification/v2","backend":"bwrap","isolation":"container","isolation_qualified":false,"controls":{"network_egress":false,"default_deny_network":false,"resource_limits":false}}"#;
+        assert_eq!(
+            RemoteOpsBackendQualificationV2::parse(omitted_evidence),
+            Err(RemoteOpsQualificationError::InvalidJson)
         );
 
         let process = FIXTURE.replace("userspace_kernel", "supervised_process");
