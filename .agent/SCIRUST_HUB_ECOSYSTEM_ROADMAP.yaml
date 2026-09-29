@@ -648,6 +648,9 @@ ax_task_runtime_program:
       - pull_request: 71
         merged_commit: "a9db96843a6f56e0d992e1d6ccf7d87f690cec8d"
         result: backend_enforcement_claim_does_not_replace_observed_capacity_admission
+      - pull_request: 72
+        merged_commit: "d0e457d5a0ed263bf3b6047935409af363076913"
+        result: RemoteOps_v2_does_not_imply_workspace_write_enforcement_or_Hub_capability_grants
   next_slice:
     scope: AXH6
     objective: versioned_RemoteOps_worker_capability_discovery_and_attestation
