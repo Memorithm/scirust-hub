@@ -2,7 +2,7 @@
 //!
 //! Parsing this unsigned observation never constructs backend qualification,
 //! worker identity, or admission data.
-use serde::Deserialize;
+use serde::{Deserialize, Deserializer};
 use std::fmt;
 
 pub const REMOTEOPS_HOST_CAPABILITY_SNAPSHOT_V1_SCHEMA: &str =
@@ -16,6 +16,14 @@ pub struct RemoteOpsHostCapabilitySnapshotV1 {
     pub host_resource_observations: HostResourceObservationsV2,
 }
 
+fn deserialize_required_option<'de, D, T>(deserializer: D) -> Result<Option<T>, D::Error>
+where
+    D: Deserializer<'de>,
+    T: Deserialize<'de>,
+{
+    Option::<T>::deserialize(deserializer)
+}
+
 #[derive(Clone, Debug, Deserialize, PartialEq, Eq)]
 #[serde(deny_unknown_fields)]
 pub struct HostSandboxObservationsV1 {
@@ -23,8 +31,11 @@ pub struct HostSandboxObservationsV1 {
     pub os: String,
     pub arch: String,
     pub cgroup_v2: bool,
+    #[serde(deserialize_with = "deserialize_required_option")]
     pub unprivileged_userns_clone: Option<bool>,
+    #[serde(deserialize_with = "deserialize_required_option")]
     pub seccomp_mode: Option<u64>,
+    #[serde(deserialize_with = "deserialize_required_option")]
     pub apparmor_enabled: Option<bool>,
     pub kvm_accessible: bool,
     pub bubblewrap: CommandObservation,
@@ -40,7 +51,9 @@ pub struct HostSandboxObservationsV1 {
 #[serde(deny_unknown_fields)]
 pub struct CommandObservation {
     pub present: bool,
+    #[serde(deserialize_with = "deserialize_required_option")]
     pub executable: Option<String>,
+    #[serde(deserialize_with = "deserialize_required_option")]
     pub version: Option<String>,
 }
 
@@ -48,7 +61,9 @@ pub struct CommandObservation {
 #[serde(deny_unknown_fields)]
 pub struct HostResourceObservationsV2 {
     schema_version: u8,
+    #[serde(deserialize_with = "deserialize_required_option")]
     pub cpu_logical_count: Option<u64>,
+    #[serde(deserialize_with = "deserialize_required_option")]
     pub memory_total_bytes: Option<u64>,
     pub cgroup_cpu_quota_millis: LimitObservation,
     pub cgroup_memory_limit_bytes: LimitObservation,
@@ -224,6 +239,32 @@ mod tests {
         assert_eq!(
             RemoteOpsHostCapabilitySnapshotV1::parse(&cpu),
             Err(HostSnapshotError::InvalidObservation)
+        );
+    }
+
+    #[test]
+    fn nullable_schema_fields_must_be_present_even_when_their_value_may_be_null() {
+        let missing_kernel_observation =
+            FIXTURE.replace("\\"unprivileged_userns_clone\\":false,", "");
+        assert_eq!(
+            RemoteOpsHostCapabilitySnapshotV1::parse(&missing_kernel_observation),
+            Err(HostSnapshotError::InvalidJson)
+        );
+
+        let missing_nullable_command_field = FIXTURE.replace(
+            "\\"podman\\":{\\"present\\":false,\\"executable\\":null,",
+            "\\"podman\\":{\\"present\\":false,",
+        );
+        assert_eq!(
+            RemoteOpsHostCapabilitySnapshotV1::parse(&missing_nullable_command_field),
+            Err(HostSnapshotError::InvalidJson)
+        );
+
+        let missing_nullable_resource_field =
+            FIXTURE.replace("\\"cpu_logical_count\\":8,", "");
+        assert_eq!(
+            RemoteOpsHostCapabilitySnapshotV1::parse(&missing_nullable_resource_field),
+            Err(HostSnapshotError::InvalidJson)
         );
     }
 
