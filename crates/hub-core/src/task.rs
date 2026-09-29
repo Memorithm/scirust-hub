@@ -954,7 +954,8 @@ mod tests {
 
     #[test]
     fn legacy_backend_descriptor_defaults_default_deny_to_false() {
-        let legacy = r#"{"backend_id":"legacy","isolation":"process","enforces_network_policy":true}"#;
+        let legacy =
+            r#"{"backend_id":"legacy","isolation":"process","enforces_network_policy":true}"#;
         let backend: SandboxBackendDescriptor =
             serde_json::from_str(legacy).expect("legacy descriptor shape");
         assert!(!backend.enforces_default_deny_network);
