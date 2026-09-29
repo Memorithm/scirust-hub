@@ -116,6 +116,8 @@ impl Executor for LocalCapacityExecutor {
         SandboxBackendDescriptor {
             backend_id: self.backend.clone(),
             isolation: IsolationLevel::Process,
+            isolation_qualified: false,
+            isolation_evidence_id: None,
             enforces_network_policy: false,
             enforces_default_deny_network: false,
             enforces_workspace_write_policy: false,
