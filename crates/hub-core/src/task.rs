@@ -894,6 +894,53 @@ mod tests {
     }
 
     #[test]
+    fn generic_remoteops_resource_claim_does_not_admit_other_budget_dimensions() {
+        use crate::remoteops_qualification::RemoteOpsBackendQualificationV2;
+
+        const FIXTURE: &str =
+            include_str!("../tests/fixtures/remoteops-backend-qualification-v2.json");
+
+        let qualification = RemoteOpsBackendQualificationV2::parse(FIXTURE)
+            .expect("qualification with generic resource-limit claim");
+        assert!(qualification.controls().resource_limits);
+        let backend = qualification.to_sandbox_backend_descriptor();
+
+        for (budget, dimension) in [
+            (
+                ResourceBudget {
+                    wall_clock_ms: Some(10_000),
+                    ..ResourceBudget::default()
+                },
+                "wall_clock_ms",
+            ),
+            (
+                ResourceBudget {
+                    gpu_devices: Some(1),
+                    ..ResourceBudget::default()
+                },
+                "gpu_devices",
+            ),
+            (
+                ResourceBudget {
+                    model_tokens: Some(1_000),
+                    ..ResourceBudget::default()
+                },
+                "model_tokens",
+            ),
+        ] {
+            let mut task = base_task();
+            task.budget = budget;
+            task.capabilities = CapabilitySet::default();
+            task.sandbox.writable_workspace = true;
+
+            assert!(matches!(
+                backend.admit(&task),
+                Err(CoreError::Validation(message)) if message.contains(dimension)
+            ));
+        }
+    }
+
+    #[test]
     fn generic_remoteops_resource_claim_does_not_admit_cpu_or_memory_budgets() {
         use crate::remoteops_qualification::RemoteOpsBackendQualificationV2;
 
