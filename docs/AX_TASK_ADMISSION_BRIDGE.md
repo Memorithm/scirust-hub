@@ -11,7 +11,7 @@ execution enforcement in RemoteOps.
 | Task | immutable run/task identity | goal, capability, resource envelope, policy revision |
 | Workspace | materialization request | repository, exact object ID, input digest |
 | Model | inference policy reference | provider/model label, limit, credential reference |
-| Runtime | executor selection | RemoteOps backend descriptor, bounded qualification evidence reference, and separate default-deny claim |
+| Runtime | executor selection | RemoteOps backend descriptor, bounded isolation evidence reference, and separate default-deny claim |
 | Evidence | artifact/event references | append-only lifecycle events and result digests |
 
 ## Admission sequence
@@ -25,8 +25,7 @@ The Hub must refuse dispatch when source identity, capability requirements,
 resource bounds or evidence destination are incomplete. A stronger-than-process
 isolation claim requires an explicit qualification flag and a bounded reference
 to immutable evidence. Process supervision cannot claim qualified isolation.
-Declared network, workspace, resource or capability enforcement also requires
-a qualification evidence reference. A task requesting default-deny egress is
+A task requesting default-deny egress is
 admitted only when the backend separately claims both network-policy
 enforcement and default-deny enforcement. Legacy descriptors default
 qualification fields to false or absent and remain fail-closed.
