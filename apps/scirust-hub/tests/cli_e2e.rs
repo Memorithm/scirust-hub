@@ -278,8 +278,9 @@ fn cli_drives_the_full_component_to_provenance_flow() {
 #[test]
 fn cli_validates_unsigned_host_snapshot_without_daemon_access() {
     let path = std::env::temp_dir().join(format!("hub-host-snapshot-{}.json", std::process::id()));
-    let fixture =
-        include_str!("../../../crates/hub-core/tests/fixtures/remoteops-host-capability-snapshot-v1.json");
+    let fixture = include_str!(
+        "../../../crates/hub-core/tests/fixtures/remoteops-host-capability-snapshot-v1.json"
+    );
     std::fs::write(&path, fixture).expect("write snapshot fixture");
 
     let output = Command::new(sibling_bin("scirust-hub"))
