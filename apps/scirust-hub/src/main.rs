@@ -6,6 +6,7 @@
 use std::io::Read as _;
 
 use clap::{Parser as ClapParser, Subcommand};
+use hub_core::{RemoteOpsHostCapabilitySnapshotV1, MAX_REMOTEOPS_HOST_CAPABILITY_SNAPSHOT_BYTES};
 use serde_json::Value;
 
 #[derive(Debug, ClapParser)]
@@ -47,6 +48,17 @@ enum Command {
     Workflow(WorkflowCommand),
     #[command(subcommand)]
     Event(EventCommand),
+    #[command(subcommand)]
+    RemoteOps(RemoteOpsCommand),
+}
+
+#[derive(Debug, Subcommand)]
+enum RemoteOpsCommand {
+    /// Validate a bounded unsigned host snapshot locally; no daemon request is made.
+    SnapshotValidate {
+        /// Snapshot JSON path (`-` for stdin).
+        path: String,
+    },
 }
 
 #[derive(Debug, Subcommand)]
@@ -250,6 +262,33 @@ fn dispatch(args: &Args) -> Result<(), CliError> {
                         cap["name"], cap["contract_version"]
                     );
                 }
+            })
+        }
+        Command::RemoteOps(RemoteOpsCommand::SnapshotValidate { path }) => {
+            let text = read_host_snapshot(path)?;
+            let snapshot = RemoteOpsHostCapabilitySnapshotV1::parse(&text).map_err(|error| {
+                CliError::Usage(format!("invalid RemoteOps host snapshot: {error}"))
+            })?;
+            let raw: Value = serde_json::from_str(&text).map_err(|error| {
+                CliError::BadResponse(format!("validated snapshot JSON changed: {error}"))
+            })?;
+            let output = serde_json::json!({
+                "validation": "accepted",
+                "diagnostic_only": true,
+                "snapshot": raw,
+            });
+            emit(args, &output, |_| {
+                println!(
+                    "RemoteOps host snapshot v1 accepted (unsigned, diagnostic only; not an admission proof)"
+                );
+                println!(
+                    "observed_at_unix_seconds: {}",
+                    snapshot.observed_at_unix_seconds
+                );
+                println!(
+                    "host: {} / {}",
+                    snapshot.host_sandbox_observations.os, snapshot.host_sandbox_observations.arch
+                );
             })
         }
         Command::Capabilities => {
@@ -576,6 +615,39 @@ fn parse_inputs(inputs: &[String]) -> Result<Vec<serde_json::Value>, CliError> {
             Ok(serde_json::json!({ "name": name, "artifact": artifact }))
         })
         .collect()
+}
+
+#[allow(clippy::result_large_err)] // CliError keeps full API context
+fn read_host_snapshot(path: &str) -> Result<String, CliError> {
+    let mut bytes = Vec::new();
+    if path == "-" {
+        let stdin = std::io::stdin();
+        let mut input = stdin.lock();
+        read_bounded_snapshot(&mut input, &mut bytes)?;
+    } else {
+        let mut input = std::fs::File::open(path)
+            .map_err(|error| CliError::Usage(format!("reading {path:?}: {error}")))?;
+        read_bounded_snapshot(&mut input, &mut bytes)?;
+    }
+    String::from_utf8(bytes)
+        .map_err(|error| CliError::Usage(format!("snapshot is not UTF-8: {error}")))
+}
+
+#[allow(clippy::result_large_err)] // CliError keeps full API context
+fn read_bounded_snapshot(
+    input: &mut impl std::io::Read,
+    bytes: &mut Vec<u8>,
+) -> Result<(), CliError> {
+    input
+        .take((MAX_REMOTEOPS_HOST_CAPABILITY_SNAPSHOT_BYTES + 1) as u64)
+        .read_to_end(bytes)
+        .map_err(|error| CliError::Usage(format!("reading snapshot: {error}")))?;
+    if bytes.len() > MAX_REMOTEOPS_HOST_CAPABILITY_SNAPSHOT_BYTES {
+        return Err(CliError::Usage(
+            "RemoteOps host snapshot exceeds the 16 KiB limit".into(),
+        ));
+    }
+    Ok(())
 }
 
 #[allow(clippy::result_large_err)] // CliError keeps full API context
