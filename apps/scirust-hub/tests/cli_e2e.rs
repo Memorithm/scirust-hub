@@ -277,10 +277,7 @@ fn cli_drives_the_full_component_to_provenance_flow() {
 
 #[test]
 fn cli_validates_unsigned_host_snapshot_without_daemon_access() {
-    let path = std::env::temp_dir().join(format!(
-        "hub-host-snapshot-{}.json",
-        std::process::id()
-    ));
+    let path = std::env::temp_dir().join(format!("hub-host-snapshot-{}.json", std::process::id()));
     let fixture =
         include_str!("../../../schemas/remoteops-host-capability-snapshot-v1.fixture.json");
     std::fs::write(&path, fixture).expect("write snapshot fixture");
@@ -306,8 +303,11 @@ fn cli_validates_unsigned_host_snapshot_without_daemon_access() {
     assert_eq!(value["diagnostic_only"], true);
     assert_eq!(value["snapshot"]["trust_status"], "unsigned_observation");
 
-    std::fs::write(&path, r#"{"schema":"remoteops.host-capability-snapshot/v1","future":true}"#)
-        .expect("write invalid snapshot");
+    std::fs::write(
+        &path,
+        r#"{"schema":"remoteops.host-capability-snapshot/v1","future":true}"#,
+    )
+    .expect("write invalid snapshot");
     let rejected = Command::new(sibling_bin("scirust-hub"))
         .args([
             "remote-ops",
@@ -317,8 +317,6 @@ fn cli_validates_unsigned_host_snapshot_without_daemon_access() {
         .output()
         .expect("run validator against invalid snapshot");
     assert!(!rejected.status.success());
-    assert!(
-        String::from_utf8_lossy(&rejected.stderr).contains("invalid RemoteOps host snapshot")
-    );
+    assert!(String::from_utf8_lossy(&rejected.stderr).contains("invalid RemoteOps host snapshot"));
     let _ = std::fs::remove_file(path);
 }
