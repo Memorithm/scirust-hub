@@ -628,12 +628,13 @@ ax_task_runtime_program:
       merged_commit: "9868780b1e6eb163e5d37ca75892a53ab786bdb8"
       result: exact_revision_workspace_materialization_and_verified_digest
   current_slice:
-    scope: AXH4
-    status: active
-    objective: granular_executor_backend_admission_wiring
-  next_slice:
     scope: AXH5
-    objective: first_real_container_or_stronger_sandbox_backend
+    status: active
+    objective: first_real_container_or_stronger_sandbox_backend_qualification
+    owner: Memorithm/RemoteOps
+  next_slice:
+    scope: AXH6
+    objective: versioned_RemoteOps_worker_capability_discovery_and_attestation
 
 axh4_completed_slice_2026_09_27:
   branch: agent/ax-backend-admission
