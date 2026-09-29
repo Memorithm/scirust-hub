@@ -28,6 +28,7 @@ const MAX_REPOSITORIES: usize = 32;
 const MAX_REPOSITORY_BYTES: usize = 512;
 const MAX_CAPABILITIES: usize = 128;
 const MAX_CAPABILITY_BYTES: usize = 256;
+const MAX_BACKEND_QUALIFICATION_EVIDENCE_ID_BYTES: usize = 256;
 const MAX_ENDPOINTS: usize = 64;
 const MAX_ENDPOINT_BYTES: usize = 512;
 
@@ -620,6 +621,12 @@ impl ResourceEnforcement {
 pub struct SandboxBackendDescriptor {
     pub backend_id: String,
     pub isolation: IsolationLevel,
+    /// Whether a stronger-than-process isolation boundary has been qualified.
+    #[serde(default)]
+    pub isolation_qualified: bool,
+    /// Opaque reference to immutable backend qualification evidence.
+    #[serde(default)]
+    pub qualification_evidence_id: Option<String>,
     /// Whether this backend applies task network policy rules such as endpoint restrictions.
     #[serde(default)]
     pub enforces_network_policy: bool,
@@ -647,6 +654,7 @@ impl SandboxBackendDescriptor {
     pub fn admit(&self, task: &TaskSpec) -> Result<(), CoreError> {
         task.validate()?;
         validate_bounded_token("sandbox backend id", &self.backend_id, MAX_CAPABILITY_BYTES)?;
+        self.validate_qualification_claims()?;
 
         if self.isolation < task.sandbox.minimum_isolation {
             return Err(CoreError::Validation(format!(
@@ -686,6 +694,48 @@ impl SandboxBackendDescriptor {
                     self.backend_id
                 )));
             }
+        }
+        Ok(())
+    }
+
+    fn validate_qualification_claims(&self) -> Result<(), CoreError> {
+        if self.isolation > IsolationLevel::Process && !self.isolation_qualified {
+            return Err(CoreError::Validation(
+                "sandbox backend isolation lacks qualification evidence".to_owned(),
+            ));
+        }
+        if self.isolation == IsolationLevel::Process && self.isolation_qualified {
+            return Err(CoreError::Validation(
+                "process supervision cannot claim qualified isolation".to_owned(),
+            ));
+        }
+
+        let claims_control = self.enforces_network_policy
+            || self.enforces_default_deny_network
+            || self.enforces_workspace_write_policy
+            || self.resources.wall_clock_ms
+            || self.resources.cpu_millis
+            || self.resources.memory_bytes
+            || self.resources.gpu_devices
+            || self.resources.model_tokens
+            || !self.capabilities.0.is_empty();
+        if self.isolation_qualified || claims_control {
+            let evidence_id = self.qualification_evidence_id.as_deref().ok_or_else(|| {
+                CoreError::Validation(
+                    "sandbox backend claims require qualification evidence".to_owned(),
+                )
+            })?;
+            validate_bounded_token(
+                "sandbox backend qualification evidence id",
+                evidence_id,
+                MAX_BACKEND_QUALIFICATION_EVIDENCE_ID_BYTES,
+            )?;
+        } else if let Some(evidence_id) = self.qualification_evidence_id.as_deref() {
+            validate_bounded_token(
+                "sandbox backend qualification evidence id",
+                evidence_id,
+                MAX_BACKEND_QUALIFICATION_EVIDENCE_ID_BYTES,
+            )?;
         }
         Ok(())
     }
@@ -793,6 +843,8 @@ mod tests {
         let backend = SandboxBackendDescriptor {
             backend_id: "microvm-v1".to_owned(),
             isolation: IsolationLevel::MicroVm,
+            isolation_qualified: true,
+            qualification_evidence_id: Some("qualification/microvm-v1".to_owned()),
             enforces_network_policy: true,
             enforces_default_deny_network: true,
             enforces_workspace_write_policy: true,
@@ -888,6 +940,8 @@ mod tests {
         let backend = SandboxBackendDescriptor {
             backend_id: "process".to_owned(),
             isolation: IsolationLevel::Process,
+            isolation_qualified: false,
+            qualification_evidence_id: None,
             enforces_network_policy: false,
             enforces_default_deny_network: false,
             enforces_workspace_write_policy: false,
@@ -901,12 +955,52 @@ mod tests {
     }
 
     #[test]
+    fn stronger_isolation_and_control_claims_require_qualification_evidence() {
+        let mut backend = SandboxBackendDescriptor {
+            backend_id: "container-v1".to_owned(),
+            isolation: IsolationLevel::Container,
+            isolation_qualified: false,
+            qualification_evidence_id: None,
+            enforces_network_policy: false,
+            enforces_default_deny_network: false,
+            enforces_workspace_write_policy: false,
+            resources: ResourceEnforcement::default(),
+            capabilities: CapabilitySet::default(),
+        };
+        assert!(matches!(
+            backend.validate_qualification_claims(),
+            Err(CoreError::Validation(message)) if message.contains("lacks qualification evidence")
+        ));
+
+        backend.isolation_qualified = true;
+        assert!(matches!(
+            backend.validate_qualification_claims(),
+            Err(CoreError::Validation(message)) if message.contains("require qualification evidence")
+        ));
+        backend.qualification_evidence_id = Some("qualification/container-v1".to_owned());
+        backend
+            .validate_qualification_claims()
+            .expect("qualified isolation has a bounded evidence reference");
+
+        backend.isolation = IsolationLevel::Process;
+        backend.isolation_qualified = false;
+        backend.enforces_network_policy = true;
+        backend.qualification_evidence_id = None;
+        assert!(matches!(
+            backend.validate_qualification_claims(),
+            Err(CoreError::Validation(message)) if message.contains("require qualification evidence")
+        ));
+    }
+
+    #[test]
     fn explicit_policy_requires_network_enforcement() {
         let mut task = base_task();
         task.sandbox.minimum_isolation = IsolationLevel::Process;
         let backend = SandboxBackendDescriptor {
             backend_id: "process".to_owned(),
             isolation: IsolationLevel::Process,
+            isolation_qualified: false,
+            qualification_evidence_id: Some("qualification/process".to_owned()),
             enforces_network_policy: false,
             enforces_default_deny_network: false,
             enforces_workspace_write_policy: true,
@@ -937,6 +1031,8 @@ mod tests {
         let mut backend = SandboxBackendDescriptor {
             backend_id: "network-filter".to_owned(),
             isolation: IsolationLevel::Process,
+            isolation_qualified: false,
+            qualification_evidence_id: Some("qualification/network-filter".to_owned()),
             enforces_network_policy: true,
             enforces_default_deny_network: false,
             enforces_workspace_write_policy: true,
@@ -959,6 +1055,8 @@ mod tests {
         let backend: SandboxBackendDescriptor =
             serde_json::from_str(legacy).expect("legacy descriptor shape");
         assert!(!backend.enforces_default_deny_network);
+        assert!(!backend.isolation_qualified);
+        assert_eq!(backend.qualification_evidence_id, None);
     }
 
     #[test]
@@ -975,6 +1073,8 @@ mod tests {
         let wall_clock_only = SandboxBackendDescriptor {
             backend_id: "process-timeout".to_owned(),
             isolation: IsolationLevel::Process,
+            isolation_qualified: false,
+            qualification_evidence_id: Some("qualification/process-timeout".to_owned()),
             enforces_network_policy: false,
             enforces_default_deny_network: false,
             enforces_workspace_write_policy: false,
@@ -1004,6 +1104,8 @@ mod tests {
         let backend = SandboxBackendDescriptor {
             backend_id: "plain-process".to_owned(),
             isolation: IsolationLevel::Process,
+            isolation_qualified: false,
+            qualification_evidence_id: Some("qualification/plain-process".to_owned()),
             enforces_network_policy: false,
             enforces_default_deny_network: false,
             enforces_workspace_write_policy: false,
@@ -1022,6 +1124,8 @@ mod tests {
         let backend = SandboxBackendDescriptor {
             backend_id: "microvm-v1".to_owned(),
             isolation: IsolationLevel::MicroVm,
+            isolation_qualified: true,
+            qualification_evidence_id: Some("qualification/microvm-v1".to_owned()),
             enforces_network_policy: true,
             enforces_default_deny_network: true,
             enforces_workspace_write_policy: true,
