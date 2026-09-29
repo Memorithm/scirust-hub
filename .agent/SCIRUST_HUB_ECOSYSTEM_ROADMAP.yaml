@@ -642,6 +642,9 @@ ax_task_runtime_program:
       - pull_request: 68
         merged_commit: "1701d2edb38dbd7497401f8b2ab1823e92226593"
         result: generic_RemoteOps_resource_limits_do_not_satisfy_CPU_or_memory_admission_without_dimension_specific_enforcement
+      - pull_request: 70
+        merged_commit: "7de2369e8f9290b8caf4487eaa3d92839c61c848"
+        result: generic_RemoteOps_resource_limits_do_not_satisfy_wall_clock_GPU_or_model_token_admission_without_dimension_specific_enforcement
   next_slice:
     scope: AXH6
     objective: versioned_RemoteOps_worker_capability_discovery_and_attestation
