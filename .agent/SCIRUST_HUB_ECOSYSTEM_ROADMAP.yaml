@@ -742,3 +742,11 @@ axh6_remoteops_clean_probe_environment_2026_09_29:
   final_exact_head: "a12ea9672ac47c0fbfa23246c288efcdf73f34a2"
   merge_commit: "462395e7e7766001c36d38eb8dec791bef8ecca7"
   result: host_version_probe_subprocesses_do_not_inherit_parent_environment
+
+axh6_host_resource_state_fidelity_2026_09_29:
+  status: merged
+  pull_request: 79
+  final_exact_head: "c2d0ec8ba856f668af0de2f88c78719a2f80453b"
+  merge_commit: "892dd1ff0e12bd3c19722f0dd8563252e7c333ce"
+  result: unbounded_limit_and_explicit_nullable_observations_are_preserved
+  required_CI: CI_success_on_final_exact_head
