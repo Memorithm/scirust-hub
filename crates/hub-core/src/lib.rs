@@ -69,8 +69,7 @@ pub use publication::{
 pub use remoteops_host_snapshot::{
     CommandObservation, HostResourceObservationsV2, HostSandboxObservationsV1, HostSnapshotError,
     LimitObservation, RemoteOpsHostCapabilitySnapshotV1,
-    MAX_REMOTEOPS_HOST_CAPABILITY_SNAPSHOT_BYTES,
-    REMOTEOPS_HOST_CAPABILITY_SNAPSHOT_V1_SCHEMA,
+    MAX_REMOTEOPS_HOST_CAPABILITY_SNAPSHOT_BYTES, REMOTEOPS_HOST_CAPABILITY_SNAPSHOT_V1_SCHEMA,
 };
 pub use remoteops_qualification::{
     RemoteOpsBackendQualificationV2, RemoteOpsControlsV2, RemoteOpsIsolationV2,
