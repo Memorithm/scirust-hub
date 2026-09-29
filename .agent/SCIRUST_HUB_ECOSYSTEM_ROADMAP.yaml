@@ -632,6 +632,10 @@ ax_task_runtime_program:
     status: active
     objective: first_real_container_or_stronger_sandbox_backend_qualification
     owner: Memorithm/RemoteOps
+    supporting_pull_requests:
+      - pull_request: 66
+        merged_commit: "327fbe25ce47d40d4bdc836a51b4a6d20ffd47e2"
+        result: Hub_requires_explicit_isolation_qualification_and_bounded_evidence_reference
   next_slice:
     scope: AXH6
     objective: versioned_RemoteOps_worker_capability_discovery_and_attestation
