@@ -10,8 +10,7 @@ use std::fmt;
 
 use crate::task::{CapabilitySet, IsolationLevel, ResourceEnforcement, SandboxBackendDescriptor};
 
-pub const REMOTEOPS_BACKEND_QUALIFICATION_V2_SCHEMA: &str =
-    "remoteops.backend-qualification/v2";
+pub const REMOTEOPS_BACKEND_QUALIFICATION_V2_SCHEMA: &str = "remoteops.backend-qualification/v2";
 pub const MAX_REMOTEOPS_QUALIFICATION_JSON_BYTES: usize = 16 * 1024;
 pub const MAX_REMOTEOPS_BACKEND_NAME_BYTES: usize = 128;
 pub const MAX_REMOTEOPS_EVIDENCE_ID_BYTES: usize = 256;
@@ -216,7 +215,10 @@ mod tests {
     fn parses_v2_and_projects_only_precisely_representable_controls() {
         let qualification = RemoteOpsBackendQualificationV2::parse(FIXTURE).expect("qualification");
         assert_eq!(qualification.backend(), "runsc");
-        assert_eq!(qualification.isolation(), RemoteOpsIsolationV2::UserspaceKernel);
+        assert_eq!(
+            qualification.isolation(),
+            RemoteOpsIsolationV2::UserspaceKernel
+        );
         assert!(qualification.isolation_qualified());
         assert!(qualification.controls().resource_limits);
         assert_eq!(
@@ -279,9 +281,9 @@ mod tests {
     #[test]
     fn document_and_identifiers_are_bounded_and_secret_free() {
         assert_eq!(
-            RemoteOpsBackendQualificationV2::parse(&" ".repeat(
-                MAX_REMOTEOPS_QUALIFICATION_JSON_BYTES + 1
-            )),
+            RemoteOpsBackendQualificationV2::parse(
+                &" ".repeat(MAX_REMOTEOPS_QUALIFICATION_JSON_BYTES + 1)
+            ),
             Err(RemoteOpsQualificationError::DocumentTooLarge)
         );
         let padded = FIXTURE.replace(r#""backend":"runsc""#, r#""backend":" runsc""#);
