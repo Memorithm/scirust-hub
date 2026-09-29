@@ -735,3 +735,10 @@ axh6_remoteops_probe_global_timeout_2026_09_29:
   final_exact_head: "b81820af14ad5cfd220d527eaaca1b682ae3ce40"
   merge_commit: "d3630ffb78dc7aad30e8ff2c85186a32d0b44629"
   result: probe_stdout_drain_timeout_covers_descendants_holding_the_pipe
+
+axh6_remoteops_clean_probe_environment_2026_09_29:
+  repository: Memorithm/RemoteOps
+  pull_request: 97
+  final_exact_head: "a12ea9672ac47c0fbfa23246c288efcdf73f34a2"
+  merge_commit: "462395e7e7766001c36d38eb8dec791bef8ecca7"
+  result: host_version_probe_subprocesses_do_not_inherit_parent_environment
