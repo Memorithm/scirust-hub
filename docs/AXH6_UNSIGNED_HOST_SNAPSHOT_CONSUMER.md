@@ -12,7 +12,7 @@ SciRust Hub may ingest `remoteops.host-capability-snapshot/v1` as a bounded diag
 - Do not treat tool presence, version strings, or host kernel settings as evidence that an isolation, network, workspace, or resource control is enforced.
 - Keep this diagnostic record separate from the RemoteOps backend qualification v2 record and its immutable evidence reference.
 
-The snapshot currently reports an observation time, sandbox-tool and kernel observations, and CPU/memory inventory. Its schema deliberately contains no worker identifier or signature. A future authenticated discovery contract must add independently verifiable worker identity and replay protection before Hub can bind observations to a registered worker. That still will not qualify a backend or authorize task placement: those require separate enforcement evidence and dimension-specific observed capacity under the existing admission contract.
+The snapshot currently reports an observation time, sandbox-tool and kernel observations, and CPU/memory inventory. Its schema deliberately contains no worker identifier or signature. A future authenticated discovery contract must add independently verifiable worker identity and replay protection before Hub can bind observations to a registered worker. That still will not qualify a backend or authorize task placement: those require separate enforcement evidence and dimension-specific observed capacity under the existing admission contract. The verifier-side authority and provisioning gates for a future worker key registry are defined in [AXH6_WORKER_TRUST_PROVISIONING.md](AXH6_WORKER_TRUST_PROVISIONING.md).
 
 ## Versioning
 
