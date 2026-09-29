@@ -750,3 +750,11 @@ axh6_host_resource_state_fidelity_2026_09_29:
   merge_commit: "892dd1ff0e12bd3c19722f0dd8563252e7c333ce"
   result: unbounded_limit_and_explicit_nullable_observations_are_preserved
   required_CI: CI_success_on_final_exact_head
+
+axh6_host_snapshot_cli_validator_2026_09_29:
+  status: merged_diagnostic_cli
+  pull_request: 80
+  final_exact_head: "1fc53d2494506110c7f3ecc7cf7b7f43bf1004da"
+  merge_commit: "7849e8395480d9fb50eb80190105ddd4610b23f7"
+  result: bounded_offline_cli_validates_unsigned_remoteops_snapshot_without_daemon_admission
+  required_CI: CI_256_success_on_final_exact_head
