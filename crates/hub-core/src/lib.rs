@@ -61,15 +61,15 @@ pub use memory::{
     InMemoryRuns, InMemoryTasks, InMemoryWorkflows,
 };
 pub use orchestrator::{Orchestrator, RegistrationStatus};
+pub use publication::{
+    AuthoritativeStepPublication, InMemoryPublicationFences, PublicationCommit, PublicationFence,
+    PublicationFenceRepository, MAX_PUBLICATION_OUTPUTS, PUBLICATION_FENCE_SCHEMA_VERSION,
+};
 pub use remoteops_qualification::{
     RemoteOpsBackendQualificationV2, RemoteOpsControlsV2, RemoteOpsIsolationV2,
     RemoteOpsQualificationError, MAX_REMOTEOPS_BACKEND_NAME_BYTES,
     MAX_REMOTEOPS_EVIDENCE_ID_BYTES, MAX_REMOTEOPS_QUALIFICATION_JSON_BYTES,
     REMOTEOPS_BACKEND_QUALIFICATION_V2_SCHEMA,
-};
-pub use publication::{
-    AuthoritativeStepPublication, InMemoryPublicationFences, PublicationCommit, PublicationFence,
-    PublicationFenceRepository, MAX_PUBLICATION_OUTPUTS, PUBLICATION_FENCE_SCHEMA_VERSION,
 };
 pub use run::{
     ComponentAdmissionPin, InputBinding, InputProvenance, OutputRef, RunOutcome, RunRecord,
