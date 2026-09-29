@@ -1053,7 +1053,10 @@ mod tests {
         ));
 
         let process_fixture = FIXTURE
-            .replace("\"isolation\":\"userspace_kernel\"", "\"isolation\":\"supervised_process\"")
+            .replace(
+                "\"isolation\":\"userspace_kernel\"",
+                "\"isolation\":\"supervised_process\"",
+            )
             .replace(
                 "\"isolation_qualified\":true",
                 "\"isolation_qualified\":false",
