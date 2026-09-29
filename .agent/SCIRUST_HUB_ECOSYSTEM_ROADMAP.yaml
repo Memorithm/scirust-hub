@@ -691,4 +691,12 @@ axh6_unsigned_snapshot_consumer_2026_09_29:
   limitations:
     - no_worker_identity_or_attestation
     - no_backend_qualification_capability_grant_capacity_proof_or_admission_from_snapshot
-    - strict_code_consumer_and_schema_fixture_remain_follow_up_work
+    - strict_bounded_v1_parser_and_producer_fixture_added_by_pull_request_76
+
+axh6_host_snapshot_parser_2026_09_29:
+  status: merged_diagnostic_consumer
+  pull_request: 76
+  final_exact_head: "a7c0706eb32a1f2be53afdcd6bc70b4499e60c5d"
+  merge_commit: "c39e4cd3e9f10414d7477735a7ca5e76173e36d1"
+  result: strict_bounded_parser_preserves_unsigned_observations_without_admission_projection
+  required_CI: CI_success_on_final_exact_head
