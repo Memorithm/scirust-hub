@@ -766,3 +766,14 @@ axh6_snapshot_cli_stdin_boundary_2026_09_29:
   merge_commit: "9eebdcc80633680f83f3649f6fdad697dfb09aab"
   result: offline_cli_stdin_acceptance_and_16_KiB_boundary_are_integration_tested
   required_CI: CI_259_success_on_final_exact_head
+
+axh6_worker_trust_provisioning_boundary_2026_09_29:
+  status: merged_architecture_decision
+  pull_request: 82
+  final_exact_head: "037a28bc0057d4fb2d6536b33cdfe85f6de28382"
+  merge_commit: "7fb890925def77d5069e2e1f8d39ba4f7dedc40c"
+  result: Hub_owns_verifier_trust_registry_and_explicit_admin_provisioning_gates
+  limitations:
+    - no_trust_store_signature_verifier_or_signed_envelope_implemented
+    - signed_observations_do_not_imply_backend_qualification_or_admission
+  required_CI: CI_261_success_on_final_exact_head
