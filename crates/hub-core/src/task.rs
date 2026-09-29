@@ -721,7 +721,7 @@ impl SandboxBackendDescriptor {
                 evidence_id,
                 MAX_ISOLATION_EVIDENCE_ID_BYTES,
             )?;
-        } else if let Some(evidence_id) = self.isolation_evidence_id.as_deref() {
+        } else if self.isolation_evidence_id.is_some() {
             return Err(CoreError::Validation(
                 "sandbox isolation evidence requires a qualified isolation claim".to_owned(),
             ));
