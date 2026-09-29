@@ -721,3 +721,10 @@ axh6_remoteops_attestation_design_2026_09_29:
   pull_request: 94
   merge_commit: "70a287a40fef4caa07fea52655dce57a8c2f8d58"
   result: future_worker_attestation_gates_documented_unsigned_snapshot_remains_diagnostic
+
+axh6_remoteops_bounded_probes_2026_09_29:
+  repository: Memorithm/RemoteOps
+  pull_request: 95
+  final_exact_head: "35dc9a664b3ad30ccacf076eea67320855099699"
+  merge_commit: "4d9dfd9135d92cd0e4b77c94cafe443285af334b"
+  result: host_discovery_version_commands_are_time_and_output_bounded
