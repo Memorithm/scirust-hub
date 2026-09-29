@@ -715,3 +715,9 @@ axh6_nested_snapshot_drift_tests_2026_09_29:
   final_exact_head: "a3b582a80bb48686a5a80339e10f7198da01e1eb"
   merge_commit: "2889671b62f3dc7db24bf12d0eced1cd85575069"
   result: strict_nested_field_and_limit_state_rejection_pinned_by_tests
+
+axh6_remoteops_attestation_design_2026_09_29:
+  repository: Memorithm/RemoteOps
+  pull_request: 94
+  merge_commit: "70a287a40fef4caa07fea52655dce57a8c2f8d58"
+  result: future_worker_attestation_gates_documented_unsigned_snapshot_remains_diagnostic
