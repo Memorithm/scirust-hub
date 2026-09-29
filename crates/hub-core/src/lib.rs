@@ -28,6 +28,7 @@ pub mod limits;
 pub mod memory;
 pub mod orchestrator;
 pub mod publication;
+pub mod remoteops_host_snapshot;
 pub mod remoteops_qualification;
 pub mod run;
 pub mod scicapsule;
@@ -64,6 +65,12 @@ pub use orchestrator::{Orchestrator, RegistrationStatus};
 pub use publication::{
     AuthoritativeStepPublication, InMemoryPublicationFences, PublicationCommit, PublicationFence,
     PublicationFenceRepository, MAX_PUBLICATION_OUTPUTS, PUBLICATION_FENCE_SCHEMA_VERSION,
+};
+pub use remoteops_host_snapshot::{
+    CommandObservation, HostResourceObservationsV2, HostSandboxObservationsV1, HostSnapshotError,
+    LimitObservation, RemoteOpsHostCapabilitySnapshotV1,
+    MAX_REMOTEOPS_HOST_CAPABILITY_SNAPSHOT_BYTES,
+    REMOTEOPS_HOST_CAPABILITY_SNAPSHOT_V1_SCHEMA,
 };
 pub use remoteops_qualification::{
     RemoteOpsBackendQualificationV2, RemoteOpsControlsV2, RemoteOpsIsolationV2,
