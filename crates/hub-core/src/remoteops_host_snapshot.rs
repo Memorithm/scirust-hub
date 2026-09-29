@@ -245,15 +245,15 @@ mod tests {
     #[test]
     fn nullable_schema_fields_must_be_present_even_when_their_value_may_be_null() {
         let missing_kernel_observation =
-            FIXTURE.replace("\\"unprivileged_userns_clone\\":false,", "");
+            FIXTURE.replace("\"unprivileged_userns_clone\":false,", "");
         assert_eq!(
             RemoteOpsHostCapabilitySnapshotV1::parse(&missing_kernel_observation),
             Err(HostSnapshotError::InvalidJson)
         );
 
         let missing_nullable_command_field = FIXTURE.replace(
-            "\\"podman\\":{\\"present\\":false,\\"executable\\":null,",
-            "\\"podman\\":{\\"present\\":false,",
+            "\"podman\":{\"present\":false,\"executable\":null,",
+            "\"podman\":{\"present\":false,",
         );
         assert_eq!(
             RemoteOpsHostCapabilitySnapshotV1::parse(&missing_nullable_command_field),
@@ -261,7 +261,7 @@ mod tests {
         );
 
         let missing_nullable_resource_field =
-            FIXTURE.replace("\\"cpu_logical_count\\":8,", "");
+            FIXTURE.replace("\"cpu_logical_count\":8,", "");
         assert_eq!(
             RemoteOpsHostCapabilitySnapshotV1::parse(&missing_nullable_resource_field),
             Err(HostSnapshotError::InvalidJson)
