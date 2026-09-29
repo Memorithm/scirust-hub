@@ -915,6 +915,116 @@ mod tests {
     }
 
     #[test]
+    fn capacity_admission_requires_observations_for_every_supported_dimension() {
+        let backend = SandboxBackendDescriptor {
+            backend_id: "qualified-microvm".to_owned(),
+            isolation: IsolationLevel::MicroVm,
+            isolation_qualified: true,
+            isolation_evidence_id: Some("qualification/microvm".to_owned()),
+            enforces_network_policy: true,
+            enforces_default_deny_network: true,
+            enforces_workspace_write_policy: true,
+            resources: ResourceEnforcement {
+                wall_clock_ms: true,
+                cpu_millis: true,
+                memory_bytes: true,
+                gpu_devices: true,
+                model_tokens: true,
+            },
+            capabilities: CapabilitySet::default(),
+        };
+
+        let cases = [
+            (
+                ResourceBudget {
+                    cpu_millis: Some(1_000),
+                    ..ResourceBudget::default()
+                },
+                ResourceCapacity::default(),
+                ResourceCapacity {
+                    cpu_millis: Some(999),
+                    ..ResourceCapacity::default()
+                },
+                ResourceCapacity {
+                    cpu_millis: Some(1_000),
+                    ..ResourceCapacity::default()
+                },
+                "cpu_millis",
+            ),
+            (
+                ResourceBudget {
+                    memory_bytes: Some(1_024),
+                    ..ResourceBudget::default()
+                },
+                ResourceCapacity::default(),
+                ResourceCapacity {
+                    memory_bytes: Some(1_023),
+                    ..ResourceCapacity::default()
+                },
+                ResourceCapacity {
+                    memory_bytes: Some(1_024),
+                    ..ResourceCapacity::default()
+                },
+                "memory_bytes",
+            ),
+            (
+                ResourceBudget {
+                    gpu_devices: Some(1),
+                    ..ResourceBudget::default()
+                },
+                ResourceCapacity::default(),
+                ResourceCapacity {
+                    gpu_devices: Some(0),
+                    ..ResourceCapacity::default()
+                },
+                ResourceCapacity {
+                    gpu_devices: Some(1),
+                    ..ResourceCapacity::default()
+                },
+                "gpu_devices",
+            ),
+            (
+                ResourceBudget {
+                    model_tokens: Some(1_000),
+                    ..ResourceBudget::default()
+                },
+                ResourceCapacity::default(),
+                ResourceCapacity {
+                    model_tokens: Some(999),
+                    ..ResourceCapacity::default()
+                },
+                ResourceCapacity {
+                    model_tokens: Some(1_000),
+                    ..ResourceCapacity::default()
+                },
+                "model_tokens",
+            ),
+        ];
+
+        for (budget, unknown, insufficient, sufficient, dimension) in cases {
+            let mut task = base_task();
+            task.budget = budget;
+            task.capabilities = CapabilitySet::default();
+
+            backend
+                .admit(&task)
+                .expect("backend enforcement claim covers the requested dimension");
+            assert!(matches!(
+                backend.admit_with_capacity(&task, &unknown),
+                Err(CoreError::Validation(message))
+                    if message.contains("unknown capacity") && message.contains(dimension)
+            ));
+            assert!(matches!(
+                backend.admit_with_capacity(&task, &insufficient),
+                Err(CoreError::Validation(message)) if message.contains(dimension)
+            ));
+            backend
+                .admit_with_capacity(&task, &sufficient)
+                .expect("observed capacity meets the requested budget");
+        }
+    }
+
+    #[test]
     fn capacity_admission_is_fail_closed_for_unknown_or_insufficient_dimensions() {
         let budget = ResourceBudget {
             cpu_millis: Some(2_000),
