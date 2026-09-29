@@ -894,6 +894,45 @@ mod tests {
     }
 
     #[test]
+    fn generic_remoteops_resource_claim_does_not_admit_cpu_or_memory_budgets() {
+        use crate::remoteops_qualification::RemoteOpsBackendQualificationV2;
+
+        const FIXTURE: &str =
+            include_str!("../tests/fixtures/remoteops-backend-qualification-v2.json");
+
+        let qualification = RemoteOpsBackendQualificationV2::parse(FIXTURE).expect("qualification");
+        assert!(qualification.controls().resource_limits);
+        let backend = qualification.to_sandbox_backend_descriptor();
+
+        for (budget, dimension) in [
+            (
+                ResourceBudget {
+                    cpu_millis: Some(1_000),
+                    ..ResourceBudget::default()
+                },
+                "cpu_millis",
+            ),
+            (
+                ResourceBudget {
+                    memory_bytes: Some(1024),
+                    ..ResourceBudget::default()
+                },
+                "memory_bytes",
+            ),
+        ] {
+            let mut task = base_task();
+            task.budget = budget;
+            task.capabilities = CapabilitySet::default();
+            task.sandbox.writable_workspace = true;
+
+            assert!(matches!(
+                backend.admit(&task),
+                Err(CoreError::Validation(message)) if message.contains(dimension)
+            ));
+        }
+    }
+
+    #[test]
     fn rejects_floating_git_revision() {
         let mut task = base_task();
         task.workspace.repositories[0].revision = "main".to_owned();
