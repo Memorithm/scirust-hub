@@ -8,6 +8,7 @@ publish.workspace = true
 repository.workspace = true
 
 [dependencies]
+hub-core = { workspace = true }
 clap = { workspace = true }
 serde_json = { workspace = true }
 thiserror = { workspace = true }
