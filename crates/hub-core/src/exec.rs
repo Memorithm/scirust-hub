@@ -122,6 +122,7 @@ pub trait Executor: Send + Sync {
             backend_id: self.backend_id().to_owned(),
             isolation: IsolationLevel::Process,
             enforces_network_policy: false,
+            enforces_default_deny_network: false,
             enforces_workspace_write_policy: false,
             resources: ResourceEnforcement::default(),
             capabilities: Default::default(),
