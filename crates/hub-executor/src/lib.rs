@@ -256,10 +256,7 @@ fn terminate_supervised_process(
     #[cfg(not(unix))]
     let termination = child.kill();
     let status = confirm_termination(termination, || child.wait())?;
-    confirm_group_termination_after_parent_exit(
-        child_id,
-        termination_confirmation_deadline(),
-    )?;
+    confirm_group_termination_after_parent_exit(child_id, termination_confirmation_deadline())?;
     Ok(status)
 }
 
@@ -741,10 +738,9 @@ mod tests {
         let mut request = base_request("echo", &[]);
         request.program = "/nonexistent/hub-no-such-binary".to_owned();
         request.args = vec!["ARG_SECRET_CANARY".to_owned()];
-        request.env.insert(
-            "HUB_SECRET_NAME".to_owned(),
-            "ENV_SECRET_CANARY".to_owned(),
-        );
+        request
+            .env
+            .insert("HUB_SECRET_NAME".to_owned(), "ENV_SECRET_CANARY".to_owned());
         let outcome = exec.execute(&request, &CancelToken::new()).expect("run");
         assert!(!outcome.exited_cleanly());
         let start_error = outcome.start_error.expect("start error");

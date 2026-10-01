@@ -43,11 +43,11 @@ pub(crate) fn confirm_group_termination_after_parent_exit(
         use nix::sys::signal::{killpg, Signal};
         use nix::unistd::Pid;
 
-        let process_group = i32::try_from(child_id).map(Pid::from_raw).map_err(|error| {
-            ExecutorFailure::Backend {
+        let process_group = i32::try_from(child_id)
+            .map(Pid::from_raw)
+            .map_err(|error| ExecutorFailure::Backend {
                 reason: format!("invalid process-group identifier: {error}"),
-            }
-        })?;
+            })?;
 
         match killpg(process_group, Signal::SIGKILL) {
             Ok(()) => {}
