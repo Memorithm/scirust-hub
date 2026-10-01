@@ -23,9 +23,22 @@ On Unix, `ProcessExecutor` configures every spawned command with
 group whose PGID equals its PID. Ordinary descendants inherit that group.
 
 On timeout or cancellation, the executor sends `SIGKILL` to the child's process
-group using the safe `nix::sys::signal::killpg` wrapper, then still calls
-`Child::kill()` as a best-effort fallback before waiting/reaping the direct
-child. No `unsafe` block is introduced into the workspace.
+group using the safe `nix::sys::signal::killpg` wrapper. If group signalling
+fails it attempts `Child::kill()` and a non-blocking child probe as best-effort
+cleanup, but reports the termination as unconfirmed. A confirmed signal is
+followed by direct-child reaping and bounded group-absence confirmation. No
+`unsafe` block is introduced into the workspace.
+
+A direct parent may also exit successfully while a descendant keeps inherited
+stdout/stderr pipes open. The executor therefore cleans up and confirms the
+ordinary process group after every parent exit, before collecting output. Pipe
+collection has its own one-second deadline. A reader error, disconnected reader
+or drain deadline is reported as a backend failure whose reason identifies the
+incomplete stream; it is never converted into a successful outcome.
+
+Spawn failures record only the executable basename, environment variable names
+and the operating-system error. Argument values, environment values and the
+full executable path are deliberately omitted from durable provenance.
 
 On non-Unix targets process-group APIs are not available through this design,
 so the previous direct-child kill behavior is retained.
@@ -41,6 +54,8 @@ so the previous direct-child kill behavior is retained.
 - The remote worker inherits the same behavior because it delegates to
   `ProcessExecutor`.
 - Spawn failures remain observed outcomes rather than backend panics.
+- Pipe-drain failure remains bounded and fail-closed rather than being reported
+  as complete output.
 
 ## Limits / non-goals
 

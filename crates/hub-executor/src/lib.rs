@@ -11,6 +11,7 @@
 //! - [`RemotePoolExecutor`]: deterministic pre-dispatch placement across a
 //!   configured set of workers, with no unsafe post-dispatch failover.
 
+mod execution_guard;
 pub mod local_capacity;
 pub mod pool;
 pub mod remote;
@@ -26,13 +27,17 @@ pub use workspace::{
 };
 
 use std::collections::VecDeque;
-use std::io::Read;
 #[cfg(unix)]
 use std::os::unix::process::CommandExt as _;
 use std::process::{Child, Command, Stdio};
 use std::sync::{Arc, Mutex};
 use std::thread;
 use std::time::{Duration, Instant};
+
+use execution_guard::{
+    collect_captured_streams, confirm_group_termination_after_parent_exit, spawn_capped_reader,
+    termination_confirmation_deadline,
+};
 
 use hub_core::error::ExecutorFailure;
 use hub_core::exec::{CancelToken, ExecutionOutcome, ExecutionRequest, Executor};
@@ -56,12 +61,6 @@ impl Default for ProcessExecutor {
     fn default() -> Self {
         Self::new()
     }
-}
-
-/// Result of one capped stream reader thread.
-struct CapturedStream {
-    bytes: Vec<u8>,
-    truncated: bool,
 }
 
 impl Executor for ProcessExecutor {
@@ -111,19 +110,22 @@ impl Executor for ProcessExecutor {
 
         // Spawn failure (missing program, permission denied, bad cwd) is an
         // observable outcome recorded in provenance, not a backend panic.
-        let Ok(mut child) = command.spawn() else {
-            return Ok(ExecutionOutcome {
-                exit_code: None,
-                signal: None,
-                timed_out: false,
-                cancelled: false,
-                start_error: Some(format!("spawn failed: {command:?}")),
-                duration_ms: ms_since(started),
-                stdout: Vec::new(),
-                stdout_truncated: false,
-                stderr: Vec::new(),
-                stderr_truncated: false,
-            });
+        let mut child = match command.spawn() {
+            Ok(child) => child,
+            Err(io_error) => {
+                return Ok(ExecutionOutcome {
+                    exit_code: None,
+                    signal: None,
+                    timed_out: false,
+                    cancelled: false,
+                    start_error: Some(sanitized_spawn_error(request, &io_error)),
+                    duration_ms: ms_since(started),
+                    stdout: Vec::new(),
+                    stdout_truncated: false,
+                    stderr: Vec::new(),
+                    stderr_truncated: false,
+                });
+            }
         };
 
         let stdout_pipe = child.stdout.take();
@@ -141,35 +143,63 @@ impl Executor for ProcessExecutor {
 
         let mut timed_out = false;
         let mut cancelled = false;
+        let mut terminal_failure = None;
+        let mut parent_exited_normally = false;
         let status = loop {
             match child.try_wait() {
                 Err(io_error) => {
-                    return Err(ExecutorFailure::Backend {
+                    terminal_failure = Some(ExecutorFailure::Backend {
                         reason: format!("wait failed: {io_error}"),
                     });
+                    let _ = terminate_supervised_process(&mut child);
+                    break None;
                 }
-                Ok(Some(status)) => break Some(status),
+                Ok(Some(status)) => {
+                    parent_exited_normally = true;
+                    break Some(status);
+                }
                 Ok(None) => {}
             }
             if cancel.is_cancelled() {
                 cancelled = true;
-                break Some(terminate_supervised_process(&mut child)?);
+                match terminate_supervised_process(&mut child) {
+                    Ok(status) => break Some(status),
+                    Err(error) => {
+                        terminal_failure = Some(error);
+                        break None;
+                    }
+                }
             }
             if Instant::now() >= deadline {
                 timed_out = true;
-                break Some(terminate_supervised_process(&mut child)?);
+                match terminate_supervised_process(&mut child) {
+                    Ok(status) => break Some(status),
+                    Err(error) => {
+                        terminal_failure = Some(error);
+                        break None;
+                    }
+                }
             }
             thread::sleep(Duration::from_millis(POLL_INTERVAL_MS));
         };
 
-        let stdout = stdout_handle.join().unwrap_or_else(|_| CapturedStream {
-            bytes: Vec::new(),
-            truncated: false,
-        });
-        let stderr = stderr_handle.join().unwrap_or_else(|_| CapturedStream {
-            bytes: Vec::new(),
-            truncated: false,
-        });
+        // A parent can exit while an ordinary descendant keeps the inherited
+        // stdout/stderr descriptors open. Kill and confirm the process group
+        // before awaiting readers so capture cannot outlive its own deadline.
+        if parent_exited_normally {
+            if let Err(error) = confirm_group_termination_after_parent_exit(
+                child.id(),
+                termination_confirmation_deadline(),
+            ) {
+                terminal_failure = Some(error);
+            }
+        }
+
+        let captured = collect_captured_streams(stdout_handle, stderr_handle);
+        if let Some(error) = terminal_failure {
+            return Err(error);
+        }
+        let (stdout, stderr) = captured?;
 
         Ok(ExecutionOutcome {
             exit_code: status.as_ref().and_then(|s| s.code()),
@@ -186,9 +216,24 @@ impl Executor for ProcessExecutor {
     }
 }
 
+fn sanitized_spawn_error(request: &ExecutionRequest, io_error: &std::io::Error) -> String {
+    let executable = std::path::Path::new(&request.program)
+        .file_name()
+        .filter(|name| !name.is_empty())
+        .map_or_else(
+            || "<unidentified>".to_owned(),
+            |name| name.to_string_lossy().into_owned(),
+        );
+    let environment_names: Vec<&str> = request.env.keys().map(String::as_str).collect();
+    format!(
+        "spawn failed for executable {executable:?}; environment names: {environment_names:?}; OS error: {io_error}"
+    )
+}
+
 fn terminate_supervised_process(
     child: &mut Child,
 ) -> Result<std::process::ExitStatus, ExecutorFailure> {
+    let child_id = child.id();
     #[cfg(unix)]
     let termination = {
         use nix::errno::Errno;
@@ -210,7 +255,12 @@ fn terminate_supervised_process(
     };
     #[cfg(not(unix))]
     let termination = child.kill();
-    confirm_termination(termination, || child.wait())
+    let status = confirm_termination(termination, || child.wait())?;
+    confirm_group_termination_after_parent_exit(
+        child_id,
+        termination_confirmation_deadline(),
+    )?;
+    Ok(status)
 }
 
 fn confirm_termination(
@@ -238,46 +288,6 @@ fn signal_of(status: Option<&std::process::ExitStatus>) -> Option<i32> {
 #[cfg(not(unix))]
 fn signal_of(_status: Option<&std::process::ExitStatus>) -> Option<i32> {
     None
-}
-
-/// Drains one pipe to EOF, keeping at most `cap` bytes (excess is discarded
-/// but still drained so the child never blocks on a full pipe).
-fn spawn_capped_reader<R>(pipe: Option<R>, cap: usize) -> thread::JoinHandle<CapturedStream>
-where
-    R: Read + Send + 'static,
-{
-    thread::spawn(move || {
-        let mut captured = CapturedStream {
-            bytes: Vec::new(),
-            truncated: false,
-        };
-        let Some(mut pipe) = pipe else {
-            return captured;
-        };
-        let mut buf = [0u8; 8192];
-        loop {
-            match pipe.read(&mut buf) {
-                Ok(0) => break,
-                Ok(n) => {
-                    if captured.bytes.len() < cap {
-                        let remaining = cap - captured.bytes.len();
-                        let take = n.min(remaining);
-                        captured.bytes.extend_from_slice(&buf[..take]);
-                        if take < n {
-                            captured.truncated = true;
-                        }
-                    } else {
-                        captured.truncated = true;
-                    }
-                    // Continue draining regardless of truncation state.
-                }
-                Err(e) if e.kind() == std::io::ErrorKind::Interrupted => continue,
-                // Reader-side errors (broken pipe during kill) end capture.
-                Err(_) => break,
-            }
-        }
-        captured
-    })
 }
 
 /// Deterministic scripted executor for tests: pops queued outcomes, falling
@@ -706,14 +716,44 @@ mod tests {
         let _ = std::fs::remove_dir_all(workdir);
     }
 
+    #[cfg(unix)]
+    #[test]
+    fn parent_exit_cleans_descendants_before_bounded_pipe_drain() {
+        let exec = ProcessExecutor::new();
+        let mut request = base_request("sh", &[]);
+        request.args = vec![
+            "-c".to_owned(),
+            "sleep 30 & printf 'parent-done\\n'".to_owned(),
+        ];
+        request.timeout_ms = 10_000;
+
+        let started = Instant::now();
+        let outcome = exec.execute(&request, &CancelToken::new()).expect("run");
+
+        assert!(outcome.exited_cleanly());
+        assert_eq!(outcome.stdout, b"parent-done\n");
+        assert!(started.elapsed() < Duration::from_secs(5));
+    }
+
     #[test]
     fn missing_program_is_an_observed_start_error() {
         let exec = ProcessExecutor::new();
         let mut request = base_request("echo", &[]);
         request.program = "/nonexistent/hub-no-such-binary".to_owned();
+        request.args = vec!["ARG_SECRET_CANARY".to_owned()];
+        request.env.insert(
+            "HUB_SECRET_NAME".to_owned(),
+            "ENV_SECRET_CANARY".to_owned(),
+        );
         let outcome = exec.execute(&request, &CancelToken::new()).expect("run");
         assert!(!outcome.exited_cleanly());
-        assert!(outcome.start_error.is_some());
+        let start_error = outcome.start_error.expect("start error");
+        assert!(start_error.contains("hub-no-such-binary"));
+        assert!(start_error.contains("HUB_SECRET_NAME"));
+        assert!(start_error.contains("OS error"));
+        assert!(!start_error.contains("ARG_SECRET_CANARY"));
+        assert!(!start_error.contains("ENV_SECRET_CANARY"));
+        assert!(!start_error.contains("/nonexistent"));
         assert!(outcome.exit_code.is_none());
     }
 

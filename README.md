@@ -35,9 +35,11 @@ provenance. Ownership boundaries are documented in
   Child processes run with the privileges of the daemon/worker OS identity. On
   Unix, each execution is placed in a fresh process group and timeout/cancel
   kills that group, covering ordinary descendants that remain members. A
-  descendant can deliberately detach into another session/process group, so
-  this is resource supervision rather than containment. Non-Unix targets retain
-  direct-child termination behavior.
+  normally exited parent also triggers group cleanup before a separately
+  bounded stdout/stderr drain. A descendant can deliberately detach into
+  another session/process group, so this is resource supervision rather than
+  containment. Non-Unix targets retain direct-child termination behavior and
+  the bounded pipe drain.
 - Bearer authentication is not TLS/mTLS and is not fine-grained authorization.
 
 ## Build
