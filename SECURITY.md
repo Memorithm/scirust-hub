@@ -20,27 +20,51 @@ the OS privileges of their respective daemon/worker process. They may access
 resources permitted to that OS identity unless deployment-level isolation
 prevents it.
 
-## Control-plane authentication
+## Control-plane authentication and authorization
 
-`/api/v1/*` can be protected with a static bearer token supplied only through
-`SCIRUST_HUB_TOKEN`. The daemon refuses a non-loopback listen address when that
-token is absent. The CLI and the read-only MCP adapter automatically attach the
-same environment variable when configured. `/health` and `/ready` intentionally
-remain unauthenticated for supervisor probes.
+The daemon supports two mutually exclusive bearer configurations:
 
-The API stores only a SHA-256 verifier for the bearer token in shared state and
-does not intentionally log token contents. The remote worker separately
-requires `SCIRUST_HUB_WORKER_TOKEN`; these credentials serve different trust
-boundaries and should not be reused.
+- `SCIRUST_HUB_TOKEN` preserves the legacy single `legacy-control` principal
+  with all current permissions.
+- `SCIRUST_HUB_PRINCIPALS_JSON` accepts the strict version-1 static-principal
+  document described by
+  [ADR-0019](docs/adr/0019-static-principal-authorization.md). Each principal
+  receives one or more closed permissions: `inspect` for protected GET/HEAD
+  routes, `control` for state-changing routes and `metrics` for `/metrics`.
 
-Bearer authentication over HTTP **does not encrypt traffic** and does not
-provide mTLS-style peer identity. Plain HTTP should remain on loopback or a
-trusted private/tunneled network. Production exposure beyond that boundary must
-terminate TLS at a trusted reverse proxy, service mesh or tunnel until native
-TLS/mTLS support exists.
+Unknown fields, versions and permissions, malformed or duplicate principals,
+shared credentials and empty permission sets fail startup closed. Missing or
+invalid credentials return HTTP 401; an authenticated principal without the
+required permission receives HTTP 403. The CLI and read-only MCP adapter attach
+`SCIRUST_HUB_TOKEN` when configured; clients using the multi-principal mode must
+send their assigned bearer explicitly. `/health` and `/ready` intentionally
+remain unauthenticated supervisor probes.
 
-Authentication is currently coarse-grained: possession of the Hub token grants
-access to the complete `/api/v1` surface. There are no per-principal roles yet.
+Bearer plaintext is reduced to a SHA-256 verifier in shared state and is not
+intentionally logged. Successful control-plane mutations emit the non-secret
+principal identifier through structured tracing, but the authoritative domain
+lifecycle stream does not retroactively invent transport actors. This is
+coarse route-category authorization, not tenancy or per-object authorization;
+there is no dynamic principal management, OIDC, credential rotation or
+secret-manager integration.
+
+The remote worker separately requires `SCIRUST_HUB_WORKER_TOKEN`. Worker bearer
+authentication has no control-plane principal/permission semantics, and these
+credentials serve different trust boundaries and should not be reused.
+
+## Transport security
+
+Hub and worker can terminate native HTTPS when both members of their PEM
+certificate/key pair are configured: `SCIRUST_HUB_TLS_CERT` plus
+`SCIRUST_HUB_TLS_KEY`, or `SCIRUST_HUB_WORKER_TLS_CERT` plus
+`SCIRUST_HUB_WORKER_TLS_KEY`. Supplying only one member fails closed. Clients
+validate the server certificate through their TLS trust roots; private CAs must
+be installed rather than bypassed.
+
+TLS protects transport but does not replace bearer authorization. Native TLS
+does not currently provide mTLS/client-certificate identity, certificate hot
+reload or workload identity. Plain HTTP must therefore remain on loopback or a
+trusted private/tunneled boundary.
 
 ## Additional boundaries
 
