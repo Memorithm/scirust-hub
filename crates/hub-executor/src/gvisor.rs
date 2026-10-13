@@ -368,7 +368,10 @@ mod tests {
         let docker = root.join("docker");
         fs::write(
             &docker,
-            format!("#!/bin/sh\nprintf '%s\\n' \"$@\" > '{}'\nprintf qualified\n", log.display()),
+            format!(
+                "#!/bin/sh\nprintf '%s\\n' \"$@\" > '{}'\nprintf qualified\n",
+                log.display()
+            ),
         )
         .unwrap();
         fs::set_permissions(&docker, fs::Permissions::from_mode(0o755)).unwrap();
