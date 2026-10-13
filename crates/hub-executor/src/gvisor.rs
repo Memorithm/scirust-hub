@@ -451,7 +451,7 @@ mod tests {
             .execute(&request(workspace))
             .unwrap();
         assert_eq!(receipt.schema, GVISOR_RECEIPT_SCHEMA_V1);
-        assert_eq!(receipt.stdout, "qualified\n");
+        assert_eq!(receipt.stdout, "qualified");
         let args = fs::read_to_string(log).unwrap();
         for required in [
             "--runtime=runsc",
