@@ -12,6 +12,7 @@ use std::time::{Duration, Instant};
 
 use hub_core::{IsolationLevel, ResourceEnforcement, SandboxBackendDescriptor};
 use serde::{Deserialize, Serialize};
+use sha2::{Digest, Sha256};
 
 pub const GVISOR_REQUEST_SCHEMA_V1: &str = "scirust-hub.gvisor-execution-request/v1";
 pub const GVISOR_RECEIPT_SCHEMA_V1: &str = "scirust-hub.gvisor-execution-receipt/v1";
@@ -102,15 +103,62 @@ impl GvisorDockerExecutor {
         }
     }
 
-    pub fn from_qualification_manifest(
+    pub fn from_qualification_artifacts(
         workspace_root: PathBuf,
         manifest: &Path,
+        receipt: &Path,
     ) -> Result<Self, String> {
-        let bytes = std::fs::read(manifest)
+        let build_source_commit = option_env!("SCIRUST_HUB_SOURCE_COMMIT").ok_or_else(|| {
+            "qualified gVisor builds require SCIRUST_HUB_SOURCE_COMMIT at compile time".to_owned()
+        })?;
+        Self::from_qualification_artifacts_for_commit(
+            workspace_root,
+            manifest,
+            receipt,
+            build_source_commit,
+        )
+    }
+
+    fn from_qualification_artifacts_for_commit(
+        workspace_root: PathBuf,
+        manifest: &Path,
+        receipt: &Path,
+        build_source_commit: &str,
+    ) -> Result<Self, String> {
+        if !lower_hex(build_source_commit, 40) {
+            return Err("invalid compiled gVisor source commit".to_owned());
+        }
+        let manifest_bytes = std::fs::read(manifest)
             .map_err(|error| format!("qualification manifest unavailable: {error}"))?;
-        let qualification: GvisorQualificationEvidenceV1 = serde_json::from_slice(&bytes)
-            .map_err(|error| format!("invalid qualification manifest JSON: {error}"))?;
+        let qualification: GvisorQualificationEvidenceV1 =
+            serde_json::from_slice(&manifest_bytes)
+                .map_err(|error| format!("invalid qualification manifest JSON: {error}"))?;
         qualification.validate()?;
+        if qualification.source_commit != build_source_commit {
+            return Err("qualification evidence does not match the compiled source".to_owned());
+        }
+
+        let receipt_bytes = std::fs::read(receipt)
+            .map_err(|error| format!("qualification receipt unavailable: {error}"))?;
+        let receipt_sha256 = format!("{:x}", Sha256::digest(&receipt_bytes));
+        if receipt_sha256 != qualification.receipt_sha256 {
+            return Err("qualification receipt digest does not match the manifest".to_owned());
+        }
+        let receipt: GvisorExecutionReceiptV1 = serde_json::from_slice(&receipt_bytes)
+            .map_err(|error| format!("invalid qualification receipt JSON: {error}"))?;
+        if receipt.schema != GVISOR_RECEIPT_SCHEMA_V1
+            || receipt.backend_id != "docker-runsc"
+            || receipt.isolation != "userspace_kernel"
+            || receipt.isolation_evidence_id.is_some()
+            || receipt.exit_code != Some(0)
+            || receipt.timed_out
+            || receipt.stdout_truncated
+            || receipt.stderr_truncated
+            || !receipt.stdout.contains("PAPERS_GVISOR_OK")
+        {
+            return Err("qualification receipt does not prove the gVisor probe".to_owned());
+        }
+
         Ok(Self {
             docker: PathBuf::from("docker"),
             workspace_root,
@@ -493,28 +541,70 @@ mod tests {
     }
 
     #[test]
-    fn immutable_qualification_manifest_controls_claim() {
+    fn immutable_qualification_artifacts_control_claim() {
         let root = temporary();
         let manifest = root.join("qualification.json");
+        let receipt_path = root.join("receipt.json");
+        let receipt = serde_json::to_vec(&GvisorExecutionReceiptV1 {
+            schema: GVISOR_RECEIPT_SCHEMA_V1.to_owned(),
+            task_id: "papers-qualification".to_owned(),
+            backend_id: "docker-runsc".to_owned(),
+            isolation: "userspace_kernel".to_owned(),
+            isolation_evidence_id: None,
+            exit_code: Some(0),
+            timed_out: false,
+            stdout: "PAPERS_GVISOR_OK\n".to_owned(),
+            stderr: String::new(),
+            stdout_truncated: false,
+            stderr_truncated: false,
+        })
+        .unwrap();
+        fs::write(&receipt_path, &receipt).unwrap();
+        let receipt_sha256 = format!("{:x}", Sha256::digest(&receipt));
         fs::write(
             &manifest,
             format!(
                 "{{\"schema\":\"{}\",\"source_commit\":\"{}\",\"workflow_run_id\":7,\"receipt_sha256\":\"{}\"}}",
                 GVISOR_QUALIFICATION_SCHEMA_V1,
                 "a".repeat(40),
-                "b".repeat(64)
+                receipt_sha256
             ),
         )
         .unwrap();
-        let descriptor = GvisorDockerExecutor::from_qualification_manifest(root.clone(), &manifest)
-            .unwrap()
-            .backend_descriptor();
+        let descriptor = GvisorDockerExecutor::from_qualification_artifacts_for_commit(
+            root.clone(),
+            &manifest,
+            &receipt_path,
+            &"a".repeat(40),
+        )
+        .unwrap()
+        .backend_descriptor();
         assert!(descriptor.isolation_qualified);
         assert!(descriptor
             .isolation_evidence_id
             .as_deref()
             .unwrap()
             .contains("actions/runs/7#receipt-sha256:"));
+
+        assert!(
+            GvisorDockerExecutor::from_qualification_artifacts_for_commit(
+                root.clone(),
+                &manifest,
+                &receipt_path,
+                &"c".repeat(40),
+            )
+            .is_err()
+        );
+        fs::write(&receipt_path, b"{}").unwrap();
+        assert!(
+            GvisorDockerExecutor::from_qualification_artifacts_for_commit(
+                root.clone(),
+                &manifest,
+                &receipt_path,
+                &"a".repeat(40),
+            )
+            .is_err()
+        );
         fs::remove_dir_all(root).unwrap();
     }
 
