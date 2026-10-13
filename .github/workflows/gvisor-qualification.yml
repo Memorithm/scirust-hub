@@ -1,0 +1,90 @@
+name: gVisor backend qualification
+
+on:
+  pull_request:
+    branches: [main]
+    paths:
+      - crates/hub-executor/src/gvisor.rs
+      - crates/hub-executor/src/bin/scirust-hub-gvisor.rs
+      - crates/hub-executor/src/lib.rs
+      - .github/workflows/gvisor-qualification.yml
+  push:
+    branches: [main]
+    paths:
+      - crates/hub-executor/src/gvisor.rs
+      - crates/hub-executor/src/bin/scirust-hub-gvisor.rs
+      - crates/hub-executor/src/lib.rs
+      - .github/workflows/gvisor-qualification.yml
+
+permissions:
+  contents: read
+
+jobs:
+  runsc:
+    name: real runsc isolation and PAPERS compile probe
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+        with:
+          ref: ${{ github.event.pull_request.head.sha || github.sha }}
+          persist-credentials: false
+      - uses: dtolnay/rust-toolchain@4360b52568e2003a75bf9bc1d59f33a8e3fc893c
+        with:
+          toolchain: stable
+      - name: Install pinned gVisor release
+        shell: bash
+        run: |
+          set -euo pipefail
+          release=https://storage.googleapis.com/gvisor/releases/release/20260921/x86_64
+          curl --fail --location --proto '=https' --tlsv1.2 -o "$RUNNER_TEMP/runsc" "$release/runsc"
+          curl --fail --location --proto '=https' --tlsv1.2 -o "$RUNNER_TEMP/runsc.sha512" "$release/runsc.sha512"
+          (
+            cd "$RUNNER_TEMP"
+            sha512sum --check runsc.sha512
+          )
+          sudo install -m 0755 "$RUNNER_TEMP/runsc" /usr/local/bin/runsc
+          sudo /usr/local/bin/runsc install
+          sudo systemctl reload docker
+          docker run --rm --runtime=runsc hello-world
+      - name: Build Hub-owned typed adapter
+        run: cargo build --locked -p hub-executor --bin scirust-hub-gvisor
+      - name: Execute hostile-source compilation through runsc
+        shell: bash
+        run: |
+          set -euo pipefail
+          workspace="$RUNNER_TEMP/papers-candidate"
+          mkdir -p "$workspace"
+          printf '%s\n' 'fn main() { println!("PAPERS_GVISOR_OK"); }' > "$workspace/main.rs"
+          printf 'host-only\n' > "$RUNNER_TEMP/host-sentinel"
+          cat > "$RUNNER_TEMP/request.json" <<JSON
+          {
+            "schema": "scirust-hub.gvisor-execution-request/v1",
+            "task_id": "papers-01-${GITHUB_RUN_ID}",
+            "image": "rust@sha256:948f9b08a66e7fe01b03a98ef1c7568292e07ec2e4fe90d88c07bb14563c84ff",
+            "workspace": "$workspace",
+            "command": ["bash", "-lc", "test ! -e '$RUNNER_TEMP/host-sentinel' && rustc main.rs -o /tmp/candidate && /tmp/candidate"],
+            "environment": [["HOME", "/tmp"], ["RUSTUP_HOME", "/usr/local/rustup"], ["CARGO_HOME", "/usr/local/cargo"]],
+            "cpu_millis": 1000,
+            "memory_bytes": 536870912,
+            "pids_limit": 64,
+            "timeout_ms": 120000,
+            "max_capture_bytes": 65536,
+            "default_deny_network": true,
+            "read_only_root": true
+          }
+          JSON
+          target/debug/scirust-hub-gvisor "$RUNNER_TEMP/request.json" | tee "$RUNNER_TEMP/receipt.json"
+          jq -e '
+            .schema == "scirust-hub.gvisor-execution-receipt/v1" and
+            .backend_id == "docker-runsc" and
+            .isolation == "userspace_kernel" and
+            .exit_code == 0 and
+            .timed_out == false and
+            (.stdout | contains("PAPERS_GVISOR_OK"))
+          ' "$RUNNER_TEMP/receipt.json"
+      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
+        with:
+          name: gvisor-qualification-${{ github.event.pull_request.head.sha || github.sha }}
+          path: ${{ runner.temp }}/receipt.json
+          if-no-files-found: error
