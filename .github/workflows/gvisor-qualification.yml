@@ -36,7 +36,7 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          release=https://storage.googleapis.com/gvisor/releases/release/20260921/x86_64
+          release=https://storage.googleapis.com/gvisor/releases/release/20260914/x86_64
           curl --fail --location --proto '=https' --tlsv1.2 -o "$RUNNER_TEMP/runsc" "$release/runsc"
           curl --fail --location --proto '=https' --tlsv1.2 -o "$RUNNER_TEMP/runsc.sha512" "$release/runsc.sha512"
           (
