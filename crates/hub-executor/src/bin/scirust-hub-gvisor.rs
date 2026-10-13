@@ -5,17 +5,21 @@ use hub_executor::gvisor::{GvisorDockerExecutor, GvisorExecutionRequestV1};
 
 fn main() -> Result<(), Box<dyn std::error::Error>> {
     let args = std::env::args().skip(1).collect::<Vec<_>>();
-    if !(args.len() == 2 || args.len() == 3) {
+    if !(args.len() == 2 || args.len() == 4) {
         return Err(
-            "usage: scirust-hub-gvisor REQUEST.json WORKSPACE_ROOT [QUALIFICATION.json]".into(),
+            "usage: scirust-hub-gvisor REQUEST.json WORKSPACE_ROOT [QUALIFICATION.json RECEIPT.json]".into(),
         );
     }
     let request: GvisorExecutionRequestV1 =
         serde_json::from_slice(&fs::read(Path::new(&args[0]))?)?;
     let workspace_root = PathBuf::from(&args[1]);
-    let executor = if let Some(manifest) = args.get(2) {
-        GvisorDockerExecutor::from_qualification_manifest(workspace_root, Path::new(manifest))
-            .map_err(|error| format!("gVisor qualification rejected: {error}"))?
+    let executor = if args.len() == 4 {
+        GvisorDockerExecutor::from_qualification_artifacts(
+            workspace_root,
+            Path::new(&args[2]),
+            Path::new(&args[3]),
+        )
+        .map_err(|error| format!("gVisor qualification rejected: {error}"))?
     } else {
         GvisorDockerExecutor::new(workspace_root)
     };
