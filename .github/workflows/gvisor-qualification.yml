@@ -36,13 +36,10 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          release=https://storage.googleapis.com/gvisor/releases/release/20260914/x86_64
-          curl --fail --location --proto '=https' --tlsv1.2 -o "$RUNNER_TEMP/runsc" "$release/runsc"
-          curl --fail --location --proto '=https' --tlsv1.2 -o "$RUNNER_TEMP/runsc.sha512" "$release/runsc.sha512"
-          (
-            cd "$RUNNER_TEMP"
-            sha512sum --check runsc.sha512
-          )
+          release=https://github.com/google/gvisor/releases/download/release-20261005.0/gvisor-x86_64.tar.bz2
+          curl --fail --location --proto '=https' --tlsv1.2 -o "$RUNNER_TEMP/gvisor.tar.bz2" "$release"
+          printf '%s  %s\n' 'bd4eb2ca0ee74f0fbbb5f5273ba011e79c56a29fbb047393b88b981cd3230ede' "$RUNNER_TEMP/gvisor.tar.bz2" | sha256sum --check -
+          tar --extract --bzip2 --file "$RUNNER_TEMP/gvisor.tar.bz2" --directory "$RUNNER_TEMP" runsc
           sudo install -m 0755 "$RUNNER_TEMP/runsc" /usr/local/bin/runsc
           sudo /usr/local/bin/runsc install
           sudo systemctl reload docker
