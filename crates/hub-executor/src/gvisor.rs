@@ -3,7 +3,6 @@
 //! The adapter invokes Docker only with the runsc runtime and a fixed
 //! fail-closed control set. A dedicated workflow qualifies the real backend.
 
-use std::fs;
 use std::io::Read;
 use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
@@ -84,7 +83,7 @@ impl GvisorDockerExecutor {
             isolation_evidence_id: Some(GVISOR_QUALIFICATION_EVIDENCE.to_owned()),
             enforces_network_policy: true,
             enforces_default_deny_network: true,
-            enforces_workspace_write_policy: true,
+            enforces_workspace_write_policy: false,
             resources: ResourceEnforcement {
                 wall_clock_ms: true,
                 cpu_millis: true,
@@ -318,6 +317,7 @@ fn join_reader(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::fs;
     use std::os::unix::fs::PermissionsExt;
     use std::sync::atomic::{AtomicU64, Ordering};
 
