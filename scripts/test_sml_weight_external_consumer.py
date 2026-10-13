@@ -47,7 +47,45 @@ class SmlWeightExternalConsumerTests(unittest.TestCase):
                 code_sha,
                 "sml-main-v1",
             )
-            self.assertEqual(result, receipt)
+            self.assertEqual(
+                result, {"schema": MODULE.RECEIPT_SCHEMA_V1, **receipt}
+            )
+
+    def test_rejects_mutable_code_revision_before_spawn(self):
+        with tempfile.TemporaryDirectory() as raw:
+            root = pathlib.Path(raw)
+            with self.assertRaises(ValueError):
+                MODULE.consume(
+                    root / "missing",
+                    root / "dossier",
+                    "run-production",
+                    root / "owner",
+                    root / "policy",
+                    root / "allowed-signers",
+                    "main",
+                    "sml-main-v1",
+                )
+
+    def test_stops_owner_at_output_bound(self):
+        with tempfile.TemporaryDirectory() as raw:
+            root = pathlib.Path(raw)
+            executable = root / "verbose-owner"
+            executable.write_text(
+                "#!/bin/sh\nhead -c 262145 /dev/zero\n",
+                encoding="utf-8",
+            )
+            executable.chmod(executable.stat().st_mode | stat.S_IXUSR)
+            with self.assertRaises(ValueError):
+                MODULE.consume(
+                    executable,
+                    root / "dossier",
+                    "run-production",
+                    root / "owner",
+                    root / "policy",
+                    root / "allowed-signers",
+                    "a" * 40,
+                    "sml-main-v1",
+                )
 
     def test_rejects_wrong_publisher_or_scientific_promotion(self):
         with tempfile.TemporaryDirectory() as raw:
