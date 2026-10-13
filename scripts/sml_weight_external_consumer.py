@@ -5,11 +5,64 @@ from __future__ import annotations
 
 import argparse
 import json
+import os
 import pathlib
+import selectors
 import subprocess
 import sys
+import time
 
 MAX_RECEIPT_BYTES = 262_144
+OWNER_TIMEOUT_SECONDS = 45
+RECEIPT_SCHEMA_V1 = "scirust-hub.sml-weight-admission-receipt/v1"
+
+
+def _run_bounded(command: list[str]) -> tuple[bytes, bytes]:
+    process = subprocess.Popen(
+        command,
+        stdin=subprocess.DEVNULL,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+        bufsize=0,
+        env={"PATH": "/usr/bin:/bin"},
+    )
+    selector = selectors.DefaultSelector()
+    assert process.stdout is not None
+    assert process.stderr is not None
+    selector.register(process.stdout, selectors.EVENT_READ, "stdout")
+    selector.register(process.stderr, selectors.EVENT_READ, "stderr")
+    captured = {"stdout": bytearray(), "stderr": bytearray()}
+    failure: str | None = None
+    deadline = time.monotonic() + OWNER_TIMEOUT_SECONDS
+
+    try:
+        while selector.get_map():
+            if failure is None and time.monotonic() >= deadline:
+                failure = "timed out"
+                process.kill()
+            events = selector.select(0.1)
+            for key, _ in events:
+                chunk = os.read(key.fileobj.fileno(), 65_536)
+                if not chunk:
+                    selector.unregister(key.fileobj)
+                    key.fileobj.close()
+                    continue
+                output = captured[key.data]
+                remaining = MAX_RECEIPT_BYTES - len(output)
+                output.extend(chunk[: max(0, remaining)])
+                if len(chunk) > remaining and failure is None:
+                    failure = "exceeded output bounds"
+                    process.kill()
+        returncode = process.wait()
+    finally:
+        selector.close()
+        if process.poll() is None:
+            process.kill()
+            process.wait()
+
+    if failure is not None or returncode != 0:
+        raise ValueError(f"SML owner admission failed: {failure or 'nonzero exit'}")
+    return bytes(captured["stdout"]), bytes(captured["stderr"])
 
 
 def consume(
@@ -22,6 +75,10 @@ def consume(
     expected_code_sha: str,
     expected_publication_id: str,
 ) -> dict[str, object]:
+    if len(expected_code_sha) != 40 or any(
+        character not in "0123456789abcdef" for character in expected_code_sha
+    ):
+        raise ValueError("expected code SHA must be a full lowercase commit identifier")
     command = [
         str(executable),
         str(dossier),
@@ -30,22 +87,8 @@ def consume(
         str(policy),
         str(allowed_signers),
     ]
-    completed = subprocess.run(
-        command,
-        check=False,
-        stdin=subprocess.DEVNULL,
-        stdout=subprocess.PIPE,
-        stderr=subprocess.PIPE,
-        timeout=45,
-        env={"PATH": "/usr/bin:/bin"},
-    )
-    if (
-        completed.returncode != 0
-        or len(completed.stdout) > MAX_RECEIPT_BYTES
-        or len(completed.stderr) > MAX_RECEIPT_BYTES
-    ):
-        raise ValueError("SML owner admission failed or exceeded output bounds")
-    receipt = json.loads(completed.stdout)
+    stdout, _stderr = _run_bounded(command)
+    receipt = json.loads(stdout)
     required = {
         "repository",
         "code_sha",
@@ -83,7 +126,7 @@ def consume(
             or any(character not in "0123456789abcdef" for character in value)
         ):
             raise ValueError(f"invalid {field}")
-    return receipt
+    return {"schema": RECEIPT_SCHEMA_V1, **receipt}
 
 
 def main() -> int:
