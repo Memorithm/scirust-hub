@@ -198,7 +198,7 @@ impl GvisorDockerExecutor {
                 "--mount",
             ])
             .arg(format!(
-                "type=bind,src={},dst=/workspace,rw",
+                "type=bind,src={},dst=/workspace",
                 workspace.display()
             ))
             .args(["--workdir", "/workspace"]);
