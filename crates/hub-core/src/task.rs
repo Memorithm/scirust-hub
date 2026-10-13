@@ -663,9 +663,9 @@ impl SandboxBackendDescriptor {
             )));
         }
 
-        let network_policy_requires_enforcement =
-            task.sandbox.network.default_deny || !task.sandbox.network.allowed_endpoints.is_empty();
-        if network_policy_requires_enforcement && !self.enforces_network_policy {
+        let endpoint_policy_requires_enforcement =
+            !task.sandbox.network.allowed_endpoints.is_empty();
+        if endpoint_policy_requires_enforcement && !self.enforces_network_policy {
             return Err(CoreError::Validation(format!(
                 "sandbox backend {} cannot enforce the task network policy",
                 self.backend_id
@@ -1396,6 +1396,19 @@ mod tests {
 
         backend.enforces_default_deny_network = true;
         backend.admit(&task).expect("default-deny admitted");
+
+        backend.enforces_network_policy = false;
+        backend
+            .admit(&task)
+            .expect("deny-all backend admits an empty allowlist");
+        task.sandbox
+            .network
+            .allowed_endpoints
+            .push("https://example.invalid".to_owned());
+        assert!(matches!(
+            backend.admit(&task),
+            Err(CoreError::Validation(message)) if message.contains("network policy")
+        ));
     }
 
     #[test]
