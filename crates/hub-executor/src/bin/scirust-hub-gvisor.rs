@@ -1,15 +1,25 @@
 use std::fs;
-use std::path::Path;
+use std::path::{Path, PathBuf};
 
 use hub_executor::gvisor::{GvisorDockerExecutor, GvisorExecutionRequestV1};
 
 fn main() -> Result<(), Box<dyn std::error::Error>> {
-    let request_path = std::env::args()
-        .nth(1)
-        .ok_or("usage: scirust-hub-gvisor REQUEST.json")?;
+    let args = std::env::args().skip(1).collect::<Vec<_>>();
+    if !(args.len() == 2 || args.len() == 3) {
+        return Err(
+            "usage: scirust-hub-gvisor REQUEST.json WORKSPACE_ROOT [QUALIFICATION.json]".into(),
+        );
+    }
     let request: GvisorExecutionRequestV1 =
-        serde_json::from_slice(&fs::read(Path::new(&request_path))?)?;
-    let receipt = GvisorDockerExecutor::new()
+        serde_json::from_slice(&fs::read(Path::new(&args[0]))?)?;
+    let workspace_root = PathBuf::from(&args[1]);
+    let executor = if let Some(manifest) = args.get(2) {
+        GvisorDockerExecutor::from_qualification_manifest(workspace_root, Path::new(manifest))
+            .map_err(|error| format!("gVisor qualification rejected: {error}"))?
+    } else {
+        GvisorDockerExecutor::new(workspace_root)
+    };
+    let receipt = executor
         .execute(&request)
         .map_err(|error| format!("gVisor execution failed: {error}"))?;
     println!("{}", serde_json::to_string(&receipt)?);
