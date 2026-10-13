@@ -50,7 +50,8 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          workspace="$RUNNER_TEMP/papers-candidate"
+          workspace_root="$RUNNER_TEMP/scirust-hub-workspaces"
+          workspace="$workspace_root/papers-candidate"
           mkdir -p "$workspace"
           printf '%s\n' 'fn main() { println!("PAPERS_GVISOR_OK"); }' > "$workspace/main.rs"
           printf 'host-only\n' > "$RUNNER_TEMP/host-sentinel"
@@ -71,17 +72,29 @@ jobs:
             "read_only_root": true
           }
           JSON
-          target/debug/scirust-hub-gvisor "$RUNNER_TEMP/request.json" | tee "$RUNNER_TEMP/receipt.json"
+          target/debug/scirust-hub-gvisor "$RUNNER_TEMP/request.json" "$workspace_root" | tee "$RUNNER_TEMP/receipt.json"
           jq -e '
             .schema == "scirust-hub.gvisor-execution-receipt/v1" and
             .backend_id == "docker-runsc" and
             .isolation == "userspace_kernel" and
             .exit_code == 0 and
             .timed_out == false and
+            .isolation_evidence_id == null and
             (.stdout | contains("PAPERS_GVISOR_OK"))
           ' "$RUNNER_TEMP/receipt.json"
+          source_commit="${{ github.event.pull_request.head.sha || github.sha }}"
+          receipt_sha256="$(sha256sum "$RUNNER_TEMP/receipt.json" | cut -d' ' -f1)"
+          jq -n \
+            --arg schema "scirust-hub.gvisor-qualification-evidence/v1" \
+            --arg source_commit "$source_commit" \
+            --argjson workflow_run_id "$GITHUB_RUN_ID" \
+            --arg receipt_sha256 "$receipt_sha256" \
+            '{schema: $schema, source_commit: $source_commit, workflow_run_id: $workflow_run_id, receipt_sha256: $receipt_sha256}' \
+            > "$RUNNER_TEMP/qualification.json"
       - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
         with:
           name: gvisor-qualification-${{ github.event.pull_request.head.sha || github.sha }}
-          path: ${{ runner.temp }}/receipt.json
+          path: |
+            ${{ runner.temp }}/receipt.json
+            ${{ runner.temp }}/qualification.json
           if-no-files-found: error
