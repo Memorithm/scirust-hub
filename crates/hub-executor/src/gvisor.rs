@@ -130,9 +130,8 @@ impl GvisorDockerExecutor {
         }
         let manifest_bytes = std::fs::read(manifest)
             .map_err(|error| format!("qualification manifest unavailable: {error}"))?;
-        let qualification: GvisorQualificationEvidenceV1 =
-            serde_json::from_slice(&manifest_bytes)
-                .map_err(|error| format!("invalid qualification manifest JSON: {error}"))?;
+        let qualification: GvisorQualificationEvidenceV1 = serde_json::from_slice(&manifest_bytes)
+            .map_err(|error| format!("invalid qualification manifest JSON: {error}"))?;
         qualification.validate()?;
         if qualification.source_commit != build_source_commit {
             return Err("qualification evidence does not match the compiled source".to_owned());
