@@ -7,11 +7,13 @@
 //!   the group on timeout/cancellation. **This is resource control, not a
 //!   security sandbox**: children run with the Hub's OS privileges.
 //! - [`MockExecutor`]: scripted deterministic outcomes for tests.
+//! - [`gvisor::GvisorDockerExecutor`]: digest-pinned, bounded Docker/runsc execution.
 //! - [`RemoteExecutor`]: authenticated lease-based execution on one worker.
 //! - [`RemotePoolExecutor`]: deterministic pre-dispatch placement across a
 //!   configured set of workers, with no unsafe post-dispatch failover.
 
 mod execution_guard;
+pub mod gvisor;
 pub mod local_capacity;
 pub mod pool;
 pub mod remote;
