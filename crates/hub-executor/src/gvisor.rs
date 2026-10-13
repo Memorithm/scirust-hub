@@ -263,9 +263,7 @@ fn bounded_token(value: &str) -> bool {
 }
 
 fn bounded_text(value: &str) -> bool {
-    !value.is_empty()
-        && value.len() <= 4096
-        && value.chars().all(|character| character != '\0')
+    !value.is_empty() && value.len() <= 4096 && value.chars().all(|character| character != '\0')
 }
 
 fn format_cpu(cpu_millis: u64) -> String {
