@@ -14,8 +14,7 @@ use serde::{Deserialize, Serialize};
 
 pub const GVISOR_REQUEST_SCHEMA_V1: &str = "scirust-hub.gvisor-execution-request/v1";
 pub const GVISOR_RECEIPT_SCHEMA_V1: &str = "scirust-hub.gvisor-execution-receipt/v1";
-pub const GVISOR_QUALIFICATION_SCHEMA_V1: &str =
-    "scirust-hub.gvisor-qualification-evidence/v1";
+pub const GVISOR_QUALIFICATION_SCHEMA_V1: &str = "scirust-hub.gvisor-qualification-evidence/v1";
 
 const MAX_TOKEN_BYTES: usize = 256;
 const MAX_CAPTURE_BYTES: usize = 1024 * 1024;
@@ -479,11 +478,9 @@ mod tests {
         let docker = root.join("docker");
         fs::write(&docker, "#!/bin/sh\nexit 0\n").unwrap();
         fs::set_permissions(&docker, fs::Permissions::from_mode(0o755)).unwrap();
-        assert!(
-            GvisorDockerExecutor::with_docker(docker, workspace_root)
-                .execute(&request(outside))
-                .is_err()
-        );
+        assert!(GvisorDockerExecutor::with_docker(docker, workspace_root)
+            .execute(&request(outside))
+            .is_err());
         fs::remove_dir_all(root).unwrap();
     }
 
@@ -501,10 +498,9 @@ mod tests {
             ),
         )
         .unwrap();
-        let descriptor =
-            GvisorDockerExecutor::from_qualification_manifest(root.clone(), &manifest)
-                .unwrap()
-                .backend_descriptor();
+        let descriptor = GvisorDockerExecutor::from_qualification_manifest(root.clone(), &manifest)
+            .unwrap()
+            .backend_descriptor();
         assert!(descriptor.isolation_qualified);
         assert!(descriptor
             .isolation_evidence_id
