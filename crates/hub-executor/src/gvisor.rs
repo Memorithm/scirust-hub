@@ -4,6 +4,7 @@
 //! fail-closed control set. A dedicated workflow qualifies the real backend.
 
 use std::io::Read;
+use std::os::unix::fs::MetadataExt;
 use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
 use std::thread::{self, JoinHandle};
@@ -174,6 +175,10 @@ impl GvisorDockerExecutor {
             return Err("workspace must be a task directory below the executor root".to_owned());
         }
 
+        let metadata = workspace
+            .metadata()
+            .map_err(|error| format!("workspace metadata unavailable: {error}"))?;
+        let container_user = format!("{}:{}", metadata.uid(), metadata.gid());
         let name = format!("scirust-gvisor-{}", request.task_id);
         let mut command = Command::new(&self.docker);
         command
@@ -185,6 +190,8 @@ impl GvisorDockerExecutor {
                 "--cap-drop=ALL",
                 "--security-opt=no-new-privileges",
                 "--read-only",
+                "--user",
+                &container_user,
                 "--name",
                 &name,
                 "--cpus",
@@ -459,6 +466,7 @@ mod tests {
             "--cap-drop=ALL",
             "--security-opt=no-new-privileges",
             "--read-only",
+            "--user",
             "--pids-limit",
             "--memory",
             "--cpus",
