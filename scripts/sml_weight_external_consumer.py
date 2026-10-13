@@ -8,6 +8,7 @@ import json
 import os
 import pathlib
 import selectors
+import signal
 import subprocess
 import sys
 import time
@@ -25,6 +26,7 @@ def _run_bounded(command: list[str]) -> tuple[bytes, bytes]:
         stderr=subprocess.PIPE,
         bufsize=0,
         env={"PATH": "/usr/bin:/bin"},
+        start_new_session=True,
     )
     selector = selectors.DefaultSelector()
     assert process.stdout is not None
@@ -39,7 +41,7 @@ def _run_bounded(command: list[str]) -> tuple[bytes, bytes]:
         while selector.get_map():
             if failure is None and time.monotonic() >= deadline:
                 failure = "timed out"
-                process.kill()
+                os.killpg(process.pid, signal.SIGKILL)
             events = selector.select(0.1)
             for key, _ in events:
                 chunk = os.read(key.fileobj.fileno(), 65_536)
@@ -52,12 +54,12 @@ def _run_bounded(command: list[str]) -> tuple[bytes, bytes]:
                 output.extend(chunk[: max(0, remaining)])
                 if len(chunk) > remaining and failure is None:
                     failure = "exceeded output bounds"
-                    process.kill()
+                    os.killpg(process.pid, signal.SIGKILL)
         returncode = process.wait()
     finally:
         selector.close()
         if process.poll() is None:
-            process.kill()
+            os.killpg(process.pid, signal.SIGKILL)
             process.wait()
 
     if failure is not None or returncode != 0:
