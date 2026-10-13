@@ -14,8 +14,8 @@ use serde::{Deserialize, Serialize};
 
 pub const GVISOR_REQUEST_SCHEMA_V1: &str = "scirust-hub.gvisor-execution-request/v1";
 pub const GVISOR_RECEIPT_SCHEMA_V1: &str = "scirust-hub.gvisor-execution-receipt/v1";
-pub const GVISOR_QUALIFICATION_EVIDENCE: &str =
-    "qualification/runsc/2026-10-13/github-hosted-adversarial-v1";
+pub const GVISOR_QUALIFICATION_SCHEMA_V1: &str =
+    "scirust-hub.gvisor-qualification-evidence/v1";
 
 const MAX_TOKEN_BYTES: usize = 256;
 const MAX_CAPTURE_BYTES: usize = 1024 * 1024;
@@ -47,7 +47,7 @@ pub struct GvisorExecutionReceiptV1 {
     pub task_id: String,
     pub backend_id: String,
     pub isolation: String,
-    pub isolation_evidence_id: String,
+    pub isolation_evidence_id: Option<String>,
     pub exit_code: Option<i32>,
     pub timed_out: bool,
     pub stdout: String,
@@ -56,22 +56,75 @@ pub struct GvisorExecutionReceiptV1 {
     pub stderr_truncated: bool,
 }
 
+#[derive(Clone, Debug, Deserialize, Serialize, PartialEq, Eq)]
+#[serde(deny_unknown_fields)]
+pub struct GvisorQualificationEvidenceV1 {
+    pub schema: String,
+    pub source_commit: String,
+    pub workflow_run_id: u64,
+    pub receipt_sha256: String,
+}
+
+impl GvisorQualificationEvidenceV1 {
+    fn validate(&self) -> Result<(), String> {
+        if self.schema != GVISOR_QUALIFICATION_SCHEMA_V1
+            || !lower_hex(&self.source_commit, 40)
+            || self.workflow_run_id == 0
+            || !lower_hex(&self.receipt_sha256, 64)
+        {
+            return Err("invalid immutable gVisor qualification evidence".to_owned());
+        }
+        Ok(())
+    }
+
+    fn evidence_id(&self) -> String {
+        format!(
+            "github:Memorithm/scirust-hub@{}/actions/runs/{}#receipt-sha256:{}",
+            self.source_commit, self.workflow_run_id, self.receipt_sha256
+        )
+    }
+}
+
 #[derive(Clone, Debug)]
 pub struct GvisorDockerExecutor {
     docker: PathBuf,
+    workspace_root: PathBuf,
+    qualification: Option<GvisorQualificationEvidenceV1>,
 }
 
 impl GvisorDockerExecutor {
     #[must_use]
-    pub fn new() -> Self {
+    pub fn new(workspace_root: PathBuf) -> Self {
         Self {
             docker: PathBuf::from("docker"),
+            workspace_root,
+            qualification: None,
         }
     }
 
+    pub fn from_qualification_manifest(
+        workspace_root: PathBuf,
+        manifest: &Path,
+    ) -> Result<Self, String> {
+        let bytes = std::fs::read(manifest)
+            .map_err(|error| format!("qualification manifest unavailable: {error}"))?;
+        let qualification: GvisorQualificationEvidenceV1 = serde_json::from_slice(&bytes)
+            .map_err(|error| format!("invalid qualification manifest JSON: {error}"))?;
+        qualification.validate()?;
+        Ok(Self {
+            docker: PathBuf::from("docker"),
+            workspace_root,
+            qualification: Some(qualification),
+        })
+    }
+
     #[cfg(test)]
-    fn with_docker(docker: PathBuf) -> Self {
-        Self { docker }
+    fn with_docker(docker: PathBuf, workspace_root: PathBuf) -> Self {
+        Self {
+            docker,
+            workspace_root,
+            qualification: None,
+        }
     }
 
     #[must_use]
@@ -79,9 +132,12 @@ impl GvisorDockerExecutor {
         SandboxBackendDescriptor {
             backend_id: "docker-runsc".to_owned(),
             isolation: IsolationLevel::Gvisor,
-            isolation_qualified: true,
-            isolation_evidence_id: Some(GVISOR_QUALIFICATION_EVIDENCE.to_owned()),
-            enforces_network_policy: true,
+            isolation_qualified: self.qualification.is_some(),
+            isolation_evidence_id: self
+                .qualification
+                .as_ref()
+                .map(GvisorQualificationEvidenceV1::evidence_id),
+            enforces_network_policy: false,
             enforces_default_deny_network: true,
             enforces_workspace_write_policy: false,
             resources: ResourceEnforcement {
@@ -104,12 +160,19 @@ impl GvisorDockerExecutor {
         request: &GvisorExecutionRequestV1,
     ) -> Result<GvisorExecutionReceiptV1, String> {
         validate_request(request)?;
+        let workspace_root = self
+            .workspace_root
+            .canonicalize()
+            .map_err(|error| format!("workspace root unavailable: {error}"))?;
         let workspace = request
             .workspace
             .canonicalize()
             .map_err(|error| format!("workspace unavailable: {error}"))?;
-        if !workspace.is_dir() {
-            return Err("workspace must be a directory".to_owned());
+        if !workspace.is_dir()
+            || workspace == workspace_root
+            || !workspace.starts_with(&workspace_root)
+        {
+            return Err("workspace must be a task directory below the executor root".to_owned());
         }
 
         let name = format!("scirust-gvisor-{}", request.task_id);
@@ -188,7 +251,10 @@ impl GvisorDockerExecutor {
             task_id: request.task_id.clone(),
             backend_id: "docker-runsc".to_owned(),
             isolation: "userspace_kernel".to_owned(),
-            isolation_evidence_id: GVISOR_QUALIFICATION_EVIDENCE.to_owned(),
+            isolation_evidence_id: self
+                .qualification
+                .as_ref()
+                .map(GvisorQualificationEvidenceV1::evidence_id),
             exit_code: status.code(),
             timed_out,
             stdout: String::from_utf8_lossy(&stdout).into_owned(),
@@ -196,12 +262,6 @@ impl GvisorDockerExecutor {
             stdout_truncated,
             stderr_truncated,
         })
-    }
-}
-
-impl Default for GvisorDockerExecutor {
-    fn default() -> Self {
-        Self::new()
     }
 }
 
@@ -252,6 +312,13 @@ fn validate_request(request: &GvisorExecutionRequestV1) -> Result<(), String> {
         return Err("gVisor requires default-deny network and read-only root".to_owned());
     }
     Ok(())
+}
+
+fn lower_hex(value: &str, length: usize) -> bool {
+    value.len() == length
+        && value
+            .chars()
+            .all(|character| character.is_ascii_digit() || ('a'..='f').contains(&character))
 }
 
 fn bounded_token(value: &str) -> bool {
@@ -352,18 +419,24 @@ mod tests {
 
     #[test]
     fn descriptor_claims_only_qualified_enforcement() {
-        let descriptor = GvisorDockerExecutor::new().backend_descriptor();
+        let root = temporary();
+        let descriptor = GvisorDockerExecutor::new(root.clone()).backend_descriptor();
         assert_eq!(descriptor.isolation, IsolationLevel::Gvisor);
-        assert!(descriptor.isolation_qualified);
+        assert!(!descriptor.isolation_qualified);
+        assert!(descriptor.isolation_evidence_id.is_none());
+        assert!(!descriptor.enforces_network_policy);
         assert!(descriptor.enforces_default_deny_network);
         assert!(descriptor.resources.cpu_millis);
         assert!(descriptor.resources.memory_bytes);
         assert!(!descriptor.resources.gpu_devices);
+        fs::remove_dir_all(root).unwrap();
     }
 
     #[test]
     fn exact_docker_controls_and_receipt_are_typed() {
         let root = temporary();
+        let workspace = root.join("task");
+        fs::create_dir(&workspace).unwrap();
         let log = root.join("args");
         let docker = root.join("docker");
         fs::write(
@@ -375,8 +448,8 @@ mod tests {
         )
         .unwrap();
         fs::set_permissions(&docker, fs::Permissions::from_mode(0o755)).unwrap();
-        let receipt = GvisorDockerExecutor::with_docker(docker)
-            .execute(&request(root.clone()))
+        let receipt = GvisorDockerExecutor::with_docker(docker, root.clone())
+            .execute(&request(workspace))
             .unwrap();
         assert_eq!(receipt.schema, GVISOR_RECEIPT_SCHEMA_V1);
         assert_eq!(receipt.stdout, "qualified\n");
@@ -393,6 +466,51 @@ mod tests {
         ] {
             assert!(args.lines().any(|line| line == required), "{required}");
         }
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn workspace_outside_executor_root_fails_closed() {
+        let root = temporary();
+        let workspace_root = root.join("owned");
+        let outside = root.join("outside");
+        fs::create_dir(&workspace_root).unwrap();
+        fs::create_dir(&outside).unwrap();
+        let docker = root.join("docker");
+        fs::write(&docker, "#!/bin/sh\nexit 0\n").unwrap();
+        fs::set_permissions(&docker, fs::Permissions::from_mode(0o755)).unwrap();
+        assert!(
+            GvisorDockerExecutor::with_docker(docker, workspace_root)
+                .execute(&request(outside))
+                .is_err()
+        );
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn immutable_qualification_manifest_controls_claim() {
+        let root = temporary();
+        let manifest = root.join("qualification.json");
+        fs::write(
+            &manifest,
+            format!(
+                "{{\"schema\":\"{}\",\"source_commit\":\"{}\",\"workflow_run_id\":7,\"receipt_sha256\":\"{}\"}}",
+                GVISOR_QUALIFICATION_SCHEMA_V1,
+                "a".repeat(40),
+                "b".repeat(64)
+            ),
+        )
+        .unwrap();
+        let descriptor =
+            GvisorDockerExecutor::from_qualification_manifest(root.clone(), &manifest)
+                .unwrap()
+                .backend_descriptor();
+        assert!(descriptor.isolation_qualified);
+        assert!(descriptor
+            .isolation_evidence_id
+            .as_deref()
+            .unwrap()
+            .contains("actions/runs/7#receipt-sha256:"));
         fs::remove_dir_all(root).unwrap();
     }
 
