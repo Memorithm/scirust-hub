@@ -45,6 +45,8 @@ jobs:
           sudo systemctl reload docker
           docker run --rm --runtime=runsc hello-world
       - name: Build Hub-owned typed adapter
+        env:
+          SCIRUST_HUB_SOURCE_COMMIT: ${{ github.event.pull_request.head.sha || github.sha }}
         run: cargo build --locked -p hub-executor --bin scirust-hub-gvisor
       - name: Execute hostile-source compilation through runsc
         shell: bash
