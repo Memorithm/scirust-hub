@@ -47,6 +47,14 @@ constructing an evidence identifier with the commit, run and receipt SHA-256.
 Unit tests validate stale-build and altered-receipt rejection without treating a
 mock as backend evidence.
 
+`hub_executor::execution_guard::execute_guarded_command` is the reusable
+Rust guard for outer consumers. It accepts an explicitly constructed `Command`,
+a checked absolute deadline and a one-byte-to-one-MiB per-stream capture budget.
+It preserves ordinary process-group cleanup, bounded reap and drain semantics;
+the caller still owns environment/argv, backend admission and domain authority.
+Consumers must pin the qualified owner revision and may not reinterpret this
+process guard as their OS isolation boundary.
+
 This boundary covers execution isolation and resource enforcement. It does not
 qualify the candidate's scientific result, authorize publication, or give the
 container access to Hub credentials.
