@@ -14,19 +14,24 @@ pub(crate) struct AttemptLocks {
 }
 
 pub(crate) fn open(root: &Path) -> Result<(SqliteStore, PathBuf), String> {
-    let parent = std::fs::metadata(root).map_err(|e| format!("controller root unavailable: {e}"))?;
+    let parent =
+        std::fs::metadata(root).map_err(|e| format!("controller root unavailable: {e}"))?;
     if parent.permissions().mode() & 0o022 != 0 {
         return Err("controller root must not be group/world writable".into());
     }
     let directory = root.join(".gvisor-control");
     match DirBuilder::new().mode(0o700).create(&directory) {
-        Ok(()) => File::open(root).and_then(|f| f.sync_all()).map_err(|e| e.to_string())?,
-        Err(e) if e.kind() == std::io::ErrorKind::AlreadyExists => {},
+        Ok(()) => File::open(root)
+            .and_then(|f| f.sync_all())
+            .map_err(|e| e.to_string())?,
+        Err(e) if e.kind() == std::io::ErrorKind::AlreadyExists => {}
         Err(e) => return Err(format!("private controller directory unavailable: {e}")),
     }
     let metadata = std::fs::symlink_metadata(&directory).map_err(|e| e.to_string())?;
-    if !metadata.is_dir() || metadata.file_type().is_symlink()
-        || metadata.uid() != parent.uid() || metadata.permissions().mode() & 0o777 != 0o700
+    if !metadata.is_dir()
+        || metadata.file_type().is_symlink()
+        || metadata.uid() != parent.uid()
+        || metadata.permissions().mode() & 0o777 != 0o700
     {
         return Err("controller state directory must be private, owned and nonsymlink".into());
     }
@@ -37,8 +42,14 @@ pub(crate) fn open(root: &Path) -> Result<(SqliteStore, PathBuf), String> {
     Ok((store, directory))
 }
 
-pub(crate) fn fence(directory: &Path, task_id: &str, workspace: &str) -> Result<AttemptLocks, String> {
-    let owner = std::fs::metadata(directory).map_err(|e| e.to_string())?.uid();
+pub(crate) fn fence(
+    directory: &Path,
+    task_id: &str,
+    workspace: &str,
+) -> Result<AttemptLocks, String> {
+    let owner = std::fs::metadata(directory)
+        .map_err(|e| e.to_string())?
+        .uid();
     let task = format!("task-{:x}.lock", Sha256::digest(task_id.as_bytes()));
     let workspace = format!("workspace-{:x}.lock", Sha256::digest(workspace.as_bytes()));
     Ok(AttemptLocks {
@@ -48,11 +59,19 @@ pub(crate) fn fence(directory: &Path, task_id: &str, workspace: &str) -> Result<
 }
 
 fn private_file(path: &Path, owner: u32) -> Result<File, String> {
-    let file = OpenOptions::new().read(true).write(true).create(true).truncate(false)
-        .mode(0o600).custom_flags(nix::libc::O_NOFOLLOW | nix::libc::O_NONBLOCK).open(path)
+    let file = OpenOptions::new()
+        .read(true)
+        .write(true)
+        .create(true)
+        .truncate(false)
+        .mode(0o600)
+        .custom_flags(nix::libc::O_NOFOLLOW | nix::libc::O_NONBLOCK)
+        .open(path)
         .map_err(|e| format!("private controller file unavailable: {e}"))?;
     let metadata = file.metadata().map_err(|e| e.to_string())?;
-    if !metadata.is_file() || metadata.uid() != owner || metadata.nlink() != 1
+    if !metadata.is_file()
+        || metadata.uid() != owner
+        || metadata.nlink() != 1
         || metadata.permissions().mode() & 0o777 != 0o600
     {
         return Err("controller file must be private, owned, regular and not hard-linked".into());
@@ -62,7 +81,8 @@ fn private_file(path: &Path, owner: u32) -> Result<File, String> {
 
 fn lock_file(path: &Path, owner: u32) -> Result<File, String> {
     let file = private_file(path, owner)?;
-    file.try_lock().map_err(|e| format!("controller attempt/workspace is busy: {e}"))?;
+    file.try_lock()
+        .map_err(|e| format!("controller attempt/workspace is busy: {e}"))?;
     Ok(file)
 }
 
