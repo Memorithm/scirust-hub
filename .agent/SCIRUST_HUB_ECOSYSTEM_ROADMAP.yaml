@@ -879,3 +879,30 @@ audit_guest_PID_consumer_integrated_2026_10_14:
     - aggregate_workspace_OS_quota
     - durable_ambiguous_creation_and_quarantine_reconciliation
     - no_global_audit_closure_hardware_performance_ARM64_or_scientific_promotion
+
+audit_durable_gvisor_attempts_2026_10_14:
+  finding: PAPERS-01
+  status: owner_scoped_contract_integrated_qualified_consumer_adoption_pending
+  pull_request: 90
+  candidate: aac89a20acd5ece5bd61dc108e96582b608c4231
+  merge_commit: cf5233af12499605bd57d9d613b3cddc3bc39d08
+  integrated_full_ci: 38517039715
+  integrated_real_runsc: 38517039600
+  integrated_Rust_tests: 293
+  root_protocol_fixtures: 15
+  integrated_controls_archive_sha256: 42436f60653968c1be42a198c625a9a22e690f1d569aecd2956699df3ae16eed
+  contracts:
+    - existing_SQLite_WAL_FULL_and_lifecycle_events_reused_not_new_scheduler
+    - durable_reservation_before_create_and_immutable_handle_before_start
+    - nonblocking_safe_File_fencing_MSRV1_89_and_overlap_quarantine
+    - readonly_reconcile_never_start_replay_or_remove
+    - zero_unknown_creation_not_proof_of_absence
+    - process_cleanup_not_scientific_or_task_success
+  real_probes:
+    - controller_SIGKILL_after_positive_guest_entry_running_container_survives
+    - actual_creation_lost_response_recovers_exact_nonce_digest_handle_never_started
+    - explicit_CI_owned_exact_ID_cleanup_then_confirmed_absence_durable_cleaned
+  remaining:
+    - PAPERS_consumer_locked4package_graph_exact_CLI_manifest_receipt_archive_and_live_gate
+    - aggregate_workspace_OS_quota
+    - no_production_adoption_hardware_performance_or_scientific_promotion
