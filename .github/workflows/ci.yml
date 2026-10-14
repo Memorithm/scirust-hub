@@ -40,7 +40,20 @@ jobs:
         uses: swatinem/rust-cache@f13886b937689c021905a6b90929199931d60db1 # v2.8.1
 
       - name: Format
-        run: cargo fmt --all -- --check
+        shell: bash
+        run: |
+          if cargo fmt --all -- --check; then exit 0; fi
+          cargo fmt --all
+          git diff --binary > "$RUNNER_TEMP/rustfmt.patch"
+          exit 1
+
+      - name: Retain failed-format diagnostic (gate remains failed)
+        if: failure()
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
+        with:
+          name: rustfmt-diagnostic-${{ github.event.pull_request.head.sha || github.sha }}
+          path: ${{ runner.temp }}/rustfmt.patch
+          if-no-files-found: ignore
 
       - name: ML adapter contracts
         run: python3 -m unittest scripts/test_soup_hub_adapter.py scripts/test_soup_elastic_hub_adapter.py scripts/test_soup_scirust_symbolic_hub_adapter.py scripts/test_forge_soup_hub_adapter.py scripts/test_nnis_hf_preflight_hub_adapter.py scripts/test_soup_nnis_merge_hub_adapter.py scripts/test_nnis_hf_generate_hub_adapter.py scripts/test_nnis_hf_generation_transport.py scripts/test_sml_weight_external_consumer.py

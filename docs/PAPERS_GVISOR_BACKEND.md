@@ -43,8 +43,43 @@ guest budget64, and requires all104 child tasks to succeed under a128 positive
 control. Both cases keep the separate host ceiling fixed at512, above the entire
 finite probe range: changing only the guest limit disambiguates its enforcement.
 This is bounded isolated qualification, not an exponential fork workload or a
-scientific/hardware-performance result. Aggregate disk quotas and durable
-reconciliation of ambiguous creation/quarantine remain incomplete.
+scientific/hardware-performance result. Aggregate disk quotas remain incomplete.
+
+## Durable attempts and quarantine
+
+The controller reuses Hub's SQLite store (WAL, FULL synchronous commits), an
+additive forward migration and the existing lifecycle event log. Before Docker
+creation it reserves a unique attempt nonce and request digest. Before start it
+commits the confirmed immutable container ID. The private 0700 controller state
+directory is a sibling of task workspaces and may never be mounted as a guest
+workspace; its files are owned, regular, no-follow, single-link and 0600. The
+controller root must not be group/world writable. Safe nonblocking File locks
+(Rust MSRV1.89) fence a live task and workspace and release on controller exit;
+the durable journal refuses task-ID reuse, even after cleanup, and quarantines
+overlapping ancestor/descendant workspaces. It caps uncleaned attempts at256.
+Locks and journal are controller metadata, not another scheduler or proof schema.
+
+`scirust-hub-gvisor --inspect TASK_ID WORKSPACE_ROOT` returns metadata, never a
+success receipt. `--reconcile TASK_ID WORKSPACE_ROOT` performs only bounded
+read-only daemon queries. An ambiguous creation can acquire an immutable handle
+only from one full-ID result matching both its random nonce and request digest.
+Zero/multiple/truncated/failed responses keep the reservation quarantined; zero
+is not proof that an asynchronous create cannot appear later. A live owned
+container stays quarantined for explicit operator cleanup. Only a successful
+exact-ID absence observation moves owned state to cleaned. Reconciliation never
+starts, replays or deletes a container and never grants scientific authority.
+Cleaned metadata permits a new task ID on the reclaimed workspace, not replay
+of the original task. Unconfirmed creation without a recoverable resource keeps
+its workspace quarantined; no unsafe automated override is provided.
+
+The real qualification gate kills its own controller after positive guest entry,
+verifies the container remains running and refuses replay/reconciliation until
+explicit exact-ID cleanup. A separate fault transport loses the response of a
+real stopped container creation; restart recovers ownership via both labels but
+never starts it. Retained records/observations cover this recovery contract, not
+production adoption, quota enforcement or hardware/scientific qualification.
+The consumer's locked source graph must include hub-store-sqlite in addition to
+hub-executor, hub-core and hub-sandbox when adopting this revision.
 
 Every regular file write is limited by the guest OS `RLIMIT_FSIZE` soft/hard
 ceiling of 16 MiB (matching PAPERS' native artifact admission). The real gate

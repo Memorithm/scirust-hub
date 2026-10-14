@@ -31,6 +31,7 @@ pub enum LifecycleEventKind {
     RunStateChanged,
     TaskCreated,
     TaskStateChanged,
+    SandboxAttemptStateChanged,
     WorkflowCreated,
     WorkflowStateChanged,
     WorkflowCancelRequested,
@@ -48,6 +49,7 @@ impl LifecycleEventKind {
             Self::RunStateChanged => "run_state_changed",
             Self::TaskCreated => "task_created",
             Self::TaskStateChanged => "task_state_changed",
+            Self::SandboxAttemptStateChanged => "sandbox_attempt_state_changed",
             Self::WorkflowCreated => "workflow_created",
             Self::WorkflowStateChanged => "workflow_state_changed",
             Self::WorkflowCancelRequested => "workflow_cancel_requested",
@@ -65,6 +67,7 @@ impl LifecycleEventKind {
             "run_state_changed" => Some(Self::RunStateChanged),
             "task_created" => Some(Self::TaskCreated),
             "task_state_changed" => Some(Self::TaskStateChanged),
+            "sandbox_attempt_state_changed" => Some(Self::SandboxAttemptStateChanged),
             "workflow_created" => Some(Self::WorkflowCreated),
             "workflow_state_changed" => Some(Self::WorkflowStateChanged),
             "workflow_cancel_requested" => Some(Self::WorkflowCancelRequested),
@@ -82,6 +85,7 @@ pub enum LifecycleEntityType {
     Artifact,
     Run,
     Task,
+    SandboxAttempt,
     Workflow,
 }
 
@@ -93,6 +97,7 @@ impl LifecycleEntityType {
             Self::Artifact => "artifact",
             Self::Run => "run",
             Self::Task => "task",
+            Self::SandboxAttempt => "sandbox_attempt",
             Self::Workflow => "workflow",
         }
     }
@@ -104,6 +109,7 @@ impl LifecycleEntityType {
             "artifact" => Some(Self::Artifact),
             "run" => Some(Self::Run),
             "task" => Some(Self::Task),
+            "sandbox_attempt" => Some(Self::SandboxAttempt),
             "workflow" => Some(Self::Workflow),
             _ => None,
         }

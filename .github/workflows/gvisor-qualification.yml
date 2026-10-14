@@ -4,20 +4,34 @@ on:
   pull_request:
     branches: [main]
     paths:
+      - Cargo.toml
+      - Cargo.lock
+      - crates/hub-core/src/event.rs
+      - crates/hub-store-sqlite/**
+      - crates/hub-executor/Cargo.toml
+      - crates/hub-executor/src/gvisor_journal.rs
       - crates/hub-executor/src/gvisor.rs
       - crates/hub-executor/src/bin/scirust-hub-gvisor.rs
       - crates/hub-executor/src/lib.rs
       - crates/hub-executor/src/execution_guard.rs
       - scripts/qualify_gvisor_controls.py
+      - scripts/qualify_gvisor_recovery.py
       - .github/workflows/gvisor-qualification.yml
   push:
     branches: [main]
     paths:
+      - Cargo.toml
+      - Cargo.lock
+      - crates/hub-core/src/event.rs
+      - crates/hub-store-sqlite/**
+      - crates/hub-executor/Cargo.toml
+      - crates/hub-executor/src/gvisor_journal.rs
       - crates/hub-executor/src/gvisor.rs
       - crates/hub-executor/src/bin/scirust-hub-gvisor.rs
       - crates/hub-executor/src/lib.rs
       - crates/hub-executor/src/execution_guard.rs
       - scripts/qualify_gvisor_controls.py
+      - scripts/qualify_gvisor_recovery.py
       - .github/workflows/gvisor-qualification.yml
 
 permissions:
@@ -104,6 +118,13 @@ jobs:
           "$RUNNER_TEMP/request.json"
           "$RUNNER_TEMP/scirust-hub-workspaces"
           "$RUNNER_TEMP/gvisor-controls"
+      - name: Qualify real crash and lost-create-response recovery
+        run: >-
+          python3 scripts/qualify_gvisor_recovery.py
+          target/debug/scirust-hub-gvisor
+          "$RUNNER_TEMP/request.json"
+          "$RUNNER_TEMP/scirust-hub-workspaces"
+          "$RUNNER_TEMP/gvisor-recovery"
       - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
         with:
           name: gvisor-qualification-${{ github.event.pull_request.head.sha || github.sha }}
@@ -111,4 +132,5 @@ jobs:
             ${{ runner.temp }}/receipt.json
             ${{ runner.temp }}/qualification.json
             ${{ runner.temp }}/gvisor-controls/*.json
+            ${{ runner.temp }}/gvisor-recovery/*.json
           if-no-files-found: error
