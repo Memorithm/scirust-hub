@@ -9,6 +9,7 @@ repository.workspace = true
 
 [dependencies]
 hub-core = { workspace = true }
+serde = { workspace = true }
 serde_json = { workspace = true }
 # Bundled: compiles SQLite from source so no system library is required on
 # any CI runner or host; single-file embedded DB matches ADR-0005.

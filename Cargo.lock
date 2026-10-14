@@ -634,6 +634,7 @@ dependencies = [
  "axum",
  "hub-core",
  "hub-protocol",
+ "hub-store-sqlite",
  "nix",
  "serde",
  "serde_json",
@@ -669,6 +670,7 @@ version = "0.2.0"
 dependencies = [
  "hub-core",
  "rusqlite",
+ "serde",
  "serde_json",
  "uuid",
 ]

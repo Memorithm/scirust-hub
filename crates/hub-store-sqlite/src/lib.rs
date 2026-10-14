@@ -38,6 +38,8 @@ use hub_core::task_lifecycle::TaskRecord;
 use rusqlite::OptionalExtension as _;
 
 mod publication;
+mod sandbox_attempt;
+pub use sandbox_attempt::{SandboxAttempt, SandboxAttemptState};
 
 /// Forward-only migrations; index `i` is schema version `i + 1`.
 const MIGRATIONS: &[&str] = &[
@@ -100,6 +102,15 @@ const MIGRATIONS: &[&str] = &[
         record_json TEXT    NOT NULL
     );
     CREATE INDEX idx_tasks_created ON tasks (created_at);",
+    // v6: backend attempt ownership; logical task lifecycle remains separate.
+    "CREATE TABLE sandbox_attempts (
+        task_id     TEXT PRIMARY KEY,
+        workspace   TEXT NOT NULL,
+        state       TEXT NOT NULL,
+        record_json TEXT NOT NULL
+    );
+    CREATE INDEX idx_sandbox_workspace ON sandbox_attempts (workspace, state);
+    CREATE INDEX idx_sandbox_uncleaned ON sandbox_attempts (workspace) WHERE state != 'cleaned';",
 ];
 
 /// SQLite-backed implementation of all three metadata repository ports.

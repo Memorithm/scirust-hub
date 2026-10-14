@@ -10,6 +10,7 @@ use std::time::{Duration, Instant};
 
 use crate::execution_guard::{execute_guarded_command, GuardedCommandOutput};
 use hub_core::{IsolationLevel, ResourceEnforcement, SandboxBackendDescriptor};
+use hub_store_sqlite::{SandboxAttempt, SandboxAttemptState};
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 
@@ -222,6 +223,7 @@ impl GvisorDockerExecutor {
         if !workspace.is_dir()
             || workspace == workspace_root
             || !workspace.starts_with(&workspace_root)
+            || workspace.starts_with(workspace_root.join(".gvisor-control"))
         {
             return Err("workspace must be a task directory below the executor root".to_owned());
         }
@@ -230,11 +232,21 @@ impl GvisorDockerExecutor {
             .metadata()
             .map_err(|error| format!("workspace metadata unavailable: {error}"))?;
         let container_user = nonroot_container_user(metadata.uid(), metadata.gid())?;
-        let name = format!("scirust-gvisor-{}", request.task_id);
         // Validate the entire phase deadline before creating any OS resource.
         let deadline = Instant::now()
             .checked_add(Duration::from_millis(request.timeout_ms))
             .ok_or_else(|| "timeout overflow before container creation".to_owned())?;
+        let (journal, directory) = crate::gvisor_journal::open(&workspace_root)?;
+        let workspace_name = workspace.to_str().ok_or("workspace must be UTF-8")?;
+        let _fences = crate::gvisor_journal::fence(&directory, &request.task_id, workspace_name)?;
+        let request_digest = format!("{:x}", Sha256::digest(
+            serde_json::to_vec(request).map_err(|e| e.to_string())?
+        ));
+        let attempt = journal.reserve_sandbox_attempt(
+            &request.task_id, "docker-runsc", &request_digest, workspace_name,
+        ).map_err(|e| e.to_string())?;
+        let nonce = attempt.attempt_id.to_string();
+        let name = format!("scirust-gvisor-{nonce}");
         let mut command = Command::new(&self.docker);
         command
             .args([
@@ -249,6 +261,10 @@ impl GvisorDockerExecutor {
                 &container_user,
                 "--name",
                 &name,
+                "--label",
+                &format!("org.memorithm.hub.attempt={nonce}"),
+                "--label",
+                &format!("org.memorithm.hub.request={request_digest}"),
                 "--cpus",
                 &format_cpu(request.cpu_millis),
                 "--memory",
@@ -293,6 +309,10 @@ impl GvisorDockerExecutor {
         if !lower_hex(container_id, 64) {
             return Err("container creation did not return an immutable owned ID".into());
         }
+        // Never start unless the confirmed immutable handle survived a FULL
+        // SQLite commit. A failed commit leaves a quarantined reservation.
+        journal.sandbox_own(&request.task_id, attempt.attempt_id, container_id)
+            .map_err(|e| format!("container ownership not durable; attempt quarantined: {e}"))?;
         let mut start = Command::new(&self.docker);
         start.args(["start", "--attach", container_id]);
         let executed = guarded_docker(&mut start, deadline, request.max_capture_bytes);
@@ -301,6 +321,8 @@ impl GvisorDockerExecutor {
         cleanup_owned_container(&self.docker, container_id).map_err(|error| {
             format!("owned Docker cleanup unconfirmed for ID {container_id}: {error}")
         })?;
+        journal.sandbox_confirm_absent(&request.task_id, attempt.attempt_id, container_id)
+            .map_err(|e| format!("cleanup observation not durable; attempt quarantined: {e}"))?;
         let executed = executed?;
         Ok(GvisorExecutionReceiptV1 {
             schema: GVISOR_RECEIPT_SCHEMA_V1.to_owned(),
@@ -318,6 +340,54 @@ impl GvisorDockerExecutor {
             stdout_truncated: executed.stdout.truncated,
             stderr_truncated: executed.stderr.truncated,
         })
+    }
+
+    /// Inspect durable controller metadata, never a task-success receipt.
+    pub fn inspect_attempt(&self, task_id: &str) -> Result<SandboxAttempt, String> {
+        let root = self.workspace_root.canonicalize().map_err(|e| e.to_string())?;
+        let (journal, _) = crate::gvisor_journal::open(&root)?;
+        journal.sandbox_attempt(task_id).map_err(|e| e.to_string())?
+            .ok_or_else(|| "no recorded sandbox attempt".into())
+    }
+
+    /// Read-only daemon reconciliation. Never start, replay or remove a container.
+    /// A live resource remains quarantined for explicit operator cleanup.
+    pub fn reconcile_attempt(&self, task_id: &str) -> Result<SandboxAttempt, String> {
+        let root = self.workspace_root.canonicalize().map_err(|e| e.to_string())?;
+        let (journal, directory) = crate::gvisor_journal::open(&root)?;
+        let mut attempt = journal.sandbox_attempt(task_id).map_err(|e| e.to_string())?
+            .ok_or("no recorded sandbox attempt")?;
+        let _fences = crate::gvisor_journal::fence(&directory, task_id, &attempt.workspace)?;
+        if attempt.state == SandboxAttemptState::Cleaned {
+            return Ok(attempt);
+        }
+        if attempt.state == SandboxAttemptState::Reserved {
+            let mut lookup = Command::new(&self.docker);
+            lookup.args([
+                "container", "ls", "--all", "--no-trunc", "--filter",
+                &format!("label=org.memorithm.hub.attempt={}", attempt.attempt_id),
+                "--filter", &format!("label=org.memorithm.hub.request={}", attempt.request_sha256),
+                "--format", "{{.ID}}",
+            ]);
+            let observed = guarded_docker(&mut lookup, Instant::now() + CLEANUP_TIMEOUT, CONTROL_CAPTURE_BYTES)?;
+            if observed.timed_out || !observed.status.success() || observed.stdout.truncated || observed.stderr.truncated {
+                return Err("ownership lookup unavailable; reservation quarantined".into());
+            }
+            let output = String::from_utf8(observed.stdout.bytes).map_err(|e| e.to_string())?;
+            let handles: Vec<_> = output.lines().filter(|s| !s.is_empty()).collect();
+            if handles.len() != 1 || !lower_hex(handles[0], 64) {
+                // Zero is not proof: a timed-out create may still complete later.
+                return Err("unconfirmed creation remains quarantined; no unique ownership handle".into());
+            }
+            attempt = journal.sandbox_own(task_id, attempt.attempt_id, handles[0])
+                .map_err(|e| e.to_string())?;
+        }
+        let handle = attempt.owned_handle.as_deref().ok_or("missing owned handle")?;
+        if !lower_hex(handle, 64) {
+            return Err("invalid immutable container handle".into());
+        }
+        confirm_owned_absence(&self.docker, handle)?;
+        journal.sandbox_confirm_absent(task_id, attempt.attempt_id, handle).map_err(|e| e.to_string())
     }
 }
 
@@ -423,6 +493,14 @@ fn cleanup_owned_container(docker: &Path, container_id: &str) -> Result<(), Stri
     if removed.timed_out || removed.stdout.truncated || removed.stderr.truncated {
         return Err("owned container removal unconfirmed".into());
     }
+    confirm_owned_absence_before(docker, container_id, deadline)
+}
+
+fn confirm_owned_absence(docker: &Path, container_id: &str) -> Result<(), String> {
+    confirm_owned_absence_before(docker, container_id, Instant::now() + CLEANUP_TIMEOUT)
+}
+
+fn confirm_owned_absence_before(docker: &Path, container_id: &str, deadline: Instant) -> Result<(), String> {
     // rm may return nonzero if --rm already removed the container. Only a
     // successful exact-ID query with empty bounded output proves absence.
     let mut list = Command::new(docker);
@@ -619,6 +697,53 @@ mod tests {
             .execute(&candidate)
             .is_err());
         assert!(!root.join("created").exists());
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn failed_creation_stays_quarantined_across_restart_and_empty_lookup() {
+        let root = temporary();
+        let workspace = task_workspace(&root);
+        let docker = fixture(&root, "exit 1", "exit 0", "exit 0", "exit 0");
+        let executor = GvisorDockerExecutor::with_docker(docker.clone(), root.clone());
+        let candidate = request(workspace);
+        assert!(executor.execute(&candidate).is_err());
+        assert_eq!(executor.inspect_attempt(&candidate.task_id).unwrap().state, SandboxAttemptState::Reserved);
+        drop(executor);
+        let restarted = GvisorDockerExecutor::with_docker(docker, root.clone());
+        assert!(restarted.reconcile_attempt(&candidate.task_id).is_err());
+        assert_eq!(restarted.inspect_attempt(&candidate.task_id).unwrap().state, SandboxAttemptState::Reserved);
+        assert!(restarted.execute(&candidate).is_err());
+        let mut other = candidate;
+        other.task_id = "papers-02".into();
+        assert!(restarted.execute(&other).is_err());
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn durable_owned_handle_never_cleans_when_daemon_query_fails() {
+        let root = temporary();
+        let workspace = task_workspace(&root);
+        let create = format!("printf '%s\\n' '{}'", "a".repeat(64));
+        let docker = fixture(&root, &create, "printf completed", "exit 1", "exit 1");
+        let executor = GvisorDockerExecutor::with_docker(docker, root.clone());
+        let candidate = request(workspace);
+        assert!(executor.execute(&candidate).is_err());
+        let record = executor.inspect_attempt(&candidate.task_id).unwrap();
+        assert_eq!(record.state, SandboxAttemptState::Owned);
+        assert_eq!(record.owned_handle, Some("a".repeat(64)));
+        assert!(executor.reconcile_attempt(&candidate.task_id).is_err());
+        assert_eq!(executor.inspect_attempt(&candidate.task_id).unwrap().state, SandboxAttemptState::Owned);
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn private_journal_is_not_an_admissible_guest_workspace() {
+        let root = temporary();
+        let (_journal, private) = crate::gvisor_journal::open(&root).unwrap();
+        let docker = fixture(&root, "exit 1", "exit 1", "exit 1", "exit 1");
+        assert!(GvisorDockerExecutor::with_docker(docker, root.clone()).execute(&request(private)).is_err());
+        drop(_journal);
         fs::remove_dir_all(root).unwrap();
     }
 
