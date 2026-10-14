@@ -11,7 +11,8 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             executor.inspect_attempt(&args[1])
         } else {
             executor.reconcile_attempt(&args[1])
-        }.map_err(|e| format!("gVisor controller metadata refused: {e}"))?;
+        }
+        .map_err(|e| format!("gVisor controller metadata refused: {e}"))?;
         println!("{}", serde_json::to_string(&record)?);
         return Ok(());
     }
