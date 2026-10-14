@@ -10,12 +10,14 @@ on:
       - crates/hub-store-sqlite/**
       - crates/hub-executor/Cargo.toml
       - crates/hub-executor/src/gvisor_journal.rs
+      - crates/hub-executor/src/gvisor_workspace_quota.rs
       - crates/hub-executor/src/gvisor.rs
       - crates/hub-executor/src/bin/scirust-hub-gvisor.rs
       - crates/hub-executor/src/lib.rs
       - crates/hub-executor/src/execution_guard.rs
       - scripts/qualify_gvisor_controls.py
       - scripts/qualify_gvisor_recovery.py
+      - scripts/qualify_gvisor_workspace_quota.py
       - .github/workflows/gvisor-qualification.yml
   push:
     branches: [main]
@@ -26,12 +28,14 @@ on:
       - crates/hub-store-sqlite/**
       - crates/hub-executor/Cargo.toml
       - crates/hub-executor/src/gvisor_journal.rs
+      - crates/hub-executor/src/gvisor_workspace_quota.rs
       - crates/hub-executor/src/gvisor.rs
       - crates/hub-executor/src/bin/scirust-hub-gvisor.rs
       - crates/hub-executor/src/lib.rs
       - crates/hub-executor/src/execution_guard.rs
       - scripts/qualify_gvisor_controls.py
       - scripts/qualify_gvisor_recovery.py
+      - scripts/qualify_gvisor_workspace_quota.py
       - .github/workflows/gvisor-qualification.yml
 
 permissions:
@@ -125,7 +129,17 @@ jobs:
           "$RUNNER_TEMP/request.json"
           "$RUNNER_TEMP/scirust-hub-workspaces"
           "$RUNNER_TEMP/gvisor-recovery"
+      - name: Qualify persistent aggregate workspace quota
+        env:
+          SCIRUST_HUB_SOURCE_COMMIT: ${{ github.event.pull_request.head.sha || github.sha }}
+        run: >-
+          python3 scripts/qualify_gvisor_workspace_quota.py
+          target/debug/scirust-hub-gvisor
+          "$RUNNER_TEMP/request.json"
+          "$RUNNER_TEMP/scirust-hub-workspaces"
+          "$RUNNER_TEMP/gvisor-workspace-quota"
       - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
+        if: always()
         with:
           name: gvisor-qualification-${{ github.event.pull_request.head.sha || github.sha }}
           path: |
@@ -133,4 +147,5 @@ jobs:
             ${{ runner.temp }}/qualification.json
             ${{ runner.temp }}/gvisor-controls/*.json
             ${{ runner.temp }}/gvisor-recovery/*.json
+            ${{ runner.temp }}/gvisor-workspace-quota/*.json
           if-no-files-found: error
