@@ -24,6 +24,15 @@ const CLEANUP_TIMEOUT: Duration = Duration::from_secs(3);
 const CONTROL_CAPTURE_BYTES: usize = 4096;
 const MAX_TASK_TIMEOUT_MS: u64 = 60 * 60 * 1000;
 
+/// Strict opt-in admission ceiling for an operator-provisioned persistent
+/// task filesystem. This is total capacity, never current free space.
+#[derive(Clone, Debug, Deserialize, Serialize, PartialEq, Eq)]
+#[serde(deny_unknown_fields)]
+pub struct GvisorWorkspaceQuotaV1 {
+    pub max_bytes: u64,
+    pub max_inodes: u64,
+}
+
 #[derive(Clone, Debug, Deserialize, Serialize, PartialEq, Eq)]
 #[serde(deny_unknown_fields)]
 pub struct GvisorExecutionRequestV1 {
@@ -31,6 +40,8 @@ pub struct GvisorExecutionRequestV1 {
     pub task_id: String,
     pub image: String,
     pub workspace: PathBuf,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub workspace_quota: Option<GvisorWorkspaceQuotaV1>,
     pub command: Vec<String>,
     #[serde(default)]
     pub environment: Vec<(String, String)>,
@@ -232,6 +243,9 @@ impl GvisorDockerExecutor {
             .metadata()
             .map_err(|error| format!("workspace metadata unavailable: {error}"))?;
         let container_user = nonroot_container_user(metadata.uid(), metadata.gid())?;
+        if let Some(quota) = &request.workspace_quota {
+            crate::gvisor_workspace_quota::admit(&workspace_root, &workspace, quota)?;
+        }
         // Validate the entire phase deadline before creating any OS resource.
         let deadline = Instant::now()
             .checked_add(Duration::from_millis(request.timeout_ms))
@@ -291,7 +305,7 @@ impl GvisorDockerExecutor {
                 "--mount",
             ])
             .arg(format!(
-                "type=bind,src={},dst=/workspace",
+                "type=bind,src={},dst=/workspace,bind-recursive=disabled,bind-propagation=rprivate",
                 workspace.display()
             ))
             .args(["--workdir", "/workspace"]);
@@ -606,6 +620,7 @@ mod tests {
             image: "rust@sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
                 .to_owned(),
             workspace,
+            workspace_quota: None,
             command: vec!["true".to_owned()],
             environment: Vec::new(),
             cpu_millis: 1000,
@@ -800,6 +815,40 @@ mod tests {
             .is_err());
         drop(_journal);
         fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn ordinary_host_directory_cannot_claim_an_aggregate_quota() {
+        let root = temporary();
+        let workspace = task_workspace(&root);
+        let mut candidate = request(workspace);
+        candidate.workspace_quota = Some(GvisorWorkspaceQuotaV1 {
+            max_bytes: 64 * 1024 * 1024,
+            max_inodes: 256,
+        });
+        let docker = fixture(&root, "exit 99", "exit 99", "exit 99", "exit 99");
+        let error = GvisorDockerExecutor::with_docker(docker, root.clone())
+            .execute(&candidate)
+            .unwrap_err();
+        assert!(error.contains("controller filesystem"));
+        assert!(!root.join(".gvisor-control").exists());
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn aggregate_quota_is_explicit_and_legacy_wire_stays_unqualified() {
+        let mut candidate = request(PathBuf::from("unused"));
+        let legacy = serde_json::to_value(&candidate).unwrap();
+        assert!(legacy.get("workspace_quota").is_none());
+        let decoded: GvisorExecutionRequestV1 = serde_json::from_value(legacy).unwrap();
+        assert_eq!(decoded.workspace_quota, None);
+        candidate.workspace_quota = Some(GvisorWorkspaceQuotaV1 {
+            max_bytes: 65536,
+            max_inodes: 64,
+        });
+        let wire = serde_json::to_value(&candidate).unwrap();
+        assert_eq!(wire["workspace_quota"]["max_bytes"], 65536);
+        assert_eq!(wire["workspace_quota"]["max_inodes"], 64);
     }
 
     #[test]

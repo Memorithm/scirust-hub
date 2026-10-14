@@ -15,6 +15,7 @@
 pub mod execution_guard;
 pub mod gvisor;
 mod gvisor_journal;
+mod gvisor_workspace_quota;
 pub mod local_capacity;
 pub mod pool;
 pub mod remote;
