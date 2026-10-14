@@ -100,6 +100,21 @@ def main():
         control(["sudo", "mount", "-t", "tmpfs", "-o", "size=128m", "tmpfs", str(workspace / "escape")])
         nested = True
         control(["sudo", "chmod", "0777", str(workspace / "escape")])
+        negative_request = dict(baseline, task_id=baseline["task_id"] + "-quota-nested-refusal",
+                                workspace=str(workspace), command=["true"],
+                                workspace_quota={"max_bytes": 64 * 1024 * 1024, "max_inodes": 256})
+        negative_path = output / "nested-refusal.request.json"
+        negative_path.write_text(json.dumps(negative_request), encoding="utf-8")
+        negative = subprocess.run([str(binary), str(negative_path), str(root)],
+                                  capture_output=True, timeout=10)
+        assert negative.returncode != 0 and not negative.stdout
+        assert b"nested host mounts" in negative.stderr, negative.stderr
+        (output / "nested-refusal.json").write_text(json.dumps({
+            "request_task_id": negative_request["task_id"],
+            "exit_code": negative.returncode, "stderr": negative.stderr.decode(),
+            "no_receipt": True}), encoding="utf-8")
+        control(["sudo", "umount", str(workspace / "escape")])
+        nested = False
         byte_receipt = case("bytes", ["./quota_probe", "bytes"])
         assert "AGGREGATE_bytes_ENOSPC=" in byte_receipt["stdout"]
         inode_receipt = case("inodes", ["./quota_probe", "inodes"])
@@ -110,7 +125,7 @@ def main():
                    "filesystem_image_bytes": image.stat().st_size,
                    "persistent_remount_positive": True,
                    "bounded_multi_file_enospc": True, "bounded_inode_enospc": True,
-                   "nested_host_mount_excluded": True, "journal_outside_guest_volume": True,
+                   "nested_host_mount_refused_before_create": True, "journal_outside_guest_volume": True,
                    "scope": "hosted Linux fixture; no production provisioning or scientific verdict"}
         (output / "summary.json").write_text(json.dumps(summary, indent=2), encoding="utf-8")
         print("GVISOR_REAL_PERSISTENT_AGGREGATE_BYTES_INODES_NONRECURSIVE_OK")
