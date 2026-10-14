@@ -834,3 +834,27 @@ audit_papers_guard_consumer_integrated_2026_10_14:
   remaining: aggregate_quota_guest_PID_and_durable_ambiguous_creation_reconciliation
   research_source: https://gvisor.dev/docs/architecture_guide/resources/
   research_not_qualification: true
+
+
+audit_papers_guest_PID_2026_10_14:
+  finding: PAPERS-01
+  status: merged_owner_scope_qualified_consumer_repin_pending
+  pull_request: 89
+  candidate: b57ea18ece394189885d891fb4b88c33c1167bea
+  merge_commit: f873bc04e996e13c33958702e48e8b1c411f9c11
+  integrated_full_ci: 38512141556
+  integrated_real_runsc: 38512141573
+  retained_artifact_sha256: 03d2b15feb6993fc23ade8163a2b86c83faafc06440f5eb07cd48ee1fe9d18a1
+  Rust_workspace_tests: 286
+  additional_root_protocol_tests: 12
+  scope:
+    - optional_stricter_guest_pids_limit_wire_default_preserved
+    - host512_fixed_guest64_then128_independent_finite_mixed_process_thread_control
+    - guest64_8processes_55threads_EAGAIN11_nonroot_UID1001
+    - guest128_8processes_96threads_no_denial
+    - root_workspace_fail_closed_before_creation_and_budget1_to4096
+  remaining:
+    - PAPERS_consumer_exact_source_graph_and_retained_artifacts_adoption
+    - aggregate_workspace_disk_quota
+    - durable_ambiguous_creation_and_quarantine_reconciliation
+    - no_global_finding_closure_hardware_performance_or_scientific_promotion
