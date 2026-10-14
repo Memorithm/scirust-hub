@@ -79,7 +79,7 @@ real stopped container creation; restart recovers ownership via both labels but
 never starts it. Retained records/observations cover this recovery contract, not
 production adoption, quota enforcement or hardware/scientific qualification.
 The consumer's locked source graph must include hub-store-sqlite in addition to
-hub-executor, hub-core and hub-sandbox when adopting this revision.
+hub-executor, hub-core and hub-protocol when adopting this revision.
 
 Every regular file write is limited by the guest OS `RLIMIT_FSIZE` soft/hard
 ceiling of 16 MiB (matching PAPERS' native artifact admission). The real gate
