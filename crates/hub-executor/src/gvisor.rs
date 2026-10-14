@@ -3,13 +3,12 @@
 //! The adapter invokes Docker only with the runsc runtime and a fixed
 //! fail-closed control set. A dedicated workflow qualifies the real backend.
 
-use std::io::Read;
 use std::os::unix::fs::MetadataExt;
 use std::path::{Path, PathBuf};
-use std::process::{Command, Stdio};
-use std::thread::{self, JoinHandle};
+use std::process::Command;
 use std::time::{Duration, Instant};
 
+use crate::execution_guard::{execute_guarded_command, GuardedCommandOutput};
 use hub_core::{IsolationLevel, ResourceEnforcement, SandboxBackendDescriptor};
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
@@ -20,7 +19,9 @@ pub const GVISOR_QUALIFICATION_SCHEMA_V1: &str = "scirust-hub.gvisor-qualificati
 
 const MAX_TOKEN_BYTES: usize = 256;
 const MAX_CAPTURE_BYTES: usize = 1024 * 1024;
-const POLL_MS: u64 = 10;
+const CLEANUP_TIMEOUT: Duration = Duration::from_secs(3);
+const CONTROL_CAPTURE_BYTES: usize = 4096;
+const MAX_TASK_TIMEOUT_MS: u64 = 60 * 60 * 1000;
 
 #[derive(Clone, Debug, Deserialize, Serialize, PartialEq, Eq)]
 #[serde(deny_unknown_fields)]
@@ -227,10 +228,14 @@ impl GvisorDockerExecutor {
             .map_err(|error| format!("workspace metadata unavailable: {error}"))?;
         let container_user = format!("{}:{}", metadata.uid(), metadata.gid());
         let name = format!("scirust-gvisor-{}", request.task_id);
+        // Validate the entire phase deadline before creating any OS resource.
+        let deadline = Instant::now()
+            .checked_add(Duration::from_millis(request.timeout_ms))
+            .ok_or_else(|| "timeout overflow before container creation".to_owned())?;
         let mut command = Command::new(&self.docker);
         command
             .args([
-                "run",
+                "create",
                 "--rm",
                 "--runtime=runsc",
                 "--network=none",
@@ -244,6 +249,8 @@ impl GvisorDockerExecutor {
                 "--cpus",
                 &format_cpu(request.cpu_millis),
                 "--memory",
+                &request.memory_bytes.to_string(),
+                "--memory-swap",
                 &request.memory_bytes.to_string(),
                 "--pids-limit",
                 &request.pids_limit.to_string(),
@@ -260,45 +267,29 @@ impl GvisorDockerExecutor {
             command.args(["--env", &format!("{key}={value}")]);
         }
         command.arg(&request.image).args(&request.command);
-        command
-            .stdin(Stdio::null())
-            .stdout(Stdio::piped())
-            .stderr(Stdio::piped());
-
-        let started = Instant::now();
-        let mut child = command
-            .spawn()
-            .map_err(|error| format!("failed to start Docker/runsc: {error}"))?;
-        let stdout = spawn_reader(child.stdout.take(), request.max_capture_bytes);
-        let stderr = spawn_reader(child.stderr.take(), request.max_capture_bytes);
-        let deadline = started
-            .checked_add(Duration::from_millis(request.timeout_ms))
-            .ok_or_else(|| "timeout overflow".to_owned())?;
-
-        let mut timed_out = false;
-        let status = loop {
-            match child.try_wait() {
-                Ok(Some(status)) => break status,
-                Ok(None) if Instant::now() < deadline => {
-                    thread::sleep(Duration::from_millis(POLL_MS));
-                }
-                Ok(None) => {
-                    timed_out = true;
-                    kill_container(&self.docker, &name);
-                    let _ = child.kill();
-                    break child
-                        .wait()
-                        .map_err(|error| format!("failed to reap Docker client: {error}"))?;
-                }
-                Err(error) => {
-                    kill_container(&self.docker, &name);
-                    return Err(format!("failed to poll Docker client: {error}"));
-                }
-            }
-        };
-
-        let (stdout, stdout_truncated) = join_reader(stdout)?;
-        let (stderr, stderr_truncated) = join_reader(stderr)?;
+        let created = guarded_docker(&mut command, deadline, MAX_CAPTURE_BYTES)?;
+        if created.timed_out
+            || !created.status.success()
+            || created.stdout.truncated
+            || created.stderr.truncated
+        {
+            // A name is not an ownership token. Never remove a preexisting or
+            // ambiguously created container merely because its name matches.
+            return Err("container creation unconfirmed; no owned ID available for cleanup".into());
+        }
+        let container_id = String::from_utf8(created.stdout.bytes)
+            .map_err(|_| "container identity is not UTF-8")?;
+        let container_id = container_id.trim();
+        if !lower_hex(container_id, 64) {
+            return Err("container creation did not return an immutable owned ID".into());
+        }
+        let mut start = Command::new(&self.docker);
+        start.args(["start", "--attach", container_id]);
+        let executed = guarded_docker(&mut start, deadline, request.max_capture_bytes);
+        // Always confirm the exact owned container's absence, even on client
+        // errors. Killing a local group is not Docker-daemon termination proof.
+        cleanup_owned_container(&self.docker, container_id)?;
+        let executed = executed?;
         Ok(GvisorExecutionReceiptV1 {
             schema: GVISOR_RECEIPT_SCHEMA_V1.to_owned(),
             task_id: request.task_id.clone(),
@@ -308,12 +299,12 @@ impl GvisorDockerExecutor {
                 .qualification
                 .as_ref()
                 .map(GvisorQualificationEvidenceV1::evidence_id),
-            exit_code: status.code(),
-            timed_out,
-            stdout: String::from_utf8_lossy(&stdout).into_owned(),
-            stderr: String::from_utf8_lossy(&stderr).into_owned(),
-            stdout_truncated,
-            stderr_truncated,
+            exit_code: executed.status.code(),
+            timed_out: executed.timed_out,
+            stdout: String::from_utf8_lossy(&executed.stdout.bytes).into_owned(),
+            stderr: String::from_utf8_lossy(&executed.stderr.bytes).into_owned(),
+            stdout_truncated: executed.stdout.truncated,
+            stderr_truncated: executed.stderr.truncated,
         })
     }
 }
@@ -356,6 +347,7 @@ fn validate_request(request: &GvisorExecutionRequestV1) -> Result<(), String> {
         || request.memory_bytes < 16 * 1024 * 1024
         || request.pids_limit == 0
         || request.timeout_ms == 0
+        || request.timeout_ms > MAX_TASK_TIMEOUT_MS
         || request.max_capture_bytes == 0
         || request.max_capture_bytes > MAX_CAPTURE_BYTES
     {
@@ -390,46 +382,46 @@ fn format_cpu(cpu_millis: u64) -> String {
     format!("{}.{:03}", cpu_millis / 1000, cpu_millis % 1000)
 }
 
-fn kill_container(docker: &Path, name: &str) {
-    let _ = Command::new(docker)
-        .args(["kill", name])
-        .stdin(Stdio::null())
-        .stdout(Stdio::null())
-        .stderr(Stdio::null())
-        .status();
+fn guarded_docker(
+    command: &mut Command,
+    deadline: Instant,
+    cap: usize,
+) -> Result<GuardedCommandOutput, String> {
+    execute_guarded_command(command, deadline, cap).map_err(|error| error.to_string())
 }
 
-fn spawn_reader<R: Read + Send + 'static>(
-    pipe: Option<R>,
-    limit: usize,
-) -> JoinHandle<Result<(Vec<u8>, bool), String>> {
-    thread::spawn(move || {
-        let mut pipe = pipe.ok_or_else(|| "capture pipe missing".to_owned())?;
-        let mut captured = Vec::with_capacity(limit.min(8192));
-        let mut buffer = [0_u8; 8192];
-        let mut truncated = false;
-        loop {
-            let count = pipe
-                .read(&mut buffer)
-                .map_err(|error| format!("capture read failed: {error}"))?;
-            if count == 0 {
-                break;
-            }
-            let remaining = limit.saturating_sub(captured.len());
-            let kept = remaining.min(count);
-            captured.extend_from_slice(&buffer[..kept]);
-            truncated |= kept < count;
-        }
-        Ok((captured, truncated))
-    })
-}
-
-fn join_reader(
-    reader: JoinHandle<Result<(Vec<u8>, bool), String>>,
-) -> Result<(Vec<u8>, bool), String> {
-    reader
-        .join()
-        .map_err(|_| "capture reader panicked".to_owned())?
+fn cleanup_owned_container(docker: &Path, container_id: &str) -> Result<(), String> {
+    let deadline = Instant::now()
+        .checked_add(CLEANUP_TIMEOUT)
+        .ok_or_else(|| "container cleanup deadline overflow".to_owned())?;
+    let mut remove = Command::new(docker);
+    remove.args(["rm", "--force", container_id]);
+    let removed = guarded_docker(&mut remove, deadline, CONTROL_CAPTURE_BYTES)?;
+    if removed.timed_out || removed.stdout.truncated || removed.stderr.truncated {
+        return Err("owned container removal unconfirmed".into());
+    }
+    // rm may return nonzero if --rm already removed the container. Only a
+    // successful exact-ID query with empty bounded output proves absence.
+    let mut list = Command::new(docker);
+    list.args([
+        "container",
+        "ls",
+        "--all",
+        "--filter",
+        &format!("id={container_id}"),
+        "--format",
+        "{{.ID}}",
+    ]);
+    let absent = guarded_docker(&mut list, deadline, CONTROL_CAPTURE_BYTES)?;
+    if absent.timed_out
+        || !absent.status.success()
+        || absent.stdout.truncated
+        || absent.stderr.truncated
+        || !absent.stdout.bytes.iter().all(u8::is_ascii_whitespace)
+    {
+        return Err("owned container absence unconfirmed".into());
+    }
+    Ok(())
 }
 
 #[cfg(test)]
@@ -495,8 +487,8 @@ mod tests {
         fs::write(
             &docker,
             format!(
-                "#!/bin/sh\nprintf '%s\\n' \"$@\" > '{}'\nprintf qualified\n",
-                log.display()
+                "#!/bin/sh\ncase \"$1\" in\ncreate) printf '%s\\n' \"$@\" > '{}'; printf '%s\\n' '{}' ;;\nstart) printf qualified ;;\nrm|container) exit 0 ;;\n*) exit 1 ;;\nesac\n",
+                log.display(), "a".repeat(64)
             ),
         )
         .unwrap();
@@ -516,10 +508,85 @@ mod tests {
             "--user",
             "--pids-limit",
             "--memory",
+            "--memory-swap",
             "--cpus",
         ] {
             assert!(args.lines().any(|line| line == required), "{required}");
         }
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    // Docker protocol fixtures only, never sandbox qualification.
+    fn fixture(root: &Path, create: &str, start: &str, remove: &str, list: &str) -> PathBuf {
+        let docker = root.join("docker");
+        fs::write(&docker, format!(
+            "#!/bin/sh\ncase \"$1\" in\ncreate) {create} ;;\nstart) {start} ;;\nrm) {remove} ;;\ncontainer) {list} ;;\n*) exit 2 ;;\nesac\n"
+        )).unwrap();
+        fs::set_permissions(&docker, fs::Permissions::from_mode(0o755)).unwrap();
+        docker
+    }
+
+    #[test]
+    fn creation_failure_never_mutates_an_unowned_container() {
+        let root = temporary();
+        let workspace = root.join("task");
+        fs::create_dir(&workspace).unwrap();
+        let touched = format!("touch '{}'; exit 0", root.join("mutated").display());
+        let docker = fixture(&root, "exit 1", &touched, &touched, &touched);
+        assert!(GvisorDockerExecutor::with_docker(docker, root.clone())
+            .execute(&request(workspace))
+            .is_err());
+        assert!(!root.join("mutated").exists());
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn cleanup_hang_returns_bounded_failure_not_a_receipt() {
+        let root = temporary();
+        let workspace = root.join("task");
+        fs::create_dir(&workspace).unwrap();
+        let create = format!("printf '%s\\n' '{}'", "a".repeat(64));
+        let docker = fixture(
+            &root,
+            &create,
+            "printf completed",
+            "exec sleep 30",
+            "exit 0",
+        );
+        let started = Instant::now();
+        let result =
+            GvisorDockerExecutor::with_docker(docker, root.clone()).execute(&request(workspace));
+        assert!(started.elapsed() < Duration::from_secs(6));
+        assert!(result.unwrap_err().contains("removal unconfirmed"));
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn daemon_query_failure_never_proves_container_absence() {
+        let root = temporary();
+        let workspace = root.join("task");
+        fs::create_dir(&workspace).unwrap();
+        let create = format!("printf '%s\\n' '{}'", "a".repeat(64));
+        let docker = fixture(&root, &create, "printf completed", "exit 1", "exit 1");
+        let result =
+            GvisorDockerExecutor::with_docker(docker, root.clone()).execute(&request(workspace));
+        assert!(result.unwrap_err().contains("absence unconfirmed"));
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn excessive_deadline_fails_before_creation() {
+        let root = temporary();
+        let workspace = root.join("task");
+        fs::create_dir(&workspace).unwrap();
+        let touched = format!("touch '{}'; exit 0", root.join("created").display());
+        let docker = fixture(&root, &touched, "exit 0", "exit 0", "exit 0");
+        let mut candidate = request(workspace);
+        candidate.timeout_ms = u64::MAX;
+        assert!(GvisorDockerExecutor::with_docker(docker, root.clone())
+            .execute(&candidate)
+            .is_err());
+        assert!(!root.join("created").exists());
         fs::remove_dir_all(root).unwrap();
     }
 

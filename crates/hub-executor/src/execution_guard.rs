@@ -5,6 +5,9 @@
 //! security sandbox.
 
 use std::io::Read;
+#[cfg(unix)]
+use std::os::unix::process::CommandExt as _;
+use std::process::{Child, Command, ExitStatus, Stdio};
 use std::sync::mpsc::{self, Receiver, RecvTimeoutError};
 use std::thread;
 use std::time::{Duration, Instant};
@@ -14,6 +17,119 @@ use hub_core::error::ExecutorFailure;
 const GROUP_CONFIRM_TIMEOUT: Duration = Duration::from_secs(1);
 const PIPE_DRAIN_TIMEOUT: Duration = Duration::from_secs(1);
 const GROUP_POLL_INTERVAL: Duration = Duration::from_millis(10);
+
+pub(crate) struct GuardedCommandOutput {
+    pub(crate) status: ExitStatus,
+    pub(crate) timed_out: bool,
+    pub(crate) stdout: CapturedStream,
+    pub(crate) stderr: CapturedStream,
+}
+
+/// Execute a preconstructed command under the existing process/capture guard.
+/// The caller retains argv, environment and sandbox authority.
+pub(crate) fn execute_guarded_command(
+    command: &mut Command,
+    deadline: Instant,
+    capture_limit: usize,
+) -> Result<GuardedCommandOutput, ExecutorFailure> {
+    if Instant::now() >= deadline {
+        return Err(ExecutorFailure::Backend {
+            reason: "command deadline exhausted before spawn".into(),
+        });
+    }
+    command
+        .stdin(Stdio::null())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped());
+    #[cfg(unix)]
+    command.process_group(0);
+    let mut child = command.spawn().map_err(|error| ExecutorFailure::Backend {
+        reason: format!("guarded command spawn failed: {error}"),
+    })?;
+    let stdout = spawn_capped_reader(child.stdout.take(), capture_limit);
+    let stderr = spawn_capped_reader(child.stderr.take(), capture_limit);
+    let mut timed_out = false;
+    let terminal = loop {
+        match child.try_wait() {
+            Ok(Some(status)) => {
+                break confirm_group_termination_after_parent_exit(
+                    child.id(),
+                    termination_confirmation_deadline(),
+                )
+                .map(|()| status)
+            }
+            Ok(None) if Instant::now() < deadline => thread::sleep(GROUP_POLL_INTERVAL),
+            Ok(None) => {
+                timed_out = true;
+                break terminate_group_and_reap(&mut child);
+            }
+            Err(error) => {
+                let _ = terminate_group_and_reap(&mut child);
+                break Err(ExecutorFailure::Backend {
+                    reason: format!("guarded command wait failed: {error}"),
+                });
+            }
+        }
+    };
+    let captured = collect_captured_streams(stdout, stderr);
+    let status = terminal?;
+    let (stdout, stderr) = captured?;
+    Ok(GuardedCommandOutput {
+        status,
+        timed_out,
+        stdout,
+        stderr,
+    })
+}
+
+/// Signal the group, poll the direct child's reap and confirm group absence
+/// under one deadline. Never perform an unbounded Child::wait after SIGKILL.
+pub(crate) fn terminate_group_and_reap(child: &mut Child) -> Result<ExitStatus, ExecutorFailure> {
+    let deadline = termination_confirmation_deadline();
+    #[cfg(unix)]
+    {
+        use nix::{
+            errno::Errno,
+            sys::signal::{killpg, Signal},
+            unistd::Pid,
+        };
+        let pid = i32::try_from(child.id())
+            .map(Pid::from_raw)
+            .map_err(|error| ExecutorFailure::Backend {
+                reason: format!("invalid process-group identifier: {error}"),
+            })?;
+        match killpg(pid, Signal::SIGKILL) {
+            Ok(()) | Err(Errno::ESRCH) => {}
+            Err(error) => {
+                return Err(ExecutorFailure::Backend {
+                    reason: format!("termination unconfirmed: {error}"),
+                })
+            }
+        }
+    }
+    #[cfg(not(unix))]
+    child.kill().map_err(|error| ExecutorFailure::Backend {
+        reason: format!("termination unconfirmed: {error}"),
+    })?;
+    let status = loop {
+        match child.try_wait() {
+            Ok(Some(status)) => break status,
+            Ok(None) if Instant::now() < deadline => thread::sleep(GROUP_POLL_INTERVAL),
+            Ok(None) => {
+                return Err(ExecutorFailure::Backend {
+                    reason: "reaping unconfirmed before deadline".into(),
+                })
+            }
+            Err(error) => {
+                return Err(ExecutorFailure::Backend {
+                    reason: format!("reaping unconfirmed: {error}"),
+                })
+            }
+        }
+    };
+    confirm_group_termination_after_parent_exit(child.id(), deadline)?;
+    Ok(status)
+}
 
 #[derive(Debug)]
 pub(crate) struct CapturedStream {
@@ -163,6 +279,33 @@ impl CapturedPipe {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[cfg(unix)]
+    #[test]
+    fn guarded_command_times_out_without_unbounded_wait() {
+        let mut command = Command::new("sh");
+        command.args(["-c", "exec sleep 30"]);
+        let started = Instant::now();
+        let output =
+            execute_guarded_command(&mut command, started + Duration::from_millis(20), 64).unwrap();
+        assert!(output.timed_out);
+        assert!(!output.status.success());
+        assert!(started.elapsed() < Duration::from_secs(3));
+    }
+
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn detached_retained_pipe_fails_closed_with_bounded_drain() {
+        let mut command = Command::new("sh");
+        // Trusted finite fixture; the detached pipe holder exits on its own.
+        command.args(["-c", "setsid sh -c 'sleep 3' & printf fixture; exit 0"]);
+        let started = Instant::now();
+        let result = execute_guarded_command(&mut command, started + Duration::from_secs(5), 64);
+        assert!(started.elapsed() < Duration::from_secs(3));
+        assert!(
+            matches!(result, Err(ExecutorFailure::Backend { reason }) if reason.contains("capture incomplete"))
+        );
+    }
 
     #[test]
     fn capture_wait_is_bounded_and_reports_incomplete_stream() {

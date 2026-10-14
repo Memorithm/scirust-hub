@@ -7,6 +7,8 @@ on:
       - crates/hub-executor/src/gvisor.rs
       - crates/hub-executor/src/bin/scirust-hub-gvisor.rs
       - crates/hub-executor/src/lib.rs
+      - crates/hub-executor/src/execution_guard.rs
+      - scripts/qualify_gvisor_controls.py
       - .github/workflows/gvisor-qualification.yml
   push:
     branches: [main]
@@ -14,6 +16,8 @@ on:
       - crates/hub-executor/src/gvisor.rs
       - crates/hub-executor/src/bin/scirust-hub-gvisor.rs
       - crates/hub-executor/src/lib.rs
+      - crates/hub-executor/src/execution_guard.rs
+      - scripts/qualify_gvisor_controls.py
       - .github/workflows/gvisor-qualification.yml
 
 permissions:
@@ -93,10 +97,18 @@ jobs:
             --arg receipt_sha256 "$receipt_sha256" \
             '{schema: $schema, source_commit: $source_commit, workflow_run_id: $workflow_run_id, receipt_sha256: $receipt_sha256}' \
             > "$RUNNER_TEMP/qualification.json"
+      - name: Qualify real bounded runtime controls
+        run: >-
+          python3 scripts/qualify_gvisor_controls.py
+          target/debug/scirust-hub-gvisor
+          "$RUNNER_TEMP/request.json"
+          "$RUNNER_TEMP/scirust-hub-workspaces"
+          "$RUNNER_TEMP/gvisor-controls"
       - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
         with:
           name: gvisor-qualification-${{ github.event.pull_request.head.sha || github.sha }}
           path: |
             ${{ runner.temp }}/receipt.json
             ${{ runner.temp }}/qualification.json
+            ${{ runner.temp }}/gvisor-controls/*.json
           if-no-files-found: error
