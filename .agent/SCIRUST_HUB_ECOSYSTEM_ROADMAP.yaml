@@ -1,7 +1,7 @@
 schema_version: 1
 kind: scirust_hub_ecosystem_agent_roadmap
 status: active
-last_updated: "2026-09-05"
+last_updated: "2026-10-14"
 repository: Memorithm/scirust-hub
 intended_consumer: autonomous_coding_agent
 merge_policy: never_merge_this_file_to_default_branch_unless_user_explicitly_requests
@@ -906,3 +906,31 @@ audit_durable_gvisor_attempts_2026_10_14:
     - PAPERS_consumer_locked4package_graph_exact_CLI_manifest_receipt_archive_and_live_gate
     - aggregate_workspace_OS_quota
     - no_production_adoption_hardware_performance_or_scientific_promotion
+
+
+audit_persistent_workspace_quota_integrated_2026_10_14:
+  finding: PAPERS-01
+  status: owner_scope_qualified_consumer_acceptance_pending
+  pull_request: 91
+  candidate: 69eea8c3e792c0a9083b9885bfd7e1d92920379c
+  integrated: a1ce544d5a6027a224627b738268214775a56881
+  integrated_full_ci: 38522621680
+  integrated_real_runsc: 38522621768
+  integrated_archive_sha256: 6027dc5df69377f3df82337f3a68d6beb4804d171751f80cedb362d2fcebd89b
+  contracts:
+    - opt_in_total_filesystem_capacity_and_inode_ceiling_not_free_space
+    - persistent_ext_family_child_volume_private_task_subdirectories
+    - private_durable_controller_journal_outside_guest_device
+    - bounded_mount_inventory_refuses_nested_host_mount_before_create
+    - operator_provisioning_remains_provider_owned_no_privileged_Hub_mount_or_format
+  actual_qualification:
+    - finite13_full4MiB_files_then_ENOSPC_below16MiB_per_file_limit
+    - finite241_empty_files_then_inode_ENOSPC
+    - compile_run_across_container_stop_and_host_unmount_remount
+    - nested_mount_precreate_refusal_and4_cleaned_durable_attempts
+  scope:
+    - hosted_Linux_runsc_fixture_not_production_or_hardware_claim
+    - co_located_trusted_daemon_and_no_operator_concurrent_mount_resize
+    - no_per_task_free_space_reservation_no_scientific_promotion
+  remaining:
+    - PAPERS17_candidate_review_and_integrated_consumer_qualification
