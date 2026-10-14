@@ -777,3 +777,28 @@ axh6_worker_trust_provisioning_boundary_2026_09_29:
     - no_trust_store_signature_verifier_or_signed_envelope_implemented
     - signed_observations_do_not_imply_backend_qualification_or_admission
   required_CI: CI_261_success_on_final_exact_head
+
+
+audit_papers_guard_2026_10_14:
+  status: merged_provider_scope_qualified_consumer_pending
+  finding: PAPERS-01
+  pull_request: 87
+  candidate: 30fbd6f1ff7cdf5bc1cb098de9b57f717614218e
+  merge_commit: c37d9341bf16ced15be4b2e1de33022cf7482b2b
+  integrated_full_ci: 38501442914
+  integrated_real_runsc: 38501443033
+  public_api: hub_executor::execution_guard::execute_guarded_command
+  scope:
+    - shared_bounded_process_group_nonblocking_reap_and_EOF_drain_guard
+    - one_byte_to_one_MiB_capture_budget_refused_before_spawn_when_invalid
+    - typed_gvisor_v1_uses_owned_container_ID_before_start_and_bounded_cleanup_absence_query
+    - phase_deadlines_are_bounded_to_one_hour_before_creation
+    - memory_and_swap_share_requested_bound
+    - provider_workspace_Rust_283_tests_no_failures_and_real_controls_executed
+  limitations:
+    - process_guard_is_not_the_OS_sandbox
+    - deliberate_detach_or_ambiguous_creation_is_not_claimed_cleaned
+    - root_write_DAC_refusal_alone_is_not_readonly_mount_evidence
+    - per_file_limit_and_positive_root_mount_evidence_pending_pull_request_88
+    - aggregate_disk_quota_guest_PID_and_PINNED_PAPERS_outer_adoption_pending
+    - no_scientific_promotion_hardware_performance_or_ML_maturity_claim
