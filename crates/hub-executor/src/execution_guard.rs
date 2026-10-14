@@ -18,20 +18,36 @@ const GROUP_CONFIRM_TIMEOUT: Duration = Duration::from_secs(1);
 const PIPE_DRAIN_TIMEOUT: Duration = Duration::from_secs(1);
 const GROUP_POLL_INTERVAL: Duration = Duration::from_millis(10);
 
-pub(crate) struct GuardedCommandOutput {
-    pub(crate) status: ExitStatus,
-    pub(crate) timed_out: bool,
-    pub(crate) stdout: CapturedStream,
-    pub(crate) stderr: CapturedStream,
+/// Bounded subprocess observations; not a sandbox or domain verdict.
+pub struct GuardedCommandOutput {
+    /// Direct child status, retained only after required cleanup confirmations.
+    pub status: ExitStatus,
+    /// Whether the execution deadline forced local process-group termination.
+    pub timed_out: bool,
+    /// Completed bounded stdout capture.
+    pub stdout: CapturedStream,
+    /// Completed bounded stderr capture.
+    pub stderr: CapturedStream,
 }
 
 /// Execute a preconstructed command under the existing process/capture guard.
 /// The caller retains argv, environment and sandbox authority.
-pub(crate) fn execute_guarded_command(
+///
+/// # Errors
+/// Refuses exhausted deadlines, invalid capture budgets, spawn/poll failures,
+/// uncertain group/reap termination or incomplete drains. Capture per stream
+/// must be between one byte and one MiB. Ordinary Unix descendants are covered;
+/// deliberately detached descendants cannot be claimed terminated.
+pub fn execute_guarded_command(
     command: &mut Command,
     deadline: Instant,
     capture_limit: usize,
 ) -> Result<GuardedCommandOutput, ExecutorFailure> {
+    if !(1..=1024 * 1024).contains(&capture_limit) {
+        return Err(ExecutorFailure::Backend {
+            reason: "invalid shared guard capture budget".into(),
+        });
+    }
     if Instant::now() >= deadline {
         return Err(ExecutorFailure::Backend {
             reason: "command deadline exhausted before spawn".into(),
@@ -132,9 +148,12 @@ pub(crate) fn terminate_group_and_reap(child: &mut Child) -> Result<ExitStatus, 
 }
 
 #[derive(Debug)]
-pub(crate) struct CapturedStream {
-    pub(crate) bytes: Vec<u8>,
-    pub(crate) truncated: bool,
+/// A completed EOF capture retaining at most the configured byte prefix.
+pub struct CapturedStream {
+    /// Exact retained prefix; excess bytes are drained but discarded.
+    pub bytes: Vec<u8>,
+    /// Whether any bytes exceeded the configured prefix budget.
+    pub truncated: bool,
 }
 
 pub(crate) struct CapturedPipe {
@@ -279,6 +298,18 @@ impl CapturedPipe {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn invalid_capture_budget_is_refused_before_spawn() {
+        for cap in [0, 1024 * 1024 + 1] {
+            let mut command = Command::new("missing-guard-binary");
+            let result =
+                execute_guarded_command(&mut command, Instant::now() + Duration::from_secs(1), cap);
+            assert!(
+                matches!(result, Err(ExecutorFailure::Backend { reason }) if reason.contains("capture budget"))
+            );
+        }
+    }
 
     #[cfg(unix)]
     #[test]

@@ -12,7 +12,7 @@
 //! - [`RemotePoolExecutor`]: deterministic pre-dispatch placement across a
 //!   configured set of workers, with no unsafe post-dispatch failover.
 
-mod execution_guard;
+pub mod execution_guard;
 pub mod gvisor;
 pub mod local_capacity;
 pub mod pool;
