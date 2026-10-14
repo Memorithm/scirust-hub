@@ -226,7 +226,7 @@ impl GvisorDockerExecutor {
         let metadata = workspace
             .metadata()
             .map_err(|error| format!("workspace metadata unavailable: {error}"))?;
-        let container_user = format!("{}:{}", metadata.uid(), metadata.gid());
+        let container_user = nonroot_container_user(metadata.uid(), metadata.gid())?;
         let name = format!("scirust-gvisor-{}", request.task_id);
         // Validate the entire phase deadline before creating any OS resource.
         let deadline = Instant::now()
@@ -254,6 +254,8 @@ impl GvisorDockerExecutor {
                 &request.memory_bytes.to_string(),
                 "--pids-limit",
                 &request.pids_limit.to_string(),
+                "--ulimit",
+                &format!("nproc={0}:{0}", request.pids_limit),
                 "--ulimit",
                 "fsize=16777216:16777216",
                 "--tmpfs",
@@ -350,6 +352,7 @@ fn validate_request(request: &GvisorExecutionRequestV1) -> Result<(), String> {
     if request.cpu_millis == 0
         || request.memory_bytes < 16 * 1024 * 1024
         || request.pids_limit == 0
+        || request.pids_limit > 4096
         || request.timeout_ms == 0
         || request.timeout_ms > MAX_TASK_TIMEOUT_MS
         || request.max_capture_bytes == 0
@@ -361,6 +364,13 @@ fn validate_request(request: &GvisorExecutionRequestV1) -> Result<(), String> {
         return Err("gVisor requires default-deny network and read-only root".to_owned());
     }
     Ok(())
+}
+
+fn nonroot_container_user(uid: u32, gid: u32) -> Result<String, String> {
+    if uid == 0 {
+        return Err("guest process-count enforcement requires a nonroot workspace owner".into());
+    }
+    Ok(format!("{uid}:{gid}"))
 }
 
 fn lower_hex(value: &str, length: usize) -> bool {
@@ -511,6 +521,7 @@ mod tests {
             "--read-only",
             "--user",
             "--pids-limit",
+            "nproc=32:32",
             "fsize=16777216:16777216",
             "--memory",
             "--memory-swap",
@@ -593,6 +604,23 @@ mod tests {
             .is_err());
         assert!(!root.join("created").exists());
         fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn root_workspace_identity_cannot_bypass_guest_process_limits() {
+        assert!(nonroot_container_user(0, 0).is_err());
+        assert_eq!(nonroot_container_user(1001, 1001).unwrap(), "1001:1001");
+    }
+
+    #[test]
+    fn guest_pid_budget_is_bounded_before_creation() {
+        let mut candidate = request(PathBuf::from("unused"));
+        candidate.pids_limit = 4096;
+        assert!(validate_request(&candidate).is_ok());
+        for invalid in [0, 4097, u64::MAX] {
+            candidate.pids_limit = invalid;
+            assert!(validate_request(&candidate).is_err());
+        }
     }
 
     #[test]
