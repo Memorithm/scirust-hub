@@ -858,3 +858,24 @@ audit_papers_guest_PID_2026_10_14:
     - aggregate_workspace_disk_quota
     - durable_ambiguous_creation_and_quarantine_reconciliation
     - no_global_finding_closure_hardware_performance_or_scientific_promotion
+
+
+audit_guest_PID_consumer_integrated_2026_10_14:
+  finding: PAPERS-01
+  status: merged_scoped_contract_qualified_original_acceptance_incomplete
+  owner_pull_request: Memorithm/scirust-hub#89
+  owner_commit: f873bc04e996e13c33958702e48e8b1c411f9c11
+  consumer_pull_request: Memorithm/PAPERS-AGENT#15
+  consumer_candidate: 78151131e8c495eec263b0a3676ed387a1a8b5c8
+  consumer_commit: 10f92ab7815a3c756481fcc580bd87564a81984e
+  consumer_integrated_full_ci: 38513045263
+  consumer_integrated_real_runsc: 38513045336
+  consumer_Rust_tests: 232
+  separate_live_test: actually_executed_1_passed_0_ignored
+  integrated_consumer_artifact_sha256: 2209f7cc016880de1ca3cf5cb33ceda5de01cb4c72a0d3f2a2d61e9e9751c047
+  source_contract: exact_owner_locked3package_graph_CLI_manifest_receipt_and_controls_archive
+  result: independent_guest_PID_owner_controls_adopted_without_widening_wire_budget_or_empirical_authority
+  remaining:
+    - aggregate_workspace_OS_quota
+    - durable_ambiguous_creation_and_quarantine_reconciliation
+    - no_global_audit_closure_hardware_performance_ARM64_or_scientific_promotion
