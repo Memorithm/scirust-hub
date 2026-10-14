@@ -55,7 +55,7 @@ def main():
     # A nonroot user's denied write alone could just be DAC permissions; first
     # prove the actual root mount is read-only in the guest's mount table.
     readonly = case("readonly", ["bash", "-c",
-                    "awk '$2 == \"/\" && $4 ~ /(^|,)ro(,|$)/ {found=1} END {exit !found}' /proc/mounts && "
+                    "awk '$2 == \"/\" && $4 ~ /(^|,)ro(,|$)/ {found=1} END {exit !found}' /proc/mounts || exit 8; "
                     "if touch /hostile-root-write; then exit 9; fi; printf ROOT_WRITE_REFUSED"])
     assert readonly["exit_code"] == 0 and "ROOT_WRITE_REFUSED" in readonly["stdout"]
     print("GVISOR_REAL_READONLY_ROOT_OK")
