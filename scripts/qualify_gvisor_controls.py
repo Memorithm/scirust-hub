@@ -52,9 +52,21 @@ def main():
     assert limited["stdout_truncated"] and len(limited["stdout"].encode()) <= 128
     print("GVISOR_REAL_BOUNDED_OUTPUT_OK")
 
-    readonly = case("readonly", ["bash", "-c", "if touch /hostile-root-write; then exit 9; fi; printf ROOT_WRITE_REFUSED"])
+    # A nonroot user's denied write alone could just be DAC permissions; first
+    # prove the actual root mount is read-only in the guest's mount table.
+    readonly = case("readonly", ["bash", "-c",
+                    "awk '$2 == \"/\" && $4 ~ /(^|,)ro(,|$)/ {found=1} END {exit !found}' /proc/mounts || exit 8; "
+                    "if touch /hostile-root-write; then exit 9; fi; printf ROOT_WRITE_REFUSED"])
     assert readonly["exit_code"] == 0 and "ROOT_WRITE_REFUSED" in readonly["stdout"]
     print("GVISOR_REAL_READONLY_ROOT_OK")
+
+    file_bound = case("file-size", ["bash", "-c",
+                                   "dd if=/dev/zero of=/workspace/file-limit-probe bs=1048576 count=17 status=none"], timeout=10000)
+    assert file_bound["exit_code"] not in (None, 0) and not file_bound["timed_out"]
+    produced = workspace / "file-limit-probe"
+    assert produced.is_file() and produced.stat().st_size == 16 * 1024 * 1024
+    produced.unlink()
+    print("GVISOR_REAL_PER_FILE_OS_BOUND_OK")
 
     # Fixed Rust source, at most 384 MiB requested within a 128 MiB cgroup;
     # no host execution, no exponential fork/allocation loop and no production.

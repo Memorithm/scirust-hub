@@ -32,6 +32,13 @@ set to the requested memory budget. A confined bind mount is **not an aggregate
 workspace disk quota**, and PID limits remain unqualified against adversarial
 guest forks in this slice.
 
+Every regular file write is limited by the guest OS `RLIMIT_FSIZE` soft/hard
+ceiling of 16 MiB (matching PAPERS' native artifact admission). The real gate
+attempts one bounded 17 MiB write and requires an unsuccessful non-timeout exit
+with exactly 16 MiB produced. This per-file limit is not an aggregate quota for
+many files. Runtime read-only-root qualification also requires a positive `ro`
+root mount observation; nonroot permission denial alone is insufficient.
+
 The dedicated gVisor qualification workflow installs the fixed official gVisor
 20261005.0 archive after SHA-256 verification, registers runsc with Docker, and
 executes a real PAPERS-shaped Rust compile/run probe through the public typed
