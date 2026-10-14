@@ -822,3 +822,15 @@ audit_papers_file_bound_2026_10_14:
     - aggregate_workspace_quota_guest_PID_qualification
     - ambiguous_creation_durable_reconciliation
     - no_original_finding_closure_or_empirical_promotion
+
+audit_papers_guard_consumer_integrated_2026_10_14:
+  status: merged_partial_consumer_contract_qualified
+  consumer_pull_request: Memorithm/PAPERS-AGENT#14
+  consumer_commit: 773b31c2a3a26eabe16e4a89c8be2cc06be999bf
+  owner_commit: dbad915ccf0431b61b4f60ef16b1fc4e2cbc72b4
+  consumer_gates: three_candidate_and_three_integrated_actually_green
+  consumer_tests: 231_Rust_plus_one_dedicated_real_runsc
+  scope: exact_graph_pinned_public_guard_retained_workspace_refusals_and_phase_provenance
+  remaining: aggregate_quota_guest_PID_and_durable_ambiguous_creation_reconciliation
+  research_source: https://gvisor.dev/docs/architecture_guide/resources/
+  research_not_qualification: true
