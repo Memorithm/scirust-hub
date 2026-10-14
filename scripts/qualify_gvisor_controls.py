@@ -60,6 +60,14 @@ def main():
     assert readonly["exit_code"] == 0 and "ROOT_WRITE_REFUSED" in readonly["stdout"]
     print("GVISOR_REAL_READONLY_ROOT_OK")
 
+    file_bound = case("file-size", ["bash", "-c",
+                                   "dd if=/dev/zero of=/workspace/file-limit-probe bs=1048576 count=17 status=none"], timeout=10000)
+    assert file_bound["exit_code"] not in (None, 0) and not file_bound["timed_out"]
+    produced = workspace / "file-limit-probe"
+    assert produced.is_file() and produced.stat().st_size == 16 * 1024 * 1024
+    produced.unlink()
+    print("GVISOR_REAL_PER_FILE_OS_BOUND_OK")
+
     # Fixed Rust source, at most 384 MiB requested within a 128 MiB cgroup;
     # no host execution, no exponential fork/allocation loop and no production.
     (workspace / "memory_probe.rs").write_text(
