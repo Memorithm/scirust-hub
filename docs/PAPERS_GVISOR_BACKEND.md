@@ -3,7 +3,7 @@
 SciRust Hub owns the typed execution request and receipt used by PAPERS for
 hostile Rust compilation. The concrete adapter invokes Docker with the runsc
 userspace kernel, a digest-pinned image, default-deny networking, a read-only
-root filesystem, a bounded writable workspace, dropped capabilities,
+root filesystem, an explicitly confined writable workspace, dropped capabilities,
 no-new-privileges, and explicit CPU, RAM, PID, wall-clock and output limits.
 
 The operator supplies an executor-owned workspace root. Each request must name
@@ -12,9 +12,25 @@ cannot turn an arbitrary host directory into a writable bind mount. The
 deny-all network backend does not advertise endpoint-allowlist support.
 
 The adapter rejects mutable images, relaxed network/root policies, missing
-bounds and oversized inputs before spawning Docker. Timeout handling kills the
-named container and reaps the Docker client. Output drains concurrently into
-bounded buffers.
+bounds and oversized inputs before spawning Docker; one task phase is capped at
+one hour, and its deadline is checked before creation. A single phase budget
+includes container creation and attached execution. Docker creates an immutable
+container ID before start; cleanup never signals a matching name without that
+ownership token. Existing `execution_guard` handles fresh client process groups,
+bounded nonblocking reap confirmation and concurrent capped capture. After parent
+exit, group cleanup precedes the shared one-second pipe drain deadline. Detached
+pipe holders or uncertain termination produce backend errors, not successful
+receipts.
+
+Exact-ID removal and a successful empty daemon query share a three-second control
+deadline. A client kill alone is not proof of daemon/container termination. Failed
+queries, truncated controls, cleanup timeout, or ambiguous creation fail closed.
+Ambiguous creation has no safe owned ID: do not blindly remove a colliding named
+container or replay that attempt. Such backend errors require operator quarantine
+and reconciliation before workspace reclamation. Memory and swap limits are both
+set to the requested memory budget. A confined bind mount is **not an aggregate
+workspace disk quota**, and PID limits remain unqualified against adversarial
+guest forks in this slice.
 
 The dedicated gVisor qualification workflow installs the fixed official gVisor
 20261005.0 archive after SHA-256 verification, registers runsc with Docker, and

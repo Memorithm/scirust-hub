@@ -235,33 +235,10 @@ fn sanitized_spawn_error(request: &ExecutionRequest, io_error: &std::io::Error) 
 fn terminate_supervised_process(
     child: &mut Child,
 ) -> Result<std::process::ExitStatus, ExecutorFailure> {
-    let child_id = child.id();
-    #[cfg(unix)]
-    let termination = {
-        use nix::errno::Errno;
-        use nix::sys::signal::{killpg, Signal};
-        use nix::unistd::Pid;
-
-        let result = i32::try_from(child.id())
-            .map_err(std::io::Error::other)
-            .and_then(|pid| match killpg(Pid::from_raw(pid), Signal::SIGKILL) {
-                Ok(()) | Err(Errno::ESRCH) => Ok(()),
-                Err(error) => Err(std::io::Error::from_raw_os_error(error as i32)),
-            });
-        if result.is_err() {
-            // Best-effort cleanup does not prove the whole group terminated.
-            let _ = child.kill();
-            let _ = child.try_wait();
-        }
-        result
-    };
-    #[cfg(not(unix))]
-    let termination = child.kill();
-    let status = confirm_termination(termination, || child.wait())?;
-    confirm_group_termination_after_parent_exit(child_id, termination_confirmation_deadline())?;
-    Ok(status)
+    execution_guard::terminate_group_and_reap(child)
 }
 
+#[cfg(test)]
 fn confirm_termination(
     termination: std::io::Result<()>,
     reap: impl FnOnce() -> std::io::Result<std::process::ExitStatus>,
