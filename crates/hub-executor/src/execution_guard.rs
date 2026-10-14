@@ -296,15 +296,30 @@ mod tests {
     #[cfg(target_os = "linux")]
     #[test]
     fn detached_retained_pipe_fails_closed_with_bounded_drain() {
+        let ready = std::env::temp_dir().join(format!(
+            "hub-guard-ready-{}-{}",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap()
+                .as_nanos()
+        ));
         let mut command = Command::new("sh");
+        // Barrier after setsid, otherwise group cleanup can correctly kill the
+        // descendant before it detaches and the fixture exercises no open pipe.
         // Trusted finite fixture; the detached pipe holder exits on its own.
-        command.args(["-c", "setsid sh -c 'sleep 3' & printf fixture; exit 0"]);
+        command
+            .env_clear()
+            .env("PATH", "/usr/bin:/bin")
+            .env("GUARD_READY", &ready);
+        command.args(["-c", "setsid sh -c 'printf ready > \"$GUARD_READY\"; exec sleep 3' & while [ ! -e \"$GUARD_READY\" ]; do sleep 0.01; done; printf fixture; exit 0"]);
         let started = Instant::now();
         let result = execute_guarded_command(&mut command, started + Duration::from_secs(5), 64);
         assert!(started.elapsed() < Duration::from_secs(3));
         assert!(
             matches!(result, Err(ExecutorFailure::Backend { reason }) if reason.contains("capture incomplete"))
         );
+        std::fs::remove_file(ready).unwrap();
     }
 
     #[test]

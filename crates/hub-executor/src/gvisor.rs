@@ -288,7 +288,9 @@ impl GvisorDockerExecutor {
         let executed = guarded_docker(&mut start, deadline, request.max_capture_bytes);
         // Always confirm the exact owned container's absence, even on client
         // errors. Killing a local group is not Docker-daemon termination proof.
-        cleanup_owned_container(&self.docker, container_id)?;
+        cleanup_owned_container(&self.docker, container_id).map_err(|error| {
+            format!("owned Docker cleanup unconfirmed for ID {container_id}: {error}")
+        })?;
         let executed = executed?;
         Ok(GvisorExecutionReceiptV1 {
             schema: GVISOR_RECEIPT_SCHEMA_V1.to_owned(),
