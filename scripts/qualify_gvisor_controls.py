@@ -37,10 +37,12 @@ def main():
     output.mkdir()
     workspace = Path(baseline["workspace"])
 
-    def case(name, command, timeout=5000, capture=1024, memory=536870912, pids=64):
+    def case(name, command, timeout=5000, capture=1024, memory=536870912, pids=64, guest_pids=None):
         request = dict(baseline, task_id=baseline["task_id"] + "-" + name,
                        command=command, timeout_ms=timeout,
                        max_capture_bytes=capture, memory_bytes=memory, pids_limit=pids)
+        if guest_pids is not None:
+            request["guest_pids_limit"] = guest_pids
         return invoke(binary, request, root, output / (name + ".receipt.json"))
 
     timed = case("timeout", ["bash", "-c", "printf RUNTIME_ENTERED; exec sleep 30"], timeout=2000)
@@ -101,7 +103,7 @@ fn main() {
     let mut children = Vec::new();
     let mut error = 0;
     for _ in 0..8 {
-        match Command::new("sleep").arg("10").stdout(Stdio::null()).stderr(Stdio::null()).spawn() {
+        match Command::new("sleep").arg("30").stdout(Stdio::null()).stderr(Stdio::null()).spawn() {
             Ok(child) => children.push(child),
             Err(e) => { error = e.raw_os_error().unwrap_or(-1); break; }
         }
@@ -131,7 +133,9 @@ fn main() {
     assert compiled["exit_code"] == 0 and not compiled["timed_out"]
 
     def pid_observation(name, budget):
-        receipt = case(name, ["./pid_probe"], timeout=15000, capture=4096, pids=budget)
+        # Hold the host control fixed well above the entire finite probe range;
+        # only the guest RLIMIT_NPROC changes64->128. No confounded host denial.
+        receipt = case(name, ["./pid_probe"], timeout=15000, capture=4096, pids=512, guest_pids=budget)
         assert receipt["exit_code"] == 0 and not receipt["timed_out"]
         assert not receipt["stdout_truncated"] and not receipt["stderr_truncated"]
         lines = receipt["stdout"].splitlines()

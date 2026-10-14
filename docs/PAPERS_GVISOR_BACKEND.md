@@ -31,13 +31,17 @@ and reconciliation before workspace reclamation. Memory and swap limits are both
 set to the requested memory budget. A confined bind mount is **not an aggregate
 workspace disk quota**.
 
-The guest additionally receives matching soft/hard `RLIMIT_NPROC` limits; host
+The guest additionally receives soft/hard `RLIMIT_NPROC` limits; host
 `--pids-limit` alone is not treated as evidence of a guest process/thread count.
-PID budgets are restricted to1..4096 and UID0 workspace owners are refused before
+The optional `guest_pids_limit` must be1..`pids_limit`; omitting it preserves
+the existing request wire and uses the host budget as the guest limit. The
+host ceiling is never widened implicitly. PID budgets are restricted to1..4096 and UID0 workspace owners are refused before
 container creation because root must not bypass the guest limit. The real gate
 uses a finite mixed probe of eight sleeping processes and at most96 threads,
 checks nonroot identity and effective soft/hard limits, requires EAGAIN below
-budget64, and requires all104 child tasks to succeed under a128 positive control.
+guest budget64, and requires all104 child tasks to succeed under a128 positive
+control. Both cases keep the separate host ceiling fixed at512, above the entire
+finite probe range: changing only the guest limit disambiguates its enforcement.
 This is bounded isolated qualification, not an exponential fork workload or a
 scientific/hardware-performance result. Aggregate disk quotas and durable
 reconciliation of ambiguous creation/quarantine remain incomplete.
