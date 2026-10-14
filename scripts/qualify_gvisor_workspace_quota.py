@@ -79,7 +79,7 @@ def main():
                            workspace=str(workspace), command=command, timeout_ms=60000,
                            workspace_quota={"max_bytes": 64 * 1024 * 1024, "max_inodes": 256})
             receipt = invoke(binary, request, root, output / (name + ".receipt.json"))
-            assert receipt["exit_code"] == 0 and not receipt["timed_out"]
+            assert receipt["exit_code"] == 0 and not receipt["timed_out"], receipt
             assert not receipt["stdout_truncated"] and not receipt["stderr_truncated"]
             # The private journal survives even when the guest filesystem fills.
             observed = subprocess.run([str(binary), "--inspect", receipt["task_id"], str(root)],
