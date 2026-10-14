@@ -36,6 +36,9 @@ pub struct GvisorExecutionRequestV1 {
     pub cpu_millis: u64,
     pub memory_bytes: u64,
     pub pids_limit: u64,
+    /// Optional stricter guest task ceiling; defaults to the host PID budget.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub guest_pids_limit: Option<u64>,
     pub timeout_ms: u64,
     pub max_capture_bytes: usize,
     pub default_deny_network: bool,
@@ -226,7 +229,7 @@ impl GvisorDockerExecutor {
         let metadata = workspace
             .metadata()
             .map_err(|error| format!("workspace metadata unavailable: {error}"))?;
-        let container_user = format!("{}:{}", metadata.uid(), metadata.gid());
+        let container_user = nonroot_container_user(metadata.uid(), metadata.gid())?;
         let name = format!("scirust-gvisor-{}", request.task_id);
         // Validate the entire phase deadline before creating any OS resource.
         let deadline = Instant::now()
@@ -254,6 +257,11 @@ impl GvisorDockerExecutor {
                 &request.memory_bytes.to_string(),
                 "--pids-limit",
                 &request.pids_limit.to_string(),
+                "--ulimit",
+                &format!(
+                    "nproc={0}:{0}",
+                    request.guest_pids_limit.unwrap_or(request.pids_limit)
+                ),
                 "--ulimit",
                 "fsize=16777216:16777216",
                 "--tmpfs",
@@ -350,6 +358,10 @@ fn validate_request(request: &GvisorExecutionRequestV1) -> Result<(), String> {
     if request.cpu_millis == 0
         || request.memory_bytes < 16 * 1024 * 1024
         || request.pids_limit == 0
+        || request.pids_limit > 4096
+        || request
+            .guest_pids_limit
+            .is_some_and(|guest| guest == 0 || guest > request.pids_limit)
         || request.timeout_ms == 0
         || request.timeout_ms > MAX_TASK_TIMEOUT_MS
         || request.max_capture_bytes == 0
@@ -361,6 +373,13 @@ fn validate_request(request: &GvisorExecutionRequestV1) -> Result<(), String> {
         return Err("gVisor requires default-deny network and read-only root".to_owned());
     }
     Ok(())
+}
+
+fn nonroot_container_user(uid: u32, gid: u32) -> Result<String, String> {
+    if uid == 0 {
+        return Err("guest process-count enforcement requires a nonroot workspace owner".into());
+    }
+    Ok(format!("{uid}:{gid}"))
 }
 
 fn lower_hex(value: &str, length: usize) -> bool {
@@ -447,6 +466,17 @@ mod tests {
         path
     }
 
+    fn task_workspace(root: &Path) -> PathBuf {
+        let workspace = root.join("task");
+        fs::create_dir(&workspace).unwrap();
+        if fs::metadata(&workspace).unwrap().uid() == 0 {
+            // Only this newly owned fixture directory is reassigned. The fake
+            // Docker protocol still runs locally; no sandbox claim is made.
+            std::os::unix::fs::chown(&workspace, Some(1001), Some(1001)).unwrap();
+        }
+        workspace
+    }
+
     fn request(workspace: PathBuf) -> GvisorExecutionRequestV1 {
         GvisorExecutionRequestV1 {
             schema: GVISOR_REQUEST_SCHEMA_V1.to_owned(),
@@ -459,6 +489,7 @@ mod tests {
             cpu_millis: 1000,
             memory_bytes: 64 * 1024 * 1024,
             pids_limit: 32,
+            guest_pids_limit: None,
             timeout_ms: 1000,
             max_capture_bytes: 1024,
             default_deny_network: true,
@@ -484,8 +515,7 @@ mod tests {
     #[test]
     fn exact_docker_controls_and_receipt_are_typed() {
         let root = temporary();
-        let workspace = root.join("task");
-        fs::create_dir(&workspace).unwrap();
+        let workspace = task_workspace(&root);
         let log = root.join("args");
         let docker = root.join("docker");
         fs::write(
@@ -511,6 +541,7 @@ mod tests {
             "--read-only",
             "--user",
             "--pids-limit",
+            "nproc=32:32",
             "fsize=16777216:16777216",
             "--memory",
             "--memory-swap",
@@ -534,8 +565,7 @@ mod tests {
     #[test]
     fn creation_failure_never_mutates_an_unowned_container() {
         let root = temporary();
-        let workspace = root.join("task");
-        fs::create_dir(&workspace).unwrap();
+        let workspace = task_workspace(&root);
         let touched = format!("touch '{}'; exit 0", root.join("mutated").display());
         let docker = fixture(&root, "exit 1", &touched, &touched, &touched);
         assert!(GvisorDockerExecutor::with_docker(docker, root.clone())
@@ -548,8 +578,7 @@ mod tests {
     #[test]
     fn cleanup_hang_returns_bounded_failure_not_a_receipt() {
         let root = temporary();
-        let workspace = root.join("task");
-        fs::create_dir(&workspace).unwrap();
+        let workspace = task_workspace(&root);
         let create = format!("printf '%s\\n' '{}'", "a".repeat(64));
         let docker = fixture(
             &root,
@@ -569,8 +598,7 @@ mod tests {
     #[test]
     fn daemon_query_failure_never_proves_container_absence() {
         let root = temporary();
-        let workspace = root.join("task");
-        fs::create_dir(&workspace).unwrap();
+        let workspace = task_workspace(&root);
         let create = format!("printf '%s\\n' '{}'", "a".repeat(64));
         let docker = fixture(&root, &create, "printf completed", "exit 1", "exit 1");
         let result =
@@ -582,8 +610,7 @@ mod tests {
     #[test]
     fn excessive_deadline_fails_before_creation() {
         let root = temporary();
-        let workspace = root.join("task");
-        fs::create_dir(&workspace).unwrap();
+        let workspace = task_workspace(&root);
         let touched = format!("touch '{}'; exit 0", root.join("created").display());
         let docker = fixture(&root, &touched, "exit 0", "exit 0", "exit 0");
         let mut candidate = request(workspace);
@@ -593,6 +620,40 @@ mod tests {
             .is_err());
         assert!(!root.join("created").exists());
         fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn root_workspace_identity_cannot_bypass_guest_process_limits() {
+        assert!(nonroot_container_user(0, 0).is_err());
+        assert_eq!(nonroot_container_user(1001, 1001).unwrap(), "1001:1001");
+    }
+
+    #[test]
+    fn guest_pid_budget_is_bounded_before_creation() {
+        let mut candidate = request(PathBuf::from("unused"));
+        candidate.pids_limit = 4096;
+        assert!(validate_request(&candidate).is_ok());
+        for invalid in [0, 4097, u64::MAX] {
+            candidate.pids_limit = invalid;
+            assert!(validate_request(&candidate).is_err());
+        }
+    }
+
+    #[test]
+    fn independent_guest_budget_is_stricter_and_legacy_wire_is_preserved() {
+        let mut candidate = request(PathBuf::from("unused"));
+        let legacy = serde_json::to_value(&candidate).unwrap();
+        assert!(legacy.get("guest_pids_limit").is_none());
+        let decoded: GvisorExecutionRequestV1 = serde_json::from_value(legacy).unwrap();
+        assert_eq!(decoded.guest_pids_limit, None);
+        candidate.guest_pids_limit = Some(16);
+        assert!(validate_request(&candidate).is_ok());
+        let wire = serde_json::to_value(&candidate).unwrap();
+        assert_eq!(wire["guest_pids_limit"], 16);
+        for invalid in [0, 33, u64::MAX] {
+            candidate.guest_pids_limit = Some(invalid);
+            assert!(validate_request(&candidate).is_err());
+        }
     }
 
     #[test]

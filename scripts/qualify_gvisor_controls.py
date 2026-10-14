@@ -37,10 +37,12 @@ def main():
     output.mkdir()
     workspace = Path(baseline["workspace"])
 
-    def case(name, command, timeout=5000, capture=1024, memory=536870912):
+    def case(name, command, timeout=5000, capture=1024, memory=536870912, pids=64, guest_pids=None):
         request = dict(baseline, task_id=baseline["task_id"] + "-" + name,
                        command=command, timeout_ms=timeout,
-                       max_capture_bytes=capture, memory_bytes=memory)
+                       max_capture_bytes=capture, memory_bytes=memory, pids_limit=pids)
+        if guest_pids is not None:
+            request["guest_pids_limit"] = guest_pids
         return invoke(binary, request, root, output / (name + ".receipt.json"))
 
     timed = case("timeout", ["bash", "-c", "printf RUNTIME_ENTERED; exec sleep 30"], timeout=2000)
@@ -83,6 +85,72 @@ def main():
     assert "MEMORY_ESCAPED" not in memory["stdout"]
     assert memory["exit_code"] == 137 and not memory["timed_out"]
     print("GVISOR_REAL_MEMORY_AND_SWAP_BOUND_OK")
+
+    # Fixed finite probe: eight sleeping child processes and at most96 threads.
+    # All creation and cleanup happen in runsc, never on the qualification host.
+    # Positive128 control distinguishes denial from a broken startup/runtime.
+    (workspace / "pid_probe.rs").write_text(r'''
+use std::process::{Command, Stdio};
+use std::sync::{Arc, atomic::{AtomicBool, Ordering}};
+use std::time::Duration;
+fn main() {
+    let limits = std::fs::read_to_string("/proc/self/limits").unwrap();
+    let line = limits.lines().find(|line| line.starts_with("Max processes")).unwrap();
+    println!("PID_LIMIT={line}");
+    let status = std::fs::read_to_string("/proc/self/status").unwrap();
+    println!("PID_UID={}", status.lines().find(|line| line.starts_with("Uid:")).unwrap());
+    println!("PID_BOUND_ENTERED");
+    let mut children = Vec::new();
+    let mut error = 0;
+    for _ in 0..8 {
+        match Command::new("sleep").arg("30").stdout(Stdio::null()).stderr(Stdio::null()).spawn() {
+            Ok(child) => children.push(child),
+            Err(e) => { error = e.raw_os_error().unwrap_or(-1); break; }
+        }
+    }
+    let stop = Arc::new(AtomicBool::new(false));
+    let mut threads = Vec::new();
+    if children.len() == 8 {
+        for _ in 0..96 {
+            let flag = stop.clone();
+            match std::thread::Builder::new().spawn(move || {
+                while !flag.load(Ordering::Acquire) { std::thread::sleep(Duration::from_millis(10)); }
+            }) {
+                Ok(thread) => threads.push(thread),
+                Err(e) => { error = e.raw_os_error().unwrap_or(-1); break; }
+            }
+        }
+    }
+    let processes = children.len();
+    let thread_count = threads.len();
+    stop.store(true, Ordering::Release);
+    for thread in threads { thread.join().unwrap(); }
+    for mut child in children { child.kill().unwrap(); child.wait().unwrap(); }
+    println!("PID_COUNTS={processes},{thread_count},{error}");
+}
+''', encoding="utf-8")
+    compiled = case("pid-compile", ["rustc", "pid_probe.rs", "-o", "pid_probe"], timeout=60000)
+    assert compiled["exit_code"] == 0 and not compiled["timed_out"]
+
+    def pid_observation(name, budget):
+        # Hold the host control fixed well above the entire finite probe range;
+        # only the guest RLIMIT_NPROC changes64->128. No confounded host denial.
+        receipt = case(name, ["./pid_probe"], timeout=15000, capture=4096, pids=512, guest_pids=budget)
+        assert receipt["exit_code"] == 0 and not receipt["timed_out"]
+        assert not receipt["stdout_truncated"] and not receipt["stderr_truncated"]
+        lines = receipt["stdout"].splitlines()
+        assert "PID_BOUND_ENTERED" in lines
+        limit = next(line for line in lines if line.startswith("PID_LIMIT=")).split()
+        assert limit[2:4] == [str(budget), str(budget)], limit
+        uid = next(line for line in lines if line.startswith("PID_UID=")).split()[1]
+        assert uid != "0"
+        return tuple(map(int, next(line for line in lines if line.startswith("PID_COUNTS=")).split("=", 1)[1].split(",")))
+
+    low = pid_observation("pid-limited", 64)
+    high = pid_observation("pid-positive-control", 128)
+    assert low[0] == 8 and 0 < low[1] and low[0] + low[1] < 64 and low[2] == 11, low
+    assert high == (8, 96, 0), high
+    print("GVISOR_REAL_GUEST_PID_BOUND_AND_POSITIVE_CONTROL_OK")
 
 
 if __name__ == "__main__":

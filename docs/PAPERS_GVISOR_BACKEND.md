@@ -29,8 +29,22 @@ Ambiguous creation has no safe owned ID: do not blindly remove a colliding named
 container or replay that attempt. Such backend errors require operator quarantine
 and reconciliation before workspace reclamation. Memory and swap limits are both
 set to the requested memory budget. A confined bind mount is **not an aggregate
-workspace disk quota**, and PID limits remain unqualified against adversarial
-guest forks in this slice.
+workspace disk quota**.
+
+The guest additionally receives soft/hard `RLIMIT_NPROC` limits; host
+`--pids-limit` alone is not treated as evidence of a guest process/thread count.
+The optional `guest_pids_limit` must be1..`pids_limit`; omitting it preserves
+the existing request wire and uses the host budget as the guest limit. The
+host ceiling is never widened implicitly. PID budgets are restricted to1..4096 and UID0 workspace owners are refused before
+container creation because root must not bypass the guest limit. The real gate
+uses a finite mixed probe of eight sleeping processes and at most96 threads,
+checks nonroot identity and effective soft/hard limits, requires EAGAIN below
+guest budget64, and requires all104 child tasks to succeed under a128 positive
+control. Both cases keep the separate host ceiling fixed at512, above the entire
+finite probe range: changing only the guest limit disambiguates its enforcement.
+This is bounded isolated qualification, not an exponential fork workload or a
+scientific/hardware-performance result. Aggregate disk quotas and durable
+reconciliation of ambiguous creation/quarantine remain incomplete.
 
 Every regular file write is limited by the guest OS `RLIMIT_FSIZE` soft/hard
 ceiling of 16 MiB (matching PAPERS' native artifact admission). The real gate
