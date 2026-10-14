@@ -802,3 +802,23 @@ audit_papers_guard_2026_10_14:
     - per_file_limit_and_positive_root_mount_evidence_pending_pull_request_88
     - aggregate_disk_quota_guest_PID_and_PINNED_PAPERS_outer_adoption_pending
     - no_scientific_promotion_hardware_performance_or_ML_maturity_claim
+
+audit_papers_file_bound_2026_10_14:
+  finding: PAPERS-01
+  status: merged_owner_controls_qualified_consumer_pending
+  pull_request: 88
+  candidate: 32192593364fab921c7eee6d91a5d62b09fb3c66
+  merge_commit: dbad915ccf0431b61b4f60ef16b1fc4e2cbc72b4
+  integrated_full_ci: 38502405639
+  integrated_real_runsc: 38502405612
+  retained_artifact_sha256: b4aa3d55f66993c327d3445c502947ba8db9a3c1d0220e290a618633b228ed11
+  scope:
+    - OS_file_limit_16MiB_17MiB_write_attempt_refused
+    - positive_root_readonly_mount_and_write_refusal
+    - five_real_controls_success_and_283_Rust_tests
+  consumer_pull_request: Memorithm/PAPERS-AGENT#14
+  consumer_status: exact_candidate_CI_review_pending
+  remaining:
+    - aggregate_workspace_quota_guest_PID_qualification
+    - ambiguous_creation_durable_reconciliation
+    - no_original_finding_closure_or_empirical_promotion
