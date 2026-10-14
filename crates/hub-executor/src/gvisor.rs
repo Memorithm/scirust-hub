@@ -472,7 +472,7 @@ mod tests {
         if fs::metadata(&workspace).unwrap().uid() == 0 {
             // Only this newly owned fixture directory is reassigned. The fake
             // Docker protocol still runs locally; no sandbox claim is made.
-            fs::chown(&workspace, Some(1001), Some(1001)).unwrap();
+            std::os::unix::fs::chown(&workspace, Some(1001), Some(1001)).unwrap();
         }
         workspace
     }
